@@ -219,7 +219,7 @@ function renderMarkers() {
     m.dataset.id = ann.id;
     m.style.background = markerColor(idx);
     m.innerHTML = `
-      <span style="color: rgba(235,235,245,0.95);">${idx + 1}</span>
+      <span style="color: rgba(210,210,218,0.9);">${idx + 1}</span>
       <div class="badgeIcons">
         <button class="ok" data-ok="${ann.id}">✓</button>
         <button class="del" data-del="${ann.id}">×</button>

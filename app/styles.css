@@ -52,7 +52,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .modalBody { display: grid; grid-template-columns: 1.4fr 0.6fr; gap: 12px; margin-top: 10px; }
 .imageStage { position: relative; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: rgba(15,23,34,0.6); aspect-ratio: 4/3; }
 .imageStage img { width: 100%; height: 100%; object-fit: contain; display: block; }
-.marker { position: absolute; transform: translate(-50%, -50%); width: 26px; height: 26px; border-radius: 999px; border: 1px solid rgba(140,140,150,0.7); background: rgba(164,140,255,0.3); display: grid; place-items: center; font-size: 11px; color: rgba(235,235,245,0.95); overflow: visible; box-shadow: 0 4px 12px rgba(164,140,255,0.25); }
+.marker { position: absolute; transform: translate(-50%, -50%); width: 26px; height: 26px; border-radius: 999px; border: 1px solid rgba(35,35,40,0.7); background: rgba(164,140,255,0.3); display: grid; place-items: center; font-size: 11px; color: rgba(210,210,218,0.9); overflow: visible; box-shadow: 0 4px 12px rgba(164,140,255,0.25); }
 .marker.active { outline: 2px solid rgba(255,255,255,0.7); box-shadow: 0 0 0 6px rgba(255,255,255,0.12); }
 .marker .badgeIcons { position: absolute; right: -12px; top: -12px; display: none; gap: 3px; }
 .marker.active .badgeIcons { display: flex; }
