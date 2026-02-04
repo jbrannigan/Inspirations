@@ -139,6 +139,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
     db_path = _p(args.db)
     app_dir = _p(args.app)
     store_dir = _p(args.store)
+    if args.reload:
+        from .devserver import run_with_reload
+
+        run_with_reload(host=args.host, port=args.port, db_path=db_path, app_dir=app_dir, store_dir=store_dir)
+        return 0
     run_server(host=args.host, port=args.port, db_path=db_path, app_dir=app_dir, store_dir=store_dir)
     return 0
 
@@ -207,6 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=8000, help="Port")
     serve.add_argument("--app", default="app", help="App directory (static files)")
     serve.add_argument("--store", default="store", help="Store directory (originals/thumbs)")
+    serve.add_argument("--reload", action="store_true", help="Auto-reload on file changes")
     serve.set_defaults(func=cmd_serve)
 
     return p

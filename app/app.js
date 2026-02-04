@@ -218,6 +218,13 @@ function renderMarkers() {
     m.style.top = `${ann.y * 100}%`;
     m.dataset.id = ann.id;
     m.style.background = markerColor(idx);
+    m.innerHTML = `
+      <span>${idx + 1}</span>
+      <div class="badgeIcons">
+        <button class="ok" data-ok="${ann.id}">✓</button>
+        <button class="del" data-del="${ann.id}">×</button>
+      </div>
+    `;
     m.onpointerdown = (e) => {
       e.stopPropagation();
       m.setPointerCapture(e.pointerId);
@@ -228,6 +235,22 @@ function renderMarkers() {
       setActiveAnnotation(ann.id);
     };
     if (state.activeAnnotationId === ann.id) m.classList.add("active");
+    m.querySelector("[data-ok]").onclick = (e) => {
+      e.stopPropagation();
+      state.activeAnnotationId = null;
+      renderAnnotations();
+      renderMarkers();
+      renderFloatingNote();
+    };
+    m.querySelector("[data-del]").onclick = async (e) => {
+      e.stopPropagation();
+      await api(`/api/annotations/${ann.id}`, { method: "DELETE" });
+      state.annotations = state.annotations.filter((x) => x.id !== ann.id);
+      if (state.activeAnnotationId === ann.id) state.activeAnnotationId = null;
+      renderAnnotations();
+      renderMarkers();
+      renderFloatingNote();
+    };
     stage.appendChild(m);
   });
 }
@@ -395,8 +418,6 @@ function setActiveAnnotation(id) {
 function renderFloatingNote() {
   const box = $("#floatingNote");
   const ta = $("#floatingText");
-  const del = $("#floatingDelete");
-  const done = $("#floatingDone");
   if (!state.activeAnnotationId) {
     box.classList.add("hidden");
     return;
@@ -417,20 +438,6 @@ function renderFloatingNote() {
   box.style.left = `${left}px`;
   box.style.top = `${top}px`;
   setTimeout(() => ta.focus(), 0);
-  done.onclick = () => {
-    state.activeAnnotationId = null;
-    renderAnnotations();
-    renderMarkers();
-    renderFloatingNote();
-  };
-  del.onclick = async () => {
-    await api(`/api/annotations/${ann.id}`, { method: "DELETE" });
-    state.annotations = state.annotations.filter((x) => x.id !== ann.id);
-    state.activeAnnotationId = null;
-    renderAnnotations();
-    renderMarkers();
-    renderFloatingNote();
-  };
 }
 
 function syncFloatingText(id, text) {
