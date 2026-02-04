@@ -39,11 +39,12 @@
       .legend { margin-top: 8px; font-size: 12px; color: var(--muted); }
 
       /* Option presets */
-      .opt1 { --badge-border: #26262C; --badge-fill: rgba(164,140,255,0.30); --badge-text: #d4d4dc; --badge-shadow: rgba(164,140,255,0.25); }
-      .opt2 { --badge-border: #232329; --badge-fill: rgba(150,120,240,0.26); --badge-text: #c8c8d2; --badge-shadow: rgba(150,120,240,0.22); }
-      .opt3 { --badge-border: #2a2a30; --badge-fill: rgba(176,152,255,0.28); --badge-text: #dcdce6; --badge-shadow: rgba(176,152,255,0.24); }
-      .opt4 { --badge-border: #1f1f25; --badge-fill: rgba(140,120,220,0.25); --badge-text: #cfd0da; --badge-shadow: rgba(140,120,220,0.22); }
-      .opt5 { --badge-border: #2d2d34; --badge-fill: rgba(190,170,255,0.27); --badge-text: #e1e1e8; --badge-shadow: rgba(190,170,255,0.24); }
+      /* Solid colors (no transparency) */
+      .opt1 { --badge-border: #2b2b30; --badge-fill: #6f5aa8; --badge-text: #f2f2f6; --badge-shadow: rgba(111,90,168,0.35); }
+      .opt2 { --badge-border: #2b2b30; --badge-fill: #6f5aa8; --badge-text: #e8e8ee; --badge-shadow: rgba(111,90,168,0.35); }
+      .opt3 { --badge-border: #2a2a2f; --badge-fill: #6b59b3; --badge-text: #f2f2f6; --badge-shadow: rgba(107,89,179,0.35); }
+      .opt4 { --badge-border: #2a2a2f; --badge-fill: #7058c9; --badge-text: #f2f2f6; --badge-shadow: rgba(112,88,201,0.35); }
+      .opt5 { --badge-border: #2b2b30; --badge-fill: #6d62a6; --badge-text: #f2f2f6; --badge-shadow: rgba(109,98,166,0.35); }
     </style>
   </head>
   <body>
@@ -52,8 +53,8 @@
 
       <section class="option opt1">
         <div class="head">
-          <div class="name">Option 1 — Balanced violet</div>
-          <div class="meta">Border #232328 • Fill rgba(164,140,255,0.30) • Text rgba(210,210,218,0.90)</div>
+          <div class="name">Option 1 — Solid violet (recommended)</div>
+          <div class="meta">Border #2B2B30 • Fill #6F5AA8 • Text #F2F2F6 • Text contrast 5.08:1 • Min BG contrast 3.19:1</div>
         </div>
         <div class="grid">
           <div class="card light"><div class="badge">1</div></div>
@@ -64,8 +65,8 @@
 
       <section class="option opt2">
         <div class="head">
-          <div class="name">Option 2 — Subtle violet</div>
-          <div class="meta">Border #1F1F24 • Fill rgba(150,120,240,0.26) • Text rgba(200,200,210,0.90)</div>
+          <div class="name">Option 2 — Slightly softer text</div>
+          <div class="meta">Border #2B2B30 • Fill #6F5AA8 • Text #E8E8EE • Text contrast 4.65:1 • Min BG contrast 3.19:1</div>
         </div>
         <div class="grid">
           <div class="card light"><div class="badge">2</div></div>
@@ -76,8 +77,8 @@
 
       <section class="option opt3">
         <div class="head">
-          <div class="name">Option 3 — Slightly brighter</div>
-          <div class="meta">Border #2A2A30 • Fill rgba(176,152,255,0.28) • Text rgba(220,220,228,0.92)</div>
+          <div class="name">Option 3 — Deeper violet</div>
+          <div class="meta">Border #2A2A2F • Fill #6B59B3 • Text #F2F2F6 • Text contrast 5.08:1 • Min BG contrast 3.19:1</div>
         </div>
         <div class="grid">
           <div class="card light"><div class="badge">3</div></div>
@@ -88,8 +89,8 @@
 
       <section class="option opt4">
         <div class="head">
-          <div class="name">Option 4 — Deeper violet</div>
-          <div class="meta">Border #26262C • Fill rgba(140,120,220,0.25) • Text rgba(205,205,215,0.88)</div>
+          <div class="name">Option 4 — More saturated</div>
+          <div class="meta">Border #2A2A2F • Fill #7058C9 • Text #F2F2F6 • Text contrast 4.79:1 • Min BG contrast 3.39:1</div>
         </div>
         <div class="grid">
           <div class="card light"><div class="badge">4</div></div>
@@ -100,8 +101,8 @@
 
       <section class="option opt5">
         <div class="head">
-          <div class="name">Option 5 — Soft lavender</div>
-          <div class="meta">Border #2D2D34 • Fill rgba(190,170,255,0.27) • Text rgba(225,225,232,0.94)</div>
+          <div class="name">Option 5 — Muted violet</div>
+          <div class="meta">Border #2B2B30 • Fill #6D62A6 • Text #F2F2F6 • Text contrast 4.76:1 • Min BG contrast 3.40:1</div>
         </div>
         <div class="grid">
           <div class="card light"><div class="badge">5</div></div>
