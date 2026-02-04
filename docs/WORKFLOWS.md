@@ -39,6 +39,9 @@ Recommended inbox model (local-first, low friction):
 
 **PDF rendering tools:** install `pdftoppm` (poppler) or `mutool` (mupdf). The importer will auto-detect.
 
+**Mock data:** until you have scans, you can generate a tiny sample file:
+- `python3 scripts/make_mock_scans.py`
+
 **Later:** a folder watcher can make this automatic.
 
 ## Facebook saves — “More considered update”

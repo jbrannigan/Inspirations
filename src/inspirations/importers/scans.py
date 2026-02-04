@@ -136,7 +136,8 @@ def import_scans_inbox(
 
             if suffix == ".pdf":
                 if renderer is None:
-                    raise ValueError("No PDF renderer available (install poppler or mupdf)")
+                    errors.append({"file": str(path), "error": "No PDF renderer available (install poppler or mupdf)"})
+                    continue
                 sha = _sha256_file(path)
                 pdf_dest = store / "originals" / "scan"
                 pdf_dest.mkdir(parents=True, exist_ok=True)
@@ -194,4 +195,3 @@ def import_scans_inbox(
         "note": "Errors are truncated to 25 in output.",
         "renderer": renderer,
     }
-

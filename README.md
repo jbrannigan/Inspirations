@@ -33,6 +33,7 @@ PYTHONPATH=src python3 -m inspirations import facebook --zip imports/raw/faceboo
 Scan PDF inbox (page-splitting) and generate thumbnails:
 
 ```sh
+python3 scripts/make_mock_scans.py
 PYTHONPATH=src python3 -m inspirations import scans --inbox imports/scans/inbox --format jpg
 PYTHONPATH=src python3 -m inspirations thumbs --size 512
 ```
