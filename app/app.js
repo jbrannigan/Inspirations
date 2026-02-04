@@ -249,7 +249,21 @@ $("#deleteCollection").onclick = async () => {
     await loadCollections();
     await loadAssets();
   } catch (e) {
-    alert(`Delete failed: ${e.message || e}`);
+    // fallback for servers that only support JSON body for DELETE
+    try {
+      await api(`/api/collections`, {
+        method: "DELETE",
+        body: JSON.stringify({ id: state.targetCollectionId }),
+      });
+      state.collections = state.collections.filter((x) => x.id !== state.targetCollectionId);
+      state.targetCollectionId = "";
+      state.activeCollectionId = "";
+      renderCollections();
+      await loadCollections();
+      await loadAssets();
+    } catch (e2) {
+      alert(`Delete failed: ${e2.message || e2}`);
+    }
   }
 };
 

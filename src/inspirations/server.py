@@ -147,6 +147,16 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/collections":
+            try:
+                body = _json_body(self)
+            except Exception as e:
+                return _send(self, 400, {"error": str(e)})
+            cid = body.get("id") or ""
+            if not cid:
+                return _send(self, 400, {"error": "id required"})
+            self._with_db(delete_collection, collection_id=cid)
+            return _send(self, 200, {"ok": True})
         m = re.match(r"^/api/collections/([^/]+)$", parsed.path)
         if m:
             self._with_db(delete_collection, collection_id=m.group(1))
