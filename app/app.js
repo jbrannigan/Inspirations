@@ -415,6 +415,7 @@ function renderFloatingNote() {
   const top = Math.min(r.height - 140, Math.max(10, y + 12));
   box.style.left = `${left}px`;
   box.style.top = `${top}px`;
+  setTimeout(() => ta.focus(), 0);
   del.onclick = async () => {
     await api(`/api/annotations/${ann.id}`, { method: "DELETE" });
     state.annotations = state.annotations.filter((x) => x.id !== ann.id);

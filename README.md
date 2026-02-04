@@ -10,6 +10,7 @@ This repo contains a local, dependency-free HTML mockup plus a professional prod
 
 1. Open `mockup/index.html` in a browser.
 2. Open `mockup/curation.html` for curated-workflow screens.
+3. Open `mockup/cards.html` for Pinterest/Facebook card layouts.
 2. Click **Import** to load a sample dataset or import your own JSON.
 3. Try searching, tagging, creating collections, and adding image annotations.
 
