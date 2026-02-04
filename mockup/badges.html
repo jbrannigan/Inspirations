@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Badge Color Options</title>
+    <style>
+      :root {
+        --bg: #0b0f14;
+        --border: rgba(255,255,255,0.08);
+        --text: rgba(255,255,255,0.92);
+        --muted: rgba(255,255,255,0.65);
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+      .wrap { padding: 20px; display: grid; gap: 18px; }
+      h1 { margin: 0; font-size: 18px; }
+      .option { border: 1px solid var(--border); border-radius: 14px; padding: 12px; background: rgba(16,24,36,0.55); }
+      .head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+      .name { font-size: 14px; font-weight: 650; }
+      .meta { font-size: 12px; color: var(--muted); }
+      .swatches { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+      .swatch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+      .dot { width: 14px; height: 14px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.15); }
+      .grid { display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 10px; }
+      .card { border: 1px solid var(--border); border-radius: 12px; height: 120px; position: relative; overflow: hidden; }
+      .card.light { background: #1a1f29; }
+      .card.mid { background: #12161f; }
+      .card.dark { background: #0b0f14; }
+      .badge {
+        position: absolute; left: 12px; top: 12px;
+        width: 28px; height: 28px; border-radius: 999px;
+        display: grid; place-items: center; font-size: 12px; font-weight: 600;
+        border: 1px solid var(--badge-border);
+        background: var(--badge-fill);
+        color: var(--badge-text);
+        box-shadow: 0 4px 12px var(--badge-shadow);
+      }
+      .legend { margin-top: 8px; font-size: 12px; color: var(--muted); }
+
+      /* Option presets */
+      .opt1 { --badge-border: #232328; --badge-fill: rgba(164,140,255,0.30); --badge-text: rgba(210,210,218,0.90); --badge-shadow: rgba(164,140,255,0.25); }
+      .opt2 { --badge-border: #1f1f24; --badge-fill: rgba(150,120,240,0.26); --badge-text: rgba(200,200,210,0.90); --badge-shadow: rgba(150,120,240,0.22); }
+      .opt3 { --badge-border: #2a2a30; --badge-fill: rgba(176,152,255,0.28); --badge-text: rgba(220,220,228,0.92); --badge-shadow: rgba(176,152,255,0.24); }
+      .opt4 { --badge-border: #26262c; --badge-fill: rgba(140,120,220,0.25); --badge-text: rgba(205,205,215,0.88); --badge-shadow: rgba(140,120,220,0.22); }
+      .opt5 { --badge-border: #2d2d34; --badge-fill: rgba(190,170,255,0.27); --badge-text: rgba(225,225,232,0.94); --badge-shadow: rgba(190,170,255,0.24); }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Badge Color Options (3 backgrounds: light → mid → dark)</h1>
+
+      <section class="option opt1">
+        <div class="head">
+          <div class="name">Option 1 — Balanced violet</div>
+          <div class="meta">Border #232328 • Fill rgba(164,140,255,0.30) • Text rgba(210,210,218,0.90)</div>
+        </div>
+        <div class="grid">
+          <div class="card light"><div class="badge">1</div></div>
+          <div class="card mid"><div class="badge">1</div></div>
+          <div class="card dark"><div class="badge">1</div></div>
+        </div>
+      </section>
+
+      <section class="option opt2">
+        <div class="head">
+          <div class="name">Option 2 — Subtle violet</div>
+          <div class="meta">Border #1F1F24 • Fill rgba(150,120,240,0.26) • Text rgba(200,200,210,0.90)</div>
+        </div>
+        <div class="grid">
+          <div class="card light"><div class="badge">2</div></div>
+          <div class="card mid"><div class="badge">2</div></div>
+          <div class="card dark"><div class="badge">2</div></div>
+        </div>
+      </section>
+
+      <section class="option opt3">
+        <div class="head">
+          <div class="name">Option 3 — Slightly brighter</div>
+          <div class="meta">Border #2A2A30 • Fill rgba(176,152,255,0.28) • Text rgba(220,220,228,0.92)</div>
+        </div>
+        <div class="grid">
+          <div class="card light"><div class="badge">3</div></div>
+          <div class="card mid"><div class="badge">3</div></div>
+          <div class="card dark"><div class="badge">3</div></div>
+        </div>
+      </section>
+
+      <section class="option opt4">
+        <div class="head">
+          <div class="name">Option 4 — Deeper violet</div>
+          <div class="meta">Border #26262C • Fill rgba(140,120,220,0.25) • Text rgba(205,205,215,0.88)</div>
+        </div>
+        <div class="grid">
+          <div class="card light"><div class="badge">4</div></div>
+          <div class="card mid"><div class="badge">4</div></div>
+          <div class="card dark"><div class="badge">4</div></div>
+        </div>
+      </section>
+
+      <section class="option opt5">
+        <div class="head">
+          <div class="name">Option 5 — Soft lavender</div>
+          <div class="meta">Border #2D2D34 • Fill rgba(190,170,255,0.27) • Text rgba(225,225,232,0.94)</div>
+        </div>
+        <div class="grid">
+          <div class="card light"><div class="badge">5</div></div>
+          <div class="card mid"><div class="badge">5</div></div>
+          <div class="card dark"><div class="badge">5</div></div>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>
+
