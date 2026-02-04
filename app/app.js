@@ -7,6 +7,7 @@ const state = {
   source: "",
   modalAsset: null,
   annotations: [],
+  selectMode: false,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -33,6 +34,7 @@ function setStats() {
   $("#selectionCount").textContent = `${state.selected.size} selected`;
   $("#addToCollection").disabled = state.selected.size === 0 || !state.activeCollectionId;
   $("#clearSelection").disabled = state.selected.size === 0;
+  $("#toggleSelect").textContent = state.selectMode ? "Selecting…" : "Select";
 }
 
 function renderCollections() {
@@ -56,19 +58,23 @@ function renderGrid() {
   wrap.innerHTML = "";
   for (const a of state.assets) {
     const el = document.createElement("div");
-    el.className = "card";
+    el.className = `card ${state.selected.has(a.id) ? "selected" : ""}`;
     const img = thumbFor(a);
     el.innerHTML = `
       <div class="thumb">
         ${img ? `<img src="${img}" />` : ""}
         <div class="badge">${a.source}</div>
+        <div class="selectBox">${state.selected.has(a.id) ? "✓" : ""}</div>
       </div>
       <div class="cardBody">${a.title || "(untitled)"}</div>
     `;
-    el.onclick = () => openModal(a);
-    el.oncontextmenu = (e) => {
-      e.preventDefault();
-      toggleSelect(a.id);
+    el.onclick = () => {
+      if (state.selectMode) {
+        toggleSelect(a.id);
+        renderGrid();
+      } else {
+        openModal(a);
+      }
     };
     wrap.appendChild(el);
   }
@@ -177,6 +183,17 @@ $("#showAll").onclick = () => {
   state.activeCollectionId = "";
   renderCollections();
   loadAssets();
+};
+
+$("#toggleSelect").onclick = () => {
+  state.selectMode = !state.selectMode;
+  setStats();
+};
+
+$("#selectAll").onclick = () => {
+  for (const a of state.assets) state.selected.add(a.id);
+  setStats();
+  renderGrid();
 };
 
 $("#newCollection").onclick = async () => {
