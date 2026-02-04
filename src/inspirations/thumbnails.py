@@ -70,6 +70,9 @@ def generate_thumbnails(
         stored = Path(r["stored_path"])
         src = r["source"]
         try:
+            if str(stored).lower().endswith(".bin"):
+                errors.append({"id": asset_id, "error": "Skipping .bin (not an image)"})
+                continue
             dst = store_dir / "thumbs" / src / f"{asset_id}.jpg"
             _make_thumb(tool, stored, dst, size)
             db.exec("update assets set thumb_path=? where id=?", (str(dst), asset_id))
@@ -84,4 +87,3 @@ def generate_thumbnails(
         "errors": errors[:25],
         "note": "Errors are truncated to 25 in output.",
     }
-

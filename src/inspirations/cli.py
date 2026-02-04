@@ -138,7 +138,8 @@ def cmd_ai_tag(args: argparse.Namespace) -> int:
 def cmd_serve(args: argparse.Namespace) -> int:
     db_path = _p(args.db)
     app_dir = _p(args.app)
-    run_server(host=args.host, port=args.port, db_path=db_path, app_dir=app_dir)
+    store_dir = _p(args.store)
+    run_server(host=args.host, port=args.port, db_path=db_path, app_dir=app_dir, store_dir=store_dir)
     return 0
 
 
@@ -205,6 +206,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="127.0.0.1", help="Bind host (default 127.0.0.1)")
     serve.add_argument("--port", type=int, default=8000, help="Port")
     serve.add_argument("--app", default="app", help="App directory (static files)")
+    serve.add_argument("--store", default="store", help="Store directory (originals/thumbs)")
     serve.set_defaults(func=cmd_serve)
 
     return p

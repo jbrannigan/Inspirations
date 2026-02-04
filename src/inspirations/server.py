@@ -59,6 +59,12 @@ class ApiHandler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/app/"):
             rel = parsed.path[len("/app/") :]
             return self._serve_file(rel, _guess_mime(parsed.path))
+        m = re.match(r"^/media/([^/]+)$", parsed.path)
+        if m:
+            asset_id = m.group(1)
+            q = parse_qs(parsed.query)
+            kind = q.get("kind", ["thumb"])[0]
+            return self._serve_media(asset_id, kind)
 
         if parsed.path == "/api/assets":
             q = parse_qs(parsed.query)
@@ -232,6 +238,33 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _serve_media(self, asset_id: str, kind: str) -> None:
+        kind = kind if kind in ("thumb", "original") else "thumb"
+        with Db(self.server.db_path) as db:
+            ensure_schema(db)
+            row = db.query(
+                "select id, stored_path, thumb_path from assets where id=?",
+                (asset_id,),
+            )
+            if not row:
+                return self.send_error(404)
+            r = row[0]
+            path = r["thumb_path"] if kind == "thumb" else r["stored_path"]
+            if not path:
+                return self.send_error(404)
+            base = Path(self.server.store_dir).resolve()
+            target = Path(path).resolve()
+            if not str(target).startswith(str(base)):
+                return self.send_error(403)
+            if not target.exists() or not target.is_file():
+                return self.send_error(404)
+            data = target.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", _guess_mime(str(target)))
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
 
 def _guess_mime(path: str) -> str:
     if path.endswith(".js"):
@@ -245,9 +278,10 @@ def _guess_mime(path: str) -> str:
     return "application/octet-stream"
 
 
-def run_server(*, host: str, port: int, db_path: Path, app_dir: Path) -> None:
+def run_server(*, host: str, port: int, db_path: Path, app_dir: Path, store_dir: Path) -> None:
     server = HTTPServer((host, port), ApiHandler)
     server.db_path = db_path
     server.app_dir = app_dir
+    server.store_dir = store_dir
     print(f"Serving on http://{host}:{port}")
     server.serve_forever()

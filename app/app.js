@@ -31,7 +31,9 @@ async function api(path, opts = {}) {
 }
 
 function thumbFor(a) {
-  return a.thumb_path || a.stored_path || a.image_url || "";
+  if (a.thumb_path) return `/media/${a.id}?kind=thumb`;
+  if (a.stored_path) return `/media/${a.id}?kind=original`;
+  return a.image_url || "";
 }
 
 function setStats() {
