@@ -58,10 +58,10 @@ class TestStore(unittest.TestCase):
                     "insert into assets (id, source, source_ref, title, imported_at) values (?, ?, ?, ?, datetime('now'))",
                     ("a2", "pinterest", "pin://2", "Bathroom tile"),
                 )
+                db.exec("update assets set notes=? where id=?", ("blue cabinets", "a1"))
                 res = list_assets(db, q="cabinet")
             self.assertEqual(len(res), 1)
 
 
 if __name__ == "__main__":
     unittest.main()
-

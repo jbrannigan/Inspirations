@@ -26,6 +26,7 @@ from .store import (
     remove_item_from_collection,
     set_collection_order,
     update_annotation,
+    update_asset_notes,
 )
 
 
@@ -180,6 +181,12 @@ class ApiHandler(BaseHTTPRequestHandler):
             body = _json_body(self)
         except Exception as e:
             return _send(self, 400, {"error": str(e)})
+
+        m = re.match(r"^/api/assets/([^/]+)$", parsed.path)
+        if m:
+            notes = body.get("notes") or ""
+            self._with_db(update_asset_notes, asset_id=m.group(1), notes=notes)
+            return _send(self, 200, {"ok": True})
 
         m = re.match(r"^/api/annotations/([^/]+)$", parsed.path)
         if m:

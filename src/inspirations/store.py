@@ -37,16 +37,18 @@ def list_assets(
         clauses.append("al.label in (%s)" % ",".join(["?"] * len(labels)))
         params.extend(labels)
     if q:
-        clauses.append("(a.title like ? or a.description like ? or a.board like ? or a.source_ref like ?)")
+        clauses.append(
+            "(a.title like ? or a.description like ? or a.board like ? or a.source_ref like ? or a.notes like ?)"
+        )
         qv = f"%{q}%"
-        params += [qv, qv, qv, qv]
+        params += [qv, qv, qv, qv, qv]
     if collection_id:
         clauses.append("ci.collection_id = ?")
         params.append(collection_id)
     where = "where " + " and ".join(clauses) if clauses else ""
 
     sql = f"""
-    select a.id, a.source, a.source_ref, a.title, a.description, a.board,
+    select a.id, a.source, a.source_ref, a.title, a.description, a.board, a.notes,
            a.created_at, a.imported_at, a.image_url, a.stored_path, a.thumb_path
     from assets a
     left join collection_items ci on ci.asset_id = a.id
@@ -132,6 +134,10 @@ def remove_item_from_collection(db: Db, *, collection_id: str, asset_id: str) ->
 
 def delete_collection(db: Db, *, collection_id: str) -> None:
     db.exec("delete from collections where id=?", (collection_id,))
+
+
+def update_asset_notes(db: Db, *, asset_id: str, notes: str) -> None:
+    db.exec("update assets set notes=? where id=?", (notes or None, asset_id))
 
 
 def list_tray(db: Db) -> list[dict[str, Any]]:

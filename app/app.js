@@ -13,6 +13,7 @@ const state = {
   selectMode: true,
   facets: { sources: [], boards: [], labels: [] },
   tray: [],
+  dragging: null,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -146,6 +147,15 @@ async function openModal(asset) {
   $("#modalTitle").textContent = asset.title || "(untitled)";
   $("#modalMeta").textContent = `${asset.source} • ${asset.source_ref || ""}`;
   $("#modalImage").src = thumbFor(asset);
+  $("#assetNotes").value = asset.notes || "";
+  const link = $("#sourceLink");
+  if (asset.source_ref) {
+    link.href = asset.source_ref;
+    link.textContent = "Open original";
+  } else {
+    link.href = "#";
+    link.textContent = "No source";
+  }
   $("#modal").classList.remove("hidden");
   await loadAnnotations(asset.id);
   renderAnnotations();
@@ -169,7 +179,26 @@ function renderAnnotations() {
   state.annotations.forEach((ann, idx) => {
     const el = document.createElement("div");
     el.className = "listItem";
-    el.innerHTML = `<div><strong>#${idx + 1}</strong> ${ann.text || ""}</div>`;
+    el.innerHTML = `
+      <div><strong>#${idx + 1}</strong></div>
+      <textarea data-ann="${ann.id}">${ann.text || ""}</textarea>
+      <div class="row" style="margin-top:6px">
+        <button data-del="${ann.id}">Delete</button>
+      </div>
+    `;
+    const ta = el.querySelector("textarea");
+    ta.addEventListener("input", async () => {
+      await api(`/api/annotations/${ann.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ text: ta.value }),
+      });
+    });
+    el.querySelector("[data-del]").onclick = async () => {
+      await api(`/api/annotations/${ann.id}`, { method: "DELETE" });
+      state.annotations = state.annotations.filter((x) => x.id !== ann.id);
+      renderAnnotations();
+      renderMarkers();
+    };
     wrap.appendChild(el);
   });
 }
@@ -183,23 +212,53 @@ function renderMarkers() {
     m.textContent = idx + 1;
     m.style.left = `${ann.x * 100}%`;
     m.style.top = `${ann.y * 100}%`;
+    m.dataset.id = ann.id;
+    m.onpointerdown = (e) => {
+      e.stopPropagation();
+      m.setPointerCapture(e.pointerId);
+      state.dragging = { id: ann.id, pointerId: e.pointerId };
+    };
     stage.appendChild(m);
   });
 }
 
 $("#imageStage").addEventListener("click", async (e) => {
   if (!state.modalAsset) return;
+  if (state.dragging) return;
   const r = $("#imageStage").getBoundingClientRect();
   const x = (e.clientX - r.left) / r.width;
   const y = (e.clientY - r.top) / r.height;
-  const text = prompt("Note:", "");
   const res = await api("/api/annotations", {
     method: "POST",
-    body: JSON.stringify({ asset_id: state.modalAsset.id, x, y, text }),
+    body: JSON.stringify({ asset_id: state.modalAsset.id, x, y, text: "" }),
   });
   state.annotations.push(res.annotation);
   renderAnnotations();
   renderMarkers();
+});
+
+$("#imageStage").addEventListener("pointermove", async (e) => {
+  if (!state.dragging) return;
+  const r = $("#imageStage").getBoundingClientRect();
+  const x = (e.clientX - r.left) / r.width;
+  const y = (e.clientY - r.top) / r.height;
+  const ann = state.annotations.find((a) => a.id === state.dragging.id);
+  if (!ann) return;
+  ann.x = Math.max(0, Math.min(1, x));
+  ann.y = Math.max(0, Math.min(1, y));
+  renderMarkers();
+});
+
+$("#imageStage").addEventListener("pointerup", async (e) => {
+  if (!state.dragging) return;
+  const ann = state.annotations.find((a) => a.id === state.dragging.id);
+  if (ann) {
+    await api(`/api/annotations/${ann.id}`, {
+      method: "PUT",
+      body: JSON.stringify({ x: ann.x, y: ann.y }),
+    });
+  }
+  state.dragging = null;
 });
 
 $("#closeModal").onclick = () => closeModal();
@@ -296,6 +355,14 @@ $("#clearSelection").onclick = () => {
   state.selected.clear();
   setStats();
 };
+
+$("#assetNotes").addEventListener("input", async (e) => {
+  if (!state.modalAsset) return;
+  await api(`/api/assets/${state.modalAsset.id}`, {
+    method: "PUT",
+    body: JSON.stringify({ notes: e.target.value }),
+  });
+});
 
 $("#collectionSelect").onchange = (e) => {
   state.targetCollectionId = e.target.value || "";

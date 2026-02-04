@@ -78,6 +78,7 @@ def ensure_schema(db: Db) -> None:
         "assets",
         {
             "thumb_path": "text",
+            "notes": "text",
         },
     )
     db.exec("create unique index if not exists ux_assets_source_ref on assets(source, source_ref);")
