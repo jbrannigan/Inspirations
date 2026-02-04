@@ -60,6 +60,10 @@ function renderCollections() {
 
   const sel = $("#collectionSelect");
   sel.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "Select collection…";
+  sel.appendChild(placeholder);
   for (const c of state.collections) {
     const opt = document.createElement("option");
     opt.value = c.id;
@@ -229,6 +233,18 @@ $("#newCollection").onclick = async () => {
   state.collections.unshift(res.collection);
   state.targetCollectionId = res.collection.id;
   renderCollections();
+};
+
+$("#deleteCollection").onclick = async () => {
+  if (!state.targetCollectionId) return;
+  const c = state.collections.find((x) => x.id === state.targetCollectionId);
+  const ok = confirm(`Delete collection "${c ? c.name : ""}"? This cannot be undone.`);
+  if (!ok) return;
+  await api(`/api/collections/${state.targetCollectionId}`, { method: "DELETE" });
+  state.targetCollectionId = "";
+  state.activeCollectionId = "";
+  await loadCollections();
+  await loadAssets();
 };
 
 $("#addToCollection").onclick = async () => {

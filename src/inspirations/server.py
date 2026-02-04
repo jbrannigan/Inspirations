@@ -16,6 +16,7 @@ from .store import (
     list_assets,
     list_collection_items,
     list_collections,
+    delete_collection,
     remove_item_from_collection,
     set_collection_order,
     update_annotation,
@@ -146,6 +147,10 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
+        m = re.match(r"^/api/collections/([^/]+)$", parsed.path)
+        if m:
+            self._with_db(delete_collection, collection_id=m.group(1))
+            return _send(self, 200, {"ok": True})
         m = re.match(r"^/api/collections/([^/]+)/items/([^/]+)$", parsed.path)
         if m:
             self._with_db(remove_item_from_collection, collection_id=m.group(1), asset_id=m.group(2))

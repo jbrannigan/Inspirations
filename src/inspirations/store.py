@@ -103,6 +103,10 @@ def remove_item_from_collection(db: Db, *, collection_id: str, asset_id: str) ->
     db.exec("update collections set updated_at=? where id=?", (_now_iso(), collection_id))
 
 
+def delete_collection(db: Db, *, collection_id: str) -> None:
+    db.exec("delete from collections where id=?", (collection_id,))
+
+
 def list_collection_items(db: Db, *, collection_id: str) -> list[dict[str, Any]]:
     rows = db.query(
         """
@@ -157,4 +161,3 @@ def update_annotation(db: Db, *, annotation_id: str, x: float | None = None, y: 
 
 def delete_annotation(db: Db, *, annotation_id: str) -> None:
     db.exec("delete from annotations where id=?", (annotation_id,))
-
