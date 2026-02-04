@@ -23,10 +23,10 @@
       .swatch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
       .dot { width: 14px; height: 14px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.15); }
       .grid { display: grid; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 10px; }
-      .card { border: 1px solid var(--border); border-radius: 12px; height: 120px; position: relative; overflow: hidden; }
-      .card.light { background: #1a1f29; }
-      .card.mid { background: #12161f; }
-      .card.dark { background: #0b0f14; }
+      .card { border: 1px solid var(--border); border-radius: 12px; height: 120px; position: relative; overflow: hidden; background-size: cover; background-position: center; }
+      .card.light { background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='360' height='240'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%23e7e0d4'/><stop offset='1' stop-color='%23bfae9b'/></linearGradient></defs><rect width='360' height='240' fill='url(%23g)'/><rect x='20' y='30' width='140' height='80' rx='8' fill='%23ffffff' opacity='0.35'/><rect x='180' y='40' width='150' height='90' rx='10' fill='%23f7f4f0' opacity='0.4'/><rect x='30' y='140' width='300' height='70' rx='12' fill='%23d8cbbd' opacity='0.5'/></svg>"); }
+      .card.mid { background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='360' height='240'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%231c2330'/><stop offset='1' stop-color='%232b3445'/></linearGradient></defs><rect width='360' height='240' fill='url(%23g)'/><rect x='24' y='26' width='150' height='90' rx='10' fill='%236a7488' opacity='0.35'/><rect x='195' y='36' width='140' height='80' rx='10' fill='%23818da3' opacity='0.35'/><rect x='40' y='140' width='280' height='70' rx='12' fill='%234c5566' opacity='0.45'/></svg>"); }
+      .card.dark { background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='360' height='240'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%230b0f14'/><stop offset='1' stop-color='%23151b26'/></linearGradient></defs><rect width='360' height='240' fill='url(%23g)'/><rect x='18' y='34' width='150' height='80' rx='10' fill='%23374052' opacity='0.35'/><rect x='190' y='40' width='150' height='90' rx='12' fill='%23242c3b' opacity='0.45'/><rect x='36' y='142' width='288' height='64' rx='10' fill='%231f2736' opacity='0.5'/></svg>"); }
       .badge {
         position: absolute; left: 12px; top: 12px;
         width: 28px; height: 28px; border-radius: 999px;
@@ -39,11 +39,11 @@
       .legend { margin-top: 8px; font-size: 12px; color: var(--muted); }
 
       /* Option presets */
-      .opt1 { --badge-border: #232328; --badge-fill: rgba(164,140,255,0.30); --badge-text: rgba(210,210,218,0.90); --badge-shadow: rgba(164,140,255,0.25); }
-      .opt2 { --badge-border: #1f1f24; --badge-fill: rgba(150,120,240,0.26); --badge-text: rgba(200,200,210,0.90); --badge-shadow: rgba(150,120,240,0.22); }
-      .opt3 { --badge-border: #2a2a30; --badge-fill: rgba(176,152,255,0.28); --badge-text: rgba(220,220,228,0.92); --badge-shadow: rgba(176,152,255,0.24); }
-      .opt4 { --badge-border: #26262c; --badge-fill: rgba(140,120,220,0.25); --badge-text: rgba(205,205,215,0.88); --badge-shadow: rgba(140,120,220,0.22); }
-      .opt5 { --badge-border: #2d2d34; --badge-fill: rgba(190,170,255,0.27); --badge-text: rgba(225,225,232,0.94); --badge-shadow: rgba(190,170,255,0.24); }
+      .opt1 { --badge-border: #26262C; --badge-fill: rgba(164,140,255,0.30); --badge-text: #d4d4dc; --badge-shadow: rgba(164,140,255,0.25); }
+      .opt2 { --badge-border: #232329; --badge-fill: rgba(150,120,240,0.26); --badge-text: #c8c8d2; --badge-shadow: rgba(150,120,240,0.22); }
+      .opt3 { --badge-border: #2a2a30; --badge-fill: rgba(176,152,255,0.28); --badge-text: #dcdce6; --badge-shadow: rgba(176,152,255,0.24); }
+      .opt4 { --badge-border: #1f1f25; --badge-fill: rgba(140,120,220,0.25); --badge-text: #cfd0da; --badge-shadow: rgba(140,120,220,0.22); }
+      .opt5 { --badge-border: #2d2d34; --badge-fill: rgba(190,170,255,0.27); --badge-text: #e1e1e8; --badge-shadow: rgba(190,170,255,0.24); }
     </style>
   </head>
   <body>
@@ -112,4 +112,3 @@
     </div>
   </body>
 </html>
-
