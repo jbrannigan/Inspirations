@@ -48,9 +48,10 @@ class ApiHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path in ("/", "/index.html"):
-            return self._serve_file("app/index.html", "text/html")
+            return self._serve_file("index.html", "text/html")
         if parsed.path.startswith("/app/"):
-            return self._serve_file(parsed.path.lstrip("/"), _guess_mime(parsed.path))
+            rel = parsed.path[len("/app/") :]
+            return self._serve_file(rel, _guess_mime(parsed.path))
 
         if parsed.path == "/api/assets":
             q = parse_qs(parsed.query)
@@ -193,4 +194,3 @@ def run_server(*, host: str, port: int, db_path: Path, app_dir: Path) -> None:
     server.app_dir = app_dir
     print(f"Serving on http://{host}:{port}")
     server.serve_forever()
-
