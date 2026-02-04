@@ -8,7 +8,7 @@ const state = {
   source: "",
   modalAsset: null,
   annotations: [],
-  selectMode: false,
+  selectMode: true,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -31,11 +31,13 @@ function thumbFor(a) {
 }
 
 function setStats() {
-  $("#stats").textContent = `${state.assets.length} items`;
+  const viewLabel = state.activeCollectionId ? "Viewing collection" : "Viewing all items";
+  $("#stats").textContent = `${viewLabel} • ${state.assets.length} items`;
   $("#selectionCount").textContent = `${state.selected.size} selected`;
-  $("#addToCollection").disabled = state.selected.size === 0 || !state.targetCollectionId;
+  $("#addSelected").disabled = state.selected.size === 0 || !state.targetCollectionId;
+  $("#addFiltered").disabled = state.assets.length === 0 || !state.targetCollectionId;
+  $("#removeSelected").disabled = state.selected.size === 0 || !state.activeCollectionId;
   $("#clearSelection").disabled = state.selected.size === 0;
-  $("#toggleSelect").textContent = state.selectMode ? "Selecting…" : "Select";
   $("#collectionHint").textContent = state.targetCollectionId
     ? "Ready to add selected items."
     : "Create or pick a collection first.";
@@ -49,11 +51,10 @@ function renderCollections() {
     el.className = `listItem ${c.id === state.activeCollectionId ? "on" : ""}`;
     el.innerHTML = `<div><strong>${c.name}</strong></div><div class="muted">${c.count} items</div>`;
     el.onclick = () => {
-      state.activeCollectionId = c.id;
       state.targetCollectionId = c.id;
       $("#collectionSelect").value = c.id;
-      loadAssets();
       renderCollections();
+      setStats();
     };
     wrap.appendChild(el);
   }
@@ -87,18 +88,17 @@ function renderGrid() {
       <div class="thumb">
         ${img ? `<img src="${img}" />` : ""}
         <div class="badge">${a.source}</div>
-        <div class="selectBox">${state.selected.has(a.id) ? "✓" : ""}</div>
+        <label class="selectBox"><input type="checkbox" ${state.selected.has(a.id) ? "checked" : ""} /></label>
       </div>
       <div class="cardBody">${a.title || "(untitled)"}</div>
     `;
-    el.onclick = () => {
-      if (state.selectMode) {
-        toggleSelect(a.id);
-        renderGrid();
-      } else {
-        openModal(a);
-      }
-    };
+    const checkbox = el.querySelector("input");
+    checkbox.addEventListener("click", (e) => {
+      e.stopPropagation();
+      toggleSelect(a.id);
+      renderGrid();
+    });
+    el.onclick = () => openModal(a);
     wrap.appendChild(el);
   }
   setStats();
@@ -113,9 +113,6 @@ function toggleSelect(id) {
 async function loadCollections() {
   const data = await api("/api/collections");
   state.collections = data.collections;
-  if (!state.activeCollectionId && state.collections.length) {
-    state.activeCollectionId = state.collections[0].id;
-  }
   renderCollections();
 }
 
@@ -215,11 +212,6 @@ $("#viewCollection").onclick = () => {
   loadAssets();
 };
 
-$("#toggleSelect").onclick = () => {
-  state.selectMode = !state.selectMode;
-  setStats();
-};
-
 $("#selectAll").onclick = () => {
   for (const a of state.assets) state.selected.add(a.id);
   setStats();
@@ -267,7 +259,7 @@ $("#deleteCollection").onclick = async () => {
   }
 };
 
-$("#addToCollection").onclick = async () => {
+$("#addSelected").onclick = async () => {
   if (!state.targetCollectionId) return;
   await api(`/api/collections/${state.targetCollectionId}/items`, {
     method: "POST",
@@ -278,6 +270,28 @@ $("#addToCollection").onclick = async () => {
   await loadAssets();
 };
 
+$("#addFiltered").onclick = async () => {
+  if (!state.targetCollectionId) return;
+  const ids = state.assets.map((a) => a.id);
+  await api(`/api/collections/${state.targetCollectionId}/items`, {
+    method: "POST",
+    body: JSON.stringify({ asset_ids: ids }),
+  });
+  state.selected.clear();
+  await loadCollections();
+  await loadAssets();
+};
+
+$("#removeSelected").onclick = async () => {
+  if (!state.activeCollectionId) return;
+  const ids = Array.from(state.selected);
+  for (const id of ids) {
+    await api(`/api/collections/${state.activeCollectionId}/items/${id}`, { method: "DELETE" });
+  }
+  state.selected.clear();
+  await loadCollections();
+  await loadAssets();
+};
 $("#clearSelection").onclick = () => {
   state.selected.clear();
   setStats();
@@ -289,10 +303,7 @@ $("#collectionSelect").onchange = (e) => {
   setStats();
 };
 
-$("#refreshCollections").onclick = async () => {
-  await loadCollections();
-  await loadAssets();
-};
+// refresh button removed
 
 async function init() {
   await loadCollections();
