@@ -32,9 +32,12 @@ function thumbFor(a) {
 function setStats() {
   $("#stats").textContent = `${state.assets.length} items`;
   $("#selectionCount").textContent = `${state.selected.size} selected`;
-  $("#addToCollection").disabled = state.selected.size === 0 || state.collections.length === 0;
+  $("#addToCollection").disabled = state.selected.size === 0 || !state.activeCollectionId;
   $("#clearSelection").disabled = state.selected.size === 0;
   $("#toggleSelect").textContent = state.selectMode ? "Selecting…" : "Select";
+  $("#collectionHint").textContent = state.activeCollectionId
+    ? "Choose a collection, then add selected items."
+    : "Create or pick a collection first.";
 }
 
 function renderCollections() {
@@ -60,6 +63,9 @@ function renderCollections() {
     opt.value = c.id;
     opt.textContent = c.name;
     sel.appendChild(opt);
+  }
+  if (!state.activeCollectionId && state.collections.length) {
+    state.activeCollectionId = state.collections[0].id;
   }
   if (state.activeCollectionId) sel.value = state.activeCollectionId;
 }
@@ -217,14 +223,7 @@ $("#newCollection").onclick = async () => {
 };
 
 $("#addToCollection").onclick = async () => {
-  if (!state.activeCollectionId) {
-    const name = prompt("No collection selected. Create one?", "Kitchen — Round 1");
-    if (!name) return;
-    const res = await api("/api/collections", { method: "POST", body: JSON.stringify({ name }) });
-    state.collections.unshift(res.collection);
-    state.activeCollectionId = res.collection.id;
-    renderCollections();
-  }
+  if (!state.activeCollectionId) return;
   await api(`/api/collections/${state.activeCollectionId}/items`, {
     method: "POST",
     body: JSON.stringify({ asset_ids: Array.from(state.selected) }),
