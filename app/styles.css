@@ -20,6 +20,7 @@ select { min-width: 160px; }
 button { cursor: pointer; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 .layout { display: grid; grid-template-columns: 280px 1fr; height: calc(100% - 60px); }
+.layout.three { grid-template-columns: 260px 1fr 260px; }
 .sidebar { border-right: 1px solid var(--border); padding: 12px; background: rgba(16,24,36,0.4); }
 .section { margin-bottom: 16px; }
 .sectionTitle { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }

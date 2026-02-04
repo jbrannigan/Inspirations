@@ -134,6 +134,50 @@ def delete_collection(db: Db, *, collection_id: str) -> None:
     db.exec("delete from collections where id=?", (collection_id,))
 
 
+def list_tray(db: Db) -> list[dict[str, Any]]:
+    rows = db.query(
+        """
+        select a.id, a.source, a.source_ref, a.title, a.description, a.board,
+               a.created_at, a.imported_at, a.image_url, a.stored_path, a.thumb_path,
+               t.added_at
+        from tray_items t
+        join assets a on a.id = t.asset_id
+        order by t.added_at asc;
+        """
+    )
+    return [dict(r) for r in rows]
+
+
+def add_to_tray(db: Db, *, asset_ids: list[str]) -> int:
+    if not asset_ids:
+        return 0
+    rows = []
+    now = _now_iso()
+    for aid in asset_ids:
+        rows.append((aid, now))
+    db.executemany("insert or ignore into tray_items (asset_id, added_at) values (?, ?)", rows)
+    return len(rows)
+
+
+def remove_from_tray(db: Db, *, asset_ids: list[str]) -> None:
+    if not asset_ids:
+        return
+    for aid in asset_ids:
+        db.exec("delete from tray_items where asset_id=?", (aid,))
+
+
+def clear_tray(db: Db) -> None:
+    db.exec("delete from tray_items")
+
+
+def create_collection_from_tray(db: Db, *, name: str, description: str = "") -> dict[str, Any]:
+    col = create_collection(db, name=name, description=description)
+    items = db.query("select asset_id from tray_items order by added_at asc")
+    asset_ids = [r["asset_id"] for r in items]
+    add_items_to_collection(db, collection_id=col["id"], asset_ids=asset_ids)
+    clear_tray(db)
+    return col
+
 def list_collection_items(db: Db, *, collection_id: str) -> list[dict[str, Any]]:
     rows = db.query(
         """

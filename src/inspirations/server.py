@@ -18,6 +18,11 @@ from .store import (
     list_collections,
     delete_collection,
     list_facets,
+    list_tray,
+    add_to_tray,
+    remove_from_tray,
+    clear_tray,
+    create_collection_from_tray,
     remove_item_from_collection,
     set_collection_order,
     update_annotation,
@@ -77,6 +82,10 @@ class ApiHandler(BaseHTTPRequestHandler):
             facets = self._with_db(list_facets)
             return _send(self, 200, {"facets": facets})
 
+        if parsed.path == "/api/tray":
+            items = self._with_db(list_tray)
+            return _send(self, 200, {"items": items})
+
         m = re.match(r"^/api/collections/([^/]+)/items$", parsed.path)
         if m:
             items = self._with_db(list_collection_items, collection_id=m.group(1))
@@ -104,6 +113,32 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return _send(self, 400, {"error": "name required"})
             desc = (body.get("description") or "").strip()
             col = self._with_db(create_collection, name=name, description=desc)
+            return _send(self, 201, {"collection": col})
+
+        if parsed.path == "/api/tray/add":
+            asset_ids = body.get("asset_ids") or []
+            if not isinstance(asset_ids, list):
+                return _send(self, 400, {"error": "asset_ids must be list"})
+            n = self._with_db(add_to_tray, asset_ids=asset_ids)
+            return _send(self, 200, {"added": n})
+
+        if parsed.path == "/api/tray/remove":
+            asset_ids = body.get("asset_ids") or []
+            if not isinstance(asset_ids, list):
+                return _send(self, 400, {"error": "asset_ids must be list"})
+            self._with_db(remove_from_tray, asset_ids=asset_ids)
+            return _send(self, 200, {"ok": True})
+
+        if parsed.path == "/api/tray/clear":
+            self._with_db(clear_tray)
+            return _send(self, 200, {"ok": True})
+
+        if parsed.path == "/api/tray/create-collection":
+            name = (body.get("name") or "").strip()
+            if not name:
+                return _send(self, 400, {"error": "name required"})
+            desc = (body.get("description") or "").strip()
+            col = self._with_db(create_collection_from_tray, name=name, description=desc)
             return _send(self, 201, {"collection": col})
 
         m = re.match(r"^/api/collections/([^/]+)/items$", parsed.path)

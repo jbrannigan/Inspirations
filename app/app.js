@@ -12,6 +12,7 @@ const state = {
   annotations: [],
   selectMode: true,
   facets: { sources: [], boards: [], labels: [] },
+  tray: [],
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -36,14 +37,15 @@ function thumbFor(a) {
 function setStats() {
   const viewLabel = state.activeCollectionId ? "Viewing collection" : "Viewing all items";
   $("#stats").textContent = `${viewLabel} • ${state.assets.length} items`;
-  $("#selectionCount").textContent = `${state.selected.size} selected`;
-  $("#addSelected").disabled = state.selected.size === 0 || !state.targetCollectionId;
-  $("#addFiltered").disabled = state.assets.length === 0 || !state.targetCollectionId;
-  $("#removeSelected").disabled = state.selected.size === 0 || !state.activeCollectionId;
+  $("#addSelected").disabled = state.selected.size === 0;
+  $("#addFiltered").disabled = state.assets.length === 0;
   $("#clearSelection").disabled = state.selected.size === 0;
   $("#collectionHint").textContent = state.targetCollectionId
     ? "Ready to add selected items."
     : "Create or pick a collection first.";
+  $("#trayCount").textContent = `${state.tray.length} items`;
+  $("#createFromTray").disabled = state.tray.length === 0;
+  $("#clearTray").disabled = state.tray.length === 0;
 }
 
 function renderCollections() {
@@ -117,6 +119,13 @@ async function loadCollections() {
   const data = await api("/api/collections");
   state.collections = data.collections;
   renderCollections();
+}
+
+async function loadTray() {
+  const data = await api("/api/tray");
+  state.tray = data.items;
+  renderTray();
+  setStats();
 }
 
 async function loadAssets() {
@@ -262,36 +271,23 @@ $("#deleteCollection").onclick = async () => {
 };
 
 $("#addSelected").onclick = async () => {
-  if (!state.targetCollectionId) return;
-  await api(`/api/collections/${state.targetCollectionId}/items`, {
+  await api(`/api/tray/add`, {
     method: "POST",
     body: JSON.stringify({ asset_ids: Array.from(state.selected) }),
   });
   state.selected.clear();
-  await loadCollections();
+  await loadTray();
   await loadAssets();
 };
 
 $("#addFiltered").onclick = async () => {
-  if (!state.targetCollectionId) return;
   const ids = state.assets.map((a) => a.id);
-  await api(`/api/collections/${state.targetCollectionId}/items`, {
+  await api(`/api/tray/add`, {
     method: "POST",
     body: JSON.stringify({ asset_ids: ids }),
   });
   state.selected.clear();
-  await loadCollections();
-  await loadAssets();
-};
-
-$("#removeSelected").onclick = async () => {
-  if (!state.activeCollectionId) return;
-  const ids = Array.from(state.selected);
-  for (const id of ids) {
-    await api(`/api/collections/${state.activeCollectionId}/items/${id}`, { method: "DELETE" });
-  }
-  state.selected.clear();
-  await loadCollections();
+  await loadTray();
   await loadAssets();
 };
 $("#clearSelection").onclick = () => {
@@ -310,6 +306,7 @@ $("#collectionSelect").onchange = (e) => {
 async function init() {
   await loadCollections();
   await loadFacets();
+  await loadTray();
   await loadAssets();
 }
 
@@ -354,3 +351,37 @@ function renderFilters() {
     wrap.appendChild(group);
   }
 }
+
+function renderTray() {
+  const wrap = $("#tray");
+  wrap.innerHTML = "";
+  for (const item of state.tray) {
+    const el = document.createElement("div");
+    el.className = "listItem";
+    el.innerHTML = `<div><strong>${item.title || "(untitled)"}</strong></div><div class="muted">${item.source}</div>`;
+    el.onclick = async () => {
+      await api("/api/tray/remove", {
+        method: "POST",
+        body: JSON.stringify({ asset_ids: [item.id] }),
+      });
+      await loadTray();
+    };
+    wrap.appendChild(el);
+  }
+}
+
+$("#clearTray").onclick = async () => {
+  await api("/api/tray/clear", { method: "POST" });
+  await loadTray();
+};
+
+$("#createFromTray").onclick = async () => {
+  const name = prompt("Collection name:", "Curated — Round 1");
+  if (!name) return;
+  await api("/api/tray/create-collection", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+  await loadCollections();
+  await loadTray();
+};

@@ -124,6 +124,17 @@ def ensure_schema(db: Db) -> None:
         """
     )
     db.exec("create index if not exists ix_annotations_asset on annotations(asset_id);")
+
+    db.exec(
+        """
+        create table if not exists tray_items (
+          asset_id text primary key,
+          added_at text not null,
+          foreign key(asset_id) references assets(id) on delete cascade
+        );
+        """
+    )
+    db.exec("create index if not exists ix_tray_items_added on tray_items(added_at);")
     db.exec(
         """
         create table if not exists ai_runs (

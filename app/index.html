@@ -20,7 +20,7 @@
       </div>
     </header>
 
-    <div class="layout">
+    <div class="layout three">
       <aside class="sidebar">
         <div class="section">
           <div class="sectionTitle">Filters</div>
@@ -40,14 +40,6 @@
           </div>
           <div class="muted" id="collectionHint" style="margin-top: 6px">Pick a collection to add items. Viewing is separate.</div>
         </div>
-        <div class="section">
-          <div class="sectionTitle">Selection</div>
-          <div class="muted" id="selectionCount">0 selected</div>
-          <button id="addSelected" disabled>Add Selected to Collection</button>
-          <button id="addFiltered" disabled>Add Filtered to Collection</button>
-          <button id="removeSelected" disabled>Remove Selected (from view)</button>
-          <button id="clearSelection" disabled>Clear</button>
-        </div>
       </aside>
 
       <main class="content">
@@ -55,12 +47,28 @@
           <div id="stats" class="muted">Loading…</div>
           <div class="row">
             <button id="selectAll">Select All</button>
+            <button id="addSelected" disabled>Add Selected to Tray</button>
+            <button id="addFiltered" disabled>Add Filtered to Tray</button>
+            <button id="clearSelection" disabled>Clear Selection</button>
             <button id="viewCollection">View Collection</button>
             <button id="showAll">Show All</button>
           </div>
         </div>
         <div id="grid" class="grid"></div>
       </main>
+
+      <aside class="sidebar">
+        <div class="section">
+          <div class="sectionTitle">Curate Tray</div>
+          <div class="muted" id="trayCount">0 items</div>
+          <div id="tray" class="list" style="margin-top: 8px"></div>
+          <div class="row" style="margin-top: 8px">
+            <button id="createFromTray" disabled>Create Collection</button>
+            <button id="clearTray" disabled>Clear Tray</button>
+          </div>
+          <div class="muted" style="margin-top: 6px">Tray is your “shopping cart”. Add items from any filter; then create a collection.</div>
+        </div>
+      </aside>
     </div>
 
     <div id="modal" class="modal hidden">
