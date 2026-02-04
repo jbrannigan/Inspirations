@@ -1,0 +1,1550 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Inspirations Mockup</title>
+    <style>
+      :root {
+        --bg: #0b0f14;
+        --panel: #101824;
+        --panel-2: #0f1620;
+        --border: rgba(255, 255, 255, 0.08);
+        --text: rgba(255, 255, 255, 0.92);
+        --muted: rgba(255, 255, 255, 0.68);
+        --muted-2: rgba(255, 255, 255, 0.5);
+        --accent: #8dd5ff;
+        --accent-2: #a7ffce;
+        --danger: #ff7a7a;
+        --shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+        --radius: 14px;
+        --radius-sm: 10px;
+        --card: #0f1722;
+        --chip: rgba(255, 255, 255, 0.08);
+        --chip-on: rgba(141, 213, 255, 0.18);
+        --chip-on-border: rgba(141, 213, 255, 0.45);
+        --focus: 0 0 0 3px rgba(141, 213, 255, 0.22);
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
+          monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: radial-gradient(1200px 800px at 20% -10%, rgba(141, 213, 255, 0.14), transparent 60%),
+          radial-gradient(1100px 700px at 85% 0%, rgba(167, 255, 206, 0.1), transparent 55%), var(--bg);
+        color: var(--text);
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Noto Sans", "Apple Color Emoji",
+          "Segoe UI Emoji";
+      }
+
+      a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+
+      .app {
+        display: grid;
+        grid-template-columns: 320px 1fr;
+        grid-template-rows: 68px 1fr;
+        height: 100%;
+      }
+
+      header {
+        grid-column: 1 / -1;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--border);
+        background: linear-gradient(to bottom, rgba(16, 24, 36, 0.85), rgba(16, 24, 36, 0.55));
+        backdrop-filter: blur(10px);
+      }
+
+      .brand {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        min-width: 230px;
+      }
+
+      .logo {
+        width: 36px;
+        height: 36px;
+        border-radius: 12px;
+        background: linear-gradient(135deg, rgba(141, 213, 255, 0.9), rgba(167, 255, 206, 0.9));
+        box-shadow: 0 10px 30px rgba(141, 213, 255, 0.18);
+      }
+
+      .brand h1 {
+        margin: 0;
+        font-size: 14px;
+        letter-spacing: 0.2px;
+      }
+
+      .brand .sub {
+        margin: 0;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .search {
+        flex: 1;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .input {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(15, 22, 32, 0.8);
+      }
+
+      .input:focus-within {
+        box-shadow: var(--focus);
+        border-color: rgba(141, 213, 255, 0.35);
+      }
+
+      .input input {
+        flex: 1;
+        outline: none;
+        border: none;
+        background: transparent;
+        color: var(--text);
+        font-size: 14px;
+      }
+
+      .input input::placeholder {
+        color: rgba(255, 255, 255, 0.45);
+      }
+
+      .btn {
+        border: 1px solid var(--border);
+        background: rgba(15, 22, 32, 0.7);
+        color: var(--text);
+        padding: 9px 12px;
+        border-radius: 12px;
+        cursor: pointer;
+        font-size: 13px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        user-select: none;
+      }
+
+      .btn:hover {
+        border-color: rgba(255, 255, 255, 0.18);
+        background: rgba(15, 22, 32, 0.9);
+      }
+
+      .btn.primary {
+        border-color: rgba(141, 213, 255, 0.5);
+        background: rgba(141, 213, 255, 0.12);
+      }
+
+      .btn.danger {
+        border-color: rgba(255, 122, 122, 0.5);
+        background: rgba(255, 122, 122, 0.1);
+      }
+
+      .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .btn .kbd {
+        font-family: var(--mono);
+        font-size: 11px;
+        padding: 2px 7px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--muted);
+      }
+
+      aside {
+        border-right: 1px solid var(--border);
+        background: linear-gradient(to bottom, rgba(16, 24, 36, 0.65), rgba(16, 24, 36, 0.35));
+        padding: 14px;
+        overflow: auto;
+      }
+
+      main {
+        padding: 14px;
+        overflow: auto;
+      }
+
+      .panel {
+        border: 1px solid var(--border);
+        background: rgba(16, 24, 36, 0.55);
+        border-radius: var(--radius);
+        padding: 12px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
+      }
+
+      .panel + .panel {
+        margin-top: 12px;
+      }
+
+      .panel h2 {
+        margin: 0 0 10px;
+        font-size: 12px;
+        color: var(--muted);
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .row.space {
+        justify-content: space-between;
+      }
+
+      .hint {
+        color: var(--muted-2);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .chip {
+        border: 1px solid var(--border);
+        background: var(--chip);
+        color: var(--muted);
+        padding: 6px 10px;
+        border-radius: 999px;
+        cursor: pointer;
+        font-size: 12px;
+        user-select: none;
+        max-width: 100%;
+      }
+
+      .chip.on {
+        background: var(--chip-on);
+        border-color: var(--chip-on-border);
+        color: var(--text);
+      }
+
+      .chip .count {
+        color: rgba(255, 255, 255, 0.58);
+        margin-left: 6px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .collections {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .collection {
+        border: 1px solid var(--border);
+        background: rgba(15, 23, 34, 0.55);
+        border-radius: 12px;
+        padding: 10px 10px;
+        cursor: pointer;
+      }
+
+      .collection:hover {
+        border-color: rgba(255, 255, 255, 0.18);
+      }
+
+      .collection.on {
+        border-color: rgba(141, 213, 255, 0.45);
+        box-shadow: 0 0 0 3px rgba(141, 213, 255, 0.12);
+      }
+
+      .collection .name {
+        font-size: 13px;
+        margin: 0;
+      }
+
+      .collection .meta {
+        margin: 2px 0 0;
+        font-size: 12px;
+        color: var(--muted);
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .gridHeader {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+      }
+
+      .stats {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 12px;
+      }
+
+      .card {
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: rgba(15, 23, 34, 0.55);
+        overflow: hidden;
+        cursor: pointer;
+        display: flex;
+        flex-direction: column;
+        min-height: 260px;
+      }
+
+      .card:hover {
+        border-color: rgba(255, 255, 255, 0.18);
+      }
+
+      .thumb {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 4 / 3;
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .thumb img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+
+      .badgeRow {
+        position: absolute;
+        left: 10px;
+        right: 10px;
+        bottom: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        pointer-events: none;
+      }
+
+      .badge {
+        pointer-events: none;
+        font-size: 11px;
+        padding: 5px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(11, 15, 20, 0.65);
+        color: rgba(255, 255, 255, 0.85);
+        backdrop-filter: blur(8px);
+      }
+
+      .badge strong {
+        font-variant-numeric: tabular-nums;
+        font-weight: 650;
+      }
+
+      .cardBody {
+        padding: 10px 10px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .title {
+        font-size: 13px;
+        margin: 0;
+        line-height: 1.3;
+      }
+
+      .subrow {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .tiny {
+        font-size: 12px;
+        color: var(--muted);
+        display: inline-flex;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .source {
+        font-family: var(--mono);
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.05);
+        color: rgba(255, 255, 255, 0.75);
+      }
+
+      .check {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .check input {
+        width: 16px;
+        height: 16px;
+      }
+
+      .modalBack {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.55);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 18px;
+        z-index: 50;
+      }
+
+      .modalBack.on {
+        display: flex;
+      }
+
+      .modal {
+        width: min(1100px, 96vw);
+        max-height: 92vh;
+        border-radius: 18px;
+        border: 1px solid var(--border);
+        background: rgba(16, 24, 36, 0.88);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+      }
+
+      .modalLeft {
+        padding: 14px;
+        border-right: 1px solid var(--border);
+        background: rgba(15, 23, 34, 0.6);
+      }
+
+      .modalRight {
+        padding: 14px;
+        overflow: auto;
+      }
+
+      .modalTop {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+
+      .modalTop .meta {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .imageStage {
+        position: relative;
+        border-radius: 16px;
+        border: 1px solid var(--border);
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.05);
+        aspect-ratio: 4 / 3;
+      }
+
+      .imageStage img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        display: block;
+        background: rgba(11, 15, 20, 0.5);
+      }
+
+      .marker {
+        position: absolute;
+        transform: translate(-50%, -50%);
+        width: 26px;
+        height: 26px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        background: rgba(11, 15, 20, 0.72);
+        color: rgba(255, 255, 255, 0.95);
+        display: grid;
+        place-items: center;
+        font-variant-numeric: tabular-nums;
+        font-size: 12px;
+        cursor: grab;
+        user-select: none;
+      }
+
+      .marker:active {
+        cursor: grabbing;
+      }
+
+      .annList {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .annItem {
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: rgba(15, 23, 34, 0.55);
+        padding: 10px;
+      }
+
+      .annItemHead {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+
+      .annItemHead .label {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .annItem textarea {
+        width: 100%;
+        min-height: 64px;
+        resize: vertical;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        padding: 10px;
+        background: rgba(11, 15, 20, 0.55);
+        color: var(--text);
+        outline: none;
+      }
+
+      .annItem textarea:focus {
+        box-shadow: var(--focus);
+        border-color: rgba(141, 213, 255, 0.35);
+      }
+
+      .pill {
+        font-size: 12px;
+        color: rgba(255, 255, 255, 0.85);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 6px 10px;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .divider {
+        height: 1px;
+        background: var(--border);
+        margin: 10px 0;
+      }
+
+      .srOnly {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border-width: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header>
+        <div class="brand">
+          <div class="logo" aria-hidden="true"></div>
+          <div>
+            <h1>Inspirations</h1>
+            <p class="sub">Browse • Annotate • Curate • Export</p>
+          </div>
+        </div>
+
+        <div class="search">
+          <div class="input" title="Try: cabinets, backsplash, exterior, lighting">
+            <span aria-hidden="true">⌕</span>
+            <input id="q" type="text" placeholder="Search (keyword now; semantic later)…" />
+            <span class="kbd">/</span>
+          </div>
+
+          <button class="btn primary" id="runAiBtn" title="Mock AI tagging (simulated)">
+            AI Tag
+          </button>
+          <button class="btn" id="importBtn" title="Import sample data or your JSON">
+            Import
+          </button>
+          <input class="srOnly" id="fileInput" type="file" accept="application/json" />
+        </div>
+      </header>
+
+      <aside>
+        <div class="panel">
+          <h2>Collections</h2>
+          <div class="row space" style="margin-bottom: 10px">
+            <button class="btn" id="newCollectionBtn">New</button>
+            <button class="btn" id="addToCollectionBtn" disabled>Add Selected</button>
+          </div>
+          <div class="collections" id="collections"></div>
+          <div class="divider"></div>
+          <div class="row space">
+            <button class="btn" id="exportJsonBtn" disabled>Export JSON</button>
+            <button class="btn" id="exportHtmlBtn" disabled>Export HTML</button>
+          </div>
+          <p class="hint" style="margin: 10px 0 0">
+            Notes &amp; point markers are saved per-asset (persisted in your browser via <span style="font-family: var(--mono)">localStorage</span>).
+          </p>
+        </div>
+
+        <div class="panel">
+          <h2>Filters</h2>
+          <div class="row space" style="margin-bottom: 10px">
+            <span class="pill">Source</span>
+            <select id="sourceFilter" class="btn" style="padding: 9px 10px; border-radius: 12px">
+              <option value="">All</option>
+              <option value="pinterest">Pinterest</option>
+              <option value="facebook">Facebook</option>
+              <option value="scan">Scan</option>
+              <option value="upload">Upload</option>
+              <option value="url">URL</option>
+            </select>
+          </div>
+          <div class="chips" id="tagChips"></div>
+          <div class="divider"></div>
+          <button class="btn danger" id="resetBtn" title="Clears local-only mock state">Reset Mock State</button>
+          <p class="hint" style="margin: 10px 0 0">
+            This is a UI prototype. Real ingestion (Pinterest/Facebook exports, scans) and AI classification would run in a backend later.
+          </p>
+        </div>
+      </aside>
+
+      <main>
+        <div class="gridHeader">
+          <div>
+            <div class="stats" id="stats">No data loaded.</div>
+          </div>
+          <div class="row">
+            <button class="btn" id="clearSelectionBtn" disabled>Clear Selection</button>
+          </div>
+        </div>
+        <div class="grid" id="grid"></div>
+      </main>
+    </div>
+
+    <div class="modalBack" id="modalBack" role="dialog" aria-modal="true" aria-label="Asset details">
+      <div class="modal">
+        <div class="modalLeft">
+          <div class="modalTop">
+            <div>
+              <div id="modalTitle" style="font-size: 14px; font-weight: 650"></div>
+              <div class="meta" id="modalMeta"></div>
+            </div>
+            <div class="row">
+              <button class="btn" id="copyRefBtn" title="Copy source reference">Copy ref</button>
+              <button class="btn" id="closeModalBtn">Close</button>
+            </div>
+          </div>
+          <div class="imageStage" id="imageStage" title="Click to add an annotation marker. Drag markers to reposition.">
+            <img id="modalImg" alt="" />
+          </div>
+          <div class="row space" style="margin-top: 10px">
+            <span class="hint">Click image to add a marker. Drag markers to move.</span>
+            <button class="btn danger" id="deleteAssetBtn" title="Delete from mock dataset (local only)">Delete</button>
+          </div>
+        </div>
+        <div class="modalRight">
+          <div class="row space" style="margin-bottom: 8px">
+            <span class="pill">Tags</span>
+            <button class="btn" id="addTagBtn">Add</button>
+          </div>
+          <div class="chips" id="assetTags"></div>
+          <div class="divider"></div>
+          <div class="row space" style="margin-bottom: 8px">
+            <span class="pill">Annotations</span>
+            <span class="hint" id="annHint">0 markers</span>
+          </div>
+          <div class="annList" id="annList"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const LS_KEYS = {
+        state: "inspirations_mock_state_v1",
+        annotations: "inspirations_mock_annotations_v1",
+      };
+
+      const $ = (sel) => document.querySelector(sel);
+      const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+      function uid(prefix = "id") {
+        return `${prefix}_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
+      }
+
+      function clamp01(n) {
+        return Math.max(0, Math.min(1, n));
+      }
+
+      function downloadText(filename, text, mime = "text/plain") {
+        const blob = new Blob([text], { type: mime });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      }
+
+      function safeJsonParse(text) {
+        try {
+          return { ok: true, value: JSON.parse(text) };
+        } catch (e) {
+          return { ok: false, error: e };
+        }
+      }
+
+      function svgDataUri(title, subtitle) {
+        const bg1 = "#0f1722";
+        const bg2 = "#101824";
+        const stroke = "rgba(255,255,255,0.12)";
+        const accent = "#8dd5ff";
+        const muted = "rgba(255,255,255,0.72)";
+        const muted2 = "rgba(255,255,255,0.5)";
+        const text = (s) =>
+          String(s)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#39;");
+        const svg = `
+          <svg xmlns="http://www.w3.org/2000/svg" width="800" height="600">
+            <defs>
+              <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="${bg1}" />
+                <stop offset="1" stop-color="${bg2}" />
+              </linearGradient>
+            </defs>
+            <rect x="0" y="0" width="800" height="600" fill="url(#g)"/>
+            <rect x="40" y="40" width="720" height="520" rx="22" fill="rgba(255,255,255,0.03)" stroke="${stroke}"/>
+            <circle cx="120" cy="120" r="24" fill="rgba(141,213,255,0.18)" stroke="rgba(141,213,255,0.35)"/>
+            <circle cx="170" cy="120" r="10" fill="rgba(167,255,206,0.18)" stroke="rgba(167,255,206,0.28)"/>
+            <text x="90" y="240" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="32" fill="${muted}" font-weight="650">${text(title)}</text>
+            <text x="90" y="282" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial" font-size="18" fill="${muted2}">${text(subtitle || "")}</text>
+            <text x="90" y="520" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace" font-size="14" fill="rgba(141,213,255,0.7)">mock image • replace with real thumbnails later</text>
+            <path d="M90 340 C160 300, 220 390, 310 350 C420 310, 510 410, 640 340" fill="none" stroke="${accent}" stroke-width="4" opacity="0.35"/>
+          </svg>
+        `.trim();
+        return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+      }
+
+      function sampleAssets() {
+        const items = [
+          { title: "White oak kitchen cabinets", tags: ["kitchen", "cabinets", "white-oak"], source: "pinterest" },
+          { title: "Shaker cabinet fronts + brass pulls", tags: ["kitchen", "cabinets", "hardware"], source: "pinterest" },
+          { title: "Calacatta backsplash (slab)", tags: ["kitchen", "backsplash", "stone"], source: "facebook" },
+          { title: "Soapstone counter + apron sink", tags: ["kitchen", "countertop", "sink"], source: "pinterest" },
+          { title: "Warm modern exterior (cedar + black)", tags: ["exterior", "siding", "color"], source: "scan" },
+          { title: "Entryway: arched door + sidelights", tags: ["entry", "doors", "exterior"], source: "pinterest" },
+          { title: "Living room built-ins around fireplace", tags: ["living", "built-ins", "fireplace"], source: "facebook" },
+          { title: "Statement pendant lighting over island", tags: ["lighting", "kitchen", "pendant"], source: "pinterest" },
+          { title: "Mudroom lockers + bench", tags: ["mudroom", "storage", "built-ins"], source: "scan" },
+          { title: "Bathroom: zellige tile shower", tags: ["bathroom", "tile", "shower"], source: "pinterest" },
+          { title: "Primary bath: double vanity + sconces", tags: ["bathroom", "vanity", "lighting"], source: "pinterest" },
+          { title: "Laundry: stacked washer/dryer closet", tags: ["laundry", "storage"], source: "facebook" },
+          { title: "Dining: wainscoting + picture rail", tags: ["dining", "trim", "walls"], source: "scan" },
+          { title: "Stair railing (thin black balusters)", tags: ["stairs", "railing", "metal"], source: "pinterest" },
+          { title: "Windows: black frames + divided lite", tags: ["windows", "exterior"], source: "pinterest" },
+          { title: "Hardware: unlacquered brass", tags: ["hardware", "metal", "brass"], source: "facebook" },
+          { title: "Floor: wide plank white oak", tags: ["flooring", "white-oak"], source: "pinterest" },
+          { title: "Tile: encaustic pattern (powder)", tags: ["tile", "powder-room"], source: "scan" },
+          { title: "Kitchen: open shelves + hood", tags: ["kitchen", "shelves", "hood"], source: "pinterest" },
+          { title: "Outdoor: covered patio fireplace", tags: ["outdoor", "fireplace", "patio"], source: "pinterest" },
+        ];
+
+        return items.map((it, idx) => {
+          const id = `asset_${String(idx + 1).padStart(3, "0")}`;
+          const source_ref =
+            it.source === "pinterest"
+              ? `https://pinterest.example/pin/${idx + 1}`
+              : it.source === "facebook"
+                ? `https://facebook.example/saved/${idx + 1}`
+                : `scan://magazine/${idx + 1}`;
+          return {
+            id,
+            source: it.source,
+            source_ref,
+            title: it.title,
+            tags: it.tags,
+            ai_labels: [],
+            image_url: svgDataUri(it.title, it.source.toUpperCase()),
+            imported_at: new Date(Date.now() - idx * 36e5).toISOString(),
+          };
+        });
+      }
+
+      function loadPersisted() {
+        const state = safeJsonParse(localStorage.getItem(LS_KEYS.state) || "null");
+        const annotations = safeJsonParse(localStorage.getItem(LS_KEYS.annotations) || "null");
+        return {
+          state: state.ok && state.value ? state.value : null,
+          annotations: annotations.ok && annotations.value ? annotations.value : {},
+        };
+      }
+
+      function persist() {
+        localStorage.setItem(
+          LS_KEYS.state,
+          JSON.stringify({
+            assets,
+            collections,
+            activeCollectionId,
+          })
+        );
+        localStorage.setItem(LS_KEYS.annotations, JSON.stringify(annotationsByAssetId));
+      }
+
+      let assets = [];
+      let collections = {};
+      let activeCollectionId = "";
+      let selectedAssetIds = new Set();
+      let annotationsByAssetId = {};
+      let tagFilter = new Set();
+      let q = "";
+      let sourceFilter = "";
+
+      const persisted = loadPersisted();
+      if (persisted.state?.assets?.length) {
+        assets = persisted.state.assets;
+        collections = persisted.state.collections || {};
+        activeCollectionId = persisted.state.activeCollectionId || "";
+      }
+      annotationsByAssetId = persisted.annotations || {};
+
+      function ensureDefaultCollection() {
+        if (Object.keys(collections).length === 0) {
+          const id = uid("col");
+          collections[id] = {
+            id,
+            name: "Kitchen shortlist",
+            description: "Initial ideas to show the designer",
+            item_ids: [],
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+          activeCollectionId = id;
+        }
+      }
+
+      function setStats(text) {
+        $("#stats").textContent = text;
+      }
+
+      function getAllTags() {
+        const map = new Map();
+        for (const a of assets) {
+          for (const t of a.tags || []) map.set(t, (map.get(t) || 0) + 1);
+          for (const t of a.ai_labels || []) map.set(t, (map.get(t) || 0) + 1);
+        }
+        return Array.from(map.entries())
+          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+          .slice(0, 40);
+      }
+
+      function matchesFilters(asset) {
+        if (sourceFilter && asset.source !== sourceFilter) return false;
+
+        const query = q.trim().toLowerCase();
+        if (query) {
+          const hay = [
+            asset.title || "",
+            asset.source || "",
+            asset.source_ref || "",
+            ...(asset.tags || []),
+            ...(asset.ai_labels || []),
+          ]
+            .join(" ")
+            .toLowerCase();
+          if (!hay.includes(query)) return false;
+        }
+
+        if (tagFilter.size) {
+          const set = new Set([...(asset.tags || []), ...(asset.ai_labels || [])]);
+          for (const t of tagFilter) if (!set.has(t)) return false;
+        }
+
+        return true;
+      }
+
+      function filteredAssets() {
+        let list = assets.filter(matchesFilters);
+        if (activeCollectionId) {
+          const col = collections[activeCollectionId];
+          if (col?.item_ids?.length) {
+            const allow = new Set(col.item_ids);
+            list = list.filter((a) => allow.has(a.id));
+          }
+        }
+        return list;
+      }
+
+      function renderTagChips() {
+        const tags = getAllTags();
+        const wrap = $("#tagChips");
+        wrap.innerHTML = "";
+
+        if (!assets.length) {
+          wrap.innerHTML = `<span class="hint">Load data to see suggested tags.</span>`;
+          return;
+        }
+
+        for (const [t, count] of tags) {
+          const el = document.createElement("div");
+          el.className = `chip ${tagFilter.has(t) ? "on" : ""}`;
+          el.textContent = t;
+          const span = document.createElement("span");
+          span.className = "count";
+          span.textContent = count;
+          el.appendChild(span);
+          el.addEventListener("click", () => {
+            if (tagFilter.has(t)) tagFilter.delete(t);
+            else tagFilter.add(t);
+            persist();
+            render();
+          });
+          wrap.appendChild(el);
+        }
+      }
+
+      function renderCollections() {
+        const wrap = $("#collections");
+        wrap.innerHTML = "";
+        const entries = Object.values(collections).sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
+        for (const c of entries) {
+          const el = document.createElement("div");
+          el.className = `collection ${c.id === activeCollectionId ? "on" : ""}`;
+          el.innerHTML = `
+            <p class="name">${escapeHtml(c.name)}</p>
+            <p class="meta"><span>${escapeHtml(c.description || "")}</span><span>${(c.item_ids || []).length} items</span></p>
+          `;
+          el.addEventListener("click", () => {
+            activeCollectionId = c.id;
+            selectedAssetIds = new Set();
+            persist();
+            render();
+          });
+          wrap.appendChild(el);
+        }
+
+        const hasCol = Boolean(activeCollectionId);
+        $("#exportJsonBtn").disabled = !hasCol;
+        $("#exportHtmlBtn").disabled = !hasCol;
+      }
+
+      function renderGrid() {
+        const list = filteredAssets();
+        const wrap = $("#grid");
+        wrap.innerHTML = "";
+
+        if (!assets.length) {
+          setStats("No data loaded. Click Import → Load sample.");
+          return;
+        }
+
+        const activeColName = activeCollectionId ? collections[activeCollectionId]?.name || "Collection" : "All items";
+        setStats(`${list.length} shown • ${assets.length} total • view: ${activeColName}`);
+
+        for (const a of list) {
+          const annCount = (annotationsByAssetId[a.id] || []).length;
+          const isChecked = selectedAssetIds.has(a.id);
+
+          const el = document.createElement("div");
+          el.className = "card";
+          el.innerHTML = `
+            <div class="thumb">
+              <img alt="${escapeHtml(a.title || "")}" src="${a.image_url}" />
+              <div class="badgeRow">
+                <span class="badge"><strong>${escapeHtml(a.source)}</strong></span>
+                <span class="badge"><strong>${annCount}</strong> notes</span>
+              </div>
+            </div>
+            <div class="cardBody">
+              <p class="title">${escapeHtml(a.title || "")}</p>
+              <div class="subrow">
+                <span class="tiny"><span class="source">${escapeHtml(a.source)}</span></span>
+                <label class="check" title="Select for collection actions">
+                  <input type="checkbox" ${isChecked ? "checked" : ""} />
+                  Select
+                </label>
+              </div>
+            </div>
+          `;
+
+          const checkbox = el.querySelector("input[type=checkbox]");
+          checkbox.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (checkbox.checked) selectedAssetIds.add(a.id);
+            else selectedAssetIds.delete(a.id);
+            updateSelectionButtons();
+          });
+
+          el.addEventListener("click", () => openAssetModal(a.id));
+          wrap.appendChild(el);
+        }
+      }
+
+      function updateSelectionButtons() {
+        $("#clearSelectionBtn").disabled = selectedAssetIds.size === 0;
+        $("#addToCollectionBtn").disabled = selectedAssetIds.size === 0 || !activeCollectionId;
+      }
+
+      function escapeHtml(s) {
+        return String(s)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#39;");
+      }
+
+      function findAsset(id) {
+        return assets.find((a) => a.id === id) || null;
+      }
+
+      let modalAssetId = "";
+      let dragging = null; // {annId, pointerId}
+
+      function openAssetModal(assetId) {
+        const a = findAsset(assetId);
+        if (!a) return;
+        modalAssetId = assetId;
+        $("#modalTitle").textContent = a.title || "";
+        $("#modalMeta").textContent = `${a.source} • imported ${new Date(a.imported_at).toLocaleString()}`;
+        $("#modalImg").src = a.image_url;
+        $("#modalImg").alt = a.title || "";
+        $("#modalBack").classList.add("on");
+        renderAssetTags();
+        renderAnnotations();
+        renderMarkers();
+      }
+
+      function closeModal() {
+        modalAssetId = "";
+        $("#modalBack").classList.remove("on");
+        dragging = null;
+      }
+
+      function assetAnnotations(assetId) {
+        if (!annotationsByAssetId[assetId]) annotationsByAssetId[assetId] = [];
+        return annotationsByAssetId[assetId];
+      }
+
+      function renderAssetTags() {
+        const a = findAsset(modalAssetId);
+        if (!a) return;
+        const wrap = $("#assetTags");
+        wrap.innerHTML = "";
+        const all = [...new Set([...(a.tags || []), ...(a.ai_labels || [])])].sort((x, y) => x.localeCompare(y));
+        if (!all.length) {
+          wrap.innerHTML = `<span class="hint">No tags yet. Click Add.</span>`;
+          return;
+        }
+        for (const t of all) {
+          const el = document.createElement("div");
+          el.className = "chip on";
+          el.textContent = t;
+          el.title = "Click to remove (removes from manual tags only)";
+          el.addEventListener("click", () => {
+            a.tags = (a.tags || []).filter((x) => x !== t);
+            persist();
+            renderTagChips();
+            renderAssetTags();
+            renderGrid();
+          });
+          wrap.appendChild(el);
+        }
+      }
+
+      function renderAnnotations() {
+        const list = assetAnnotations(modalAssetId);
+        $("#annHint").textContent = `${list.length} marker${list.length === 1 ? "" : "s"}`;
+        const wrap = $("#annList");
+        wrap.innerHTML = "";
+        if (!list.length) {
+          wrap.innerHTML = `<span class="hint">Click the image to add a marker.</span>`;
+          return;
+        }
+
+        for (const ann of list) {
+          const el = document.createElement("div");
+          el.className = "annItem";
+          el.innerHTML = `
+            <div class="annItemHead">
+              <div class="label">
+                <span class="pill">#${ann.label}</span>
+                <span class="hint">x=${ann.x.toFixed(3)}, y=${ann.y.toFixed(3)}</span>
+              </div>
+              <button class="btn danger" data-del="${ann.id}">Delete</button>
+            </div>
+            <textarea placeholder="Annotation text…"></textarea>
+          `;
+
+          const ta = el.querySelector("textarea");
+          ta.value = ann.text || "";
+          ta.addEventListener("input", () => {
+            ann.text = ta.value;
+            persist();
+          });
+
+          el.querySelector("[data-del]").addEventListener("click", () => {
+            const arr = assetAnnotations(modalAssetId);
+            annotationsByAssetId[modalAssetId] = arr.filter((x) => x.id !== ann.id);
+            persist();
+            renderAnnotations();
+            renderMarkers();
+            renderGrid();
+          });
+
+          wrap.appendChild(el);
+        }
+      }
+
+      function renderMarkers() {
+        const stage = $("#imageStage");
+        stage.querySelectorAll(".marker").forEach((m) => m.remove());
+        const list = assetAnnotations(modalAssetId);
+        for (const ann of list) {
+          const m = document.createElement("div");
+          m.className = "marker";
+          m.textContent = ann.label;
+          m.style.left = `${ann.x * 100}%`;
+          m.style.top = `${ann.y * 100}%`;
+          m.title = "Drag to reposition";
+          m.dataset.annId = ann.id;
+
+          m.addEventListener("pointerdown", (e) => {
+            e.preventDefault();
+            m.setPointerCapture(e.pointerId);
+            dragging = { annId: ann.id, pointerId: e.pointerId };
+          });
+
+          stage.appendChild(m);
+        }
+      }
+
+      function stageCoordsToNormalized(stage, clientX, clientY) {
+        const r = stage.getBoundingClientRect();
+        return {
+          x: clamp01((clientX - r.left) / r.width),
+          y: clamp01((clientY - r.top) / r.height),
+        };
+      }
+
+      function addMarkerAt(x, y) {
+        const list = assetAnnotations(modalAssetId);
+        const nextLabel = list.length ? Math.max(...list.map((a) => a.label)) + 1 : 1;
+        list.push({
+          id: uid("ann"),
+          asset_id: modalAssetId,
+          x,
+          y,
+          label: nextLabel,
+          text: "",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+        persist();
+        renderAnnotations();
+        renderMarkers();
+        renderGrid();
+      }
+
+      function applyMockAi() {
+        const vocab = [
+          "cabinets",
+          "backsplash",
+          "white-oak",
+          "brass",
+          "shaker",
+          "tile",
+          "sconce",
+          "pendant",
+          "exterior",
+          "windows",
+          "built-ins",
+          "mudroom",
+          "fireplace",
+          "countertop",
+          "sink",
+          "hood",
+          "shelves",
+          "trim",
+        ];
+        for (const a of assets) {
+          const base = new Set(a.ai_labels || []);
+          const title = (a.title || "").toLowerCase();
+          for (const w of vocab) {
+            if (title.includes(w.replace("-", " "))) base.add(w);
+            if (title.includes(w)) base.add(w);
+          }
+          // a little randomness for demo
+          if (Math.random() < 0.22) base.add(vocab[Math.floor(Math.random() * vocab.length)]);
+          a.ai_labels = Array.from(base).slice(0, 10);
+        }
+        persist();
+        render();
+      }
+
+      function ensureAssetsLoaded() {
+        if (!assets.length) {
+          assets = sampleAssets();
+          ensureDefaultCollection();
+          persist();
+        }
+      }
+
+      function render() {
+        renderCollections();
+        renderTagChips();
+        renderGrid();
+        updateSelectionButtons();
+      }
+
+      // Events
+      $("#q").addEventListener("input", (e) => {
+        q = e.target.value || "";
+        renderGrid();
+      });
+
+      window.addEventListener("keydown", (e) => {
+        if (e.key === "/" && document.activeElement !== $("#q")) {
+          e.preventDefault();
+          $("#q").focus();
+        }
+        if (e.key === "Escape") closeModal();
+      });
+
+      $("#sourceFilter").addEventListener("change", (e) => {
+        sourceFilter = e.target.value || "";
+        renderGrid();
+      });
+
+      $("#runAiBtn").addEventListener("click", () => {
+        if (!assets.length) ensureAssetsLoaded();
+        applyMockAi();
+      });
+
+      $("#importBtn").addEventListener("click", async () => {
+        const choice = window.prompt(
+          "Type one:\n- sample  (loads demo assets)\n- file    (choose a JSON file)\n\nJSON shape: { assets: [...], collections?: {...} }",
+          "sample"
+        );
+        if (!choice) return;
+        if (choice.toLowerCase().startsWith("s")) {
+          assets = sampleAssets();
+          collections = {};
+          activeCollectionId = "";
+          selectedAssetIds = new Set();
+          tagFilter = new Set();
+          q = "";
+          $("#q").value = "";
+          sourceFilter = "";
+          $("#sourceFilter").value = "";
+          ensureDefaultCollection();
+          annotationsByAssetId = {};
+          persist();
+          render();
+          return;
+        }
+        $("#fileInput").click();
+      });
+
+      $("#fileInput").addEventListener("change", async (e) => {
+        const f = e.target.files && e.target.files[0];
+        e.target.value = "";
+        if (!f) return;
+        const text = await f.text();
+        const parsed = safeJsonParse(text);
+        if (!parsed.ok) {
+          alert(`Invalid JSON: ${parsed.error}`);
+          return;
+        }
+        const data = parsed.value;
+        if (!data || !Array.isArray(data.assets)) {
+          alert("JSON must contain { assets: [...] }");
+          return;
+        }
+        assets = data.assets;
+        collections = data.collections || {};
+        activeCollectionId = Object.keys(collections)[0] || "";
+        selectedAssetIds = new Set();
+        tagFilter = new Set();
+        q = "";
+        $("#q").value = "";
+        sourceFilter = "";
+        $("#sourceFilter").value = "";
+        annotationsByAssetId = data.annotationsByAssetId || annotationsByAssetId || {};
+        if (!activeCollectionId) ensureDefaultCollection();
+        persist();
+        render();
+      });
+
+      $("#newCollectionBtn").addEventListener("click", () => {
+        if (!assets.length) ensureAssetsLoaded();
+        const name = window.prompt("Collection name:", "Designer share — Round 1");
+        if (!name) return;
+        const id = uid("col");
+        collections[id] = {
+          id,
+          name,
+          description: "Curated set",
+          item_ids: [],
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        activeCollectionId = id;
+        persist();
+        render();
+      });
+
+      $("#addToCollectionBtn").addEventListener("click", () => {
+        if (!activeCollectionId) return;
+        const col = collections[activeCollectionId];
+        if (!col) return;
+        const add = Array.from(selectedAssetIds);
+        const set = new Set(col.item_ids || []);
+        for (const id of add) set.add(id);
+        col.item_ids = Array.from(set);
+        col.updated_at = new Date().toISOString();
+        selectedAssetIds = new Set();
+        persist();
+        render();
+      });
+
+      $("#clearSelectionBtn").addEventListener("click", () => {
+        selectedAssetIds = new Set();
+        updateSelectionButtons();
+        renderGrid();
+      });
+
+      $("#resetBtn").addEventListener("click", () => {
+        if (!confirm("Clear mock state (assets/collections/annotations) stored in this browser?")) return;
+        localStorage.removeItem(LS_KEYS.state);
+        localStorage.removeItem(LS_KEYS.annotations);
+        assets = [];
+        collections = {};
+        activeCollectionId = "";
+        selectedAssetIds = new Set();
+        annotationsByAssetId = {};
+        tagFilter = new Set();
+        q = "";
+        $("#q").value = "";
+        sourceFilter = "";
+        $("#sourceFilter").value = "";
+        render();
+      });
+
+      $("#exportJsonBtn").addEventListener("click", () => {
+        const col = collections[activeCollectionId];
+        if (!col) return;
+        const allow = new Set(col.item_ids || []);
+        const subset = assets.filter((a) => allow.has(a.id));
+        const subsetAnnotations = {};
+        for (const a of subset) subsetAnnotations[a.id] = assetAnnotations(a.id);
+
+        const payload = {
+          exported_at: new Date().toISOString(),
+          collection: col,
+          assets: subset,
+          annotationsByAssetId: subsetAnnotations,
+        };
+        downloadText(
+          `collection-${(col.name || "export").replaceAll(/[^a-z0-9]+/gi, "-").toLowerCase()}.json`,
+          JSON.stringify(payload, null, 2),
+          "application/json"
+        );
+      });
+
+      function buildExportHtml(col, subset, subsetAnnotations) {
+        const esc = escapeHtml;
+        const items = subset
+          .map((a) => {
+            const anns = subsetAnnotations[a.id] || [];
+            const notes = anns
+              .map((ann) => `<li><strong>#${ann.label}</strong> (${ann.x.toFixed(3)}, ${ann.y.toFixed(3)}): ${esc(ann.text || "")}</li>`)
+              .join("");
+            return `
+              <article class="card">
+                <img src="${a.image_url}" alt="${esc(a.title || "")}" />
+                <h3>${esc(a.title || "")}</h3>
+                <div class="meta">${esc(a.source)} • ${esc(a.source_ref || "")}</div>
+                <ul class="notes">${notes || "<li><em>No annotations.</em></li>"}</ul>
+              </article>
+            `;
+          })
+          .join("");
+
+        return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${esc(col.name || "Collection export")}</title>
+  <style>
+    body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;background:#0b0f14;color:rgba(255,255,255,.92)}
+    header{padding:18px 18px 10px;border-bottom:1px solid rgba(255,255,255,.08);background:#101824}
+    h1{margin:0;font-size:18px}
+    .sub{margin:6px 0 0;color:rgba(255,255,255,.7);font-size:13px}
+    main{padding:18px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+    .card{border:1px solid rgba(255,255,255,.08);border-radius:14px;background:#0f1722;overflow:hidden}
+    .card img{width:100%;height:220px;object-fit:cover;display:block;background:#0b0f14}
+    .card h3{margin:10px 12px 0;font-size:14px}
+    .meta{margin:6px 12px 10px;color:rgba(255,255,255,.65);font-size:12px;word-break:break-word}
+    .notes{margin:0 12px 12px;padding-left:18px;color:rgba(255,255,255,.8);font-size:12px}
+    .notes em{color:rgba(255,255,255,.6)}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>${esc(col.name || "Collection")}</h1>
+    <div class="sub">${esc(col.description || "")} • exported ${esc(new Date().toLocaleString())}</div>
+  </header>
+  <main>
+    <div class="grid">${items}</div>
+  </main>
+</body>
+</html>`;
+      }
+
+      $("#exportHtmlBtn").addEventListener("click", () => {
+        const col = collections[activeCollectionId];
+        if (!col) return;
+        const allow = new Set(col.item_ids || []);
+        const subset = assets.filter((a) => allow.has(a.id));
+        const subsetAnnotations = {};
+        for (const a of subset) subsetAnnotations[a.id] = assetAnnotations(a.id);
+        const html = buildExportHtml(col, subset, subsetAnnotations);
+        downloadText(
+          `collection-${(col.name || "export").replaceAll(/[^a-z0-9]+/gi, "-").toLowerCase()}.html`,
+          html,
+          "text/html"
+        );
+      });
+
+      $("#modalBack").addEventListener("click", (e) => {
+        if (e.target === $("#modalBack")) closeModal();
+      });
+      $("#closeModalBtn").addEventListener("click", () => closeModal());
+
+      $("#copyRefBtn").addEventListener("click", async () => {
+        const a = findAsset(modalAssetId);
+        if (!a) return;
+        const text = a.source_ref || "";
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch {
+          // fallback
+          downloadText("source-ref.txt", text, "text/plain");
+        }
+      });
+
+      $("#addTagBtn").addEventListener("click", () => {
+        const a = findAsset(modalAssetId);
+        if (!a) return;
+        const t = (window.prompt("New tag (kebab-case recommended):", "cabinets") || "").trim();
+        if (!t) return;
+        a.tags = Array.from(new Set([...(a.tags || []), t]));
+        persist();
+        renderTagChips();
+        renderAssetTags();
+        renderGrid();
+      });
+
+      $("#deleteAssetBtn").addEventListener("click", () => {
+        const a = findAsset(modalAssetId);
+        if (!a) return;
+        if (!confirm("Delete this asset from the mock dataset? (local only)")) return;
+        assets = assets.filter((x) => x.id !== a.id);
+        delete annotationsByAssetId[a.id];
+        for (const c of Object.values(collections)) c.item_ids = (c.item_ids || []).filter((id) => id !== a.id);
+        persist();
+        closeModal();
+        render();
+      });
+
+      // Marker add + drag
+      $("#imageStage").addEventListener("click", (e) => {
+        if (!modalAssetId) return;
+        // avoid adding a marker when finishing a drag
+        if (dragging) return;
+        const { x, y } = stageCoordsToNormalized($("#imageStage"), e.clientX, e.clientY);
+        addMarkerAt(x, y);
+      });
+
+      $("#imageStage").addEventListener("pointermove", (e) => {
+        if (!dragging || !modalAssetId) return;
+        if (e.pointerId !== dragging.pointerId) return;
+        const list = assetAnnotations(modalAssetId);
+        const ann = list.find((a) => a.id === dragging.annId);
+        if (!ann) return;
+        const { x, y } = stageCoordsToNormalized($("#imageStage"), e.clientX, e.clientY);
+        ann.x = x;
+        ann.y = y;
+        ann.updated_at = new Date().toISOString();
+        persist();
+        renderMarkers();
+        renderAnnotations();
+      });
+
+      $("#imageStage").addEventListener("pointerup", (e) => {
+        if (!dragging) return;
+        if (e.pointerId !== dragging.pointerId) return;
+        dragging = null;
+        setTimeout(() => {
+          // allow subsequent click-to-add
+        }, 0);
+        renderGrid();
+      });
+
+      // Initial render
+      ensureDefaultCollection();
+      render();
+    </script>
+  </body>
+</html>
+

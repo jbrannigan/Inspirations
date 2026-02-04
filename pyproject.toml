@@ -1,0 +1,17 @@
+[project]
+name = "inspirations"
+version = "0.1.0"
+description = "Local-first inspiration library: ingest, classify, curate, annotate, export."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+
+[project.scripts]
+inspirations = "inspirations.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
