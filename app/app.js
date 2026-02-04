@@ -2,6 +2,7 @@ const state = {
   assets: [],
   collections: [],
   activeCollectionId: "",
+  targetCollectionId: "",
   selected: new Set(),
   q: "",
   source: "",
@@ -32,11 +33,11 @@ function thumbFor(a) {
 function setStats() {
   $("#stats").textContent = `${state.assets.length} items`;
   $("#selectionCount").textContent = `${state.selected.size} selected`;
-  $("#addToCollection").disabled = state.selected.size === 0 || !state.activeCollectionId;
+  $("#addToCollection").disabled = state.selected.size === 0 || !state.targetCollectionId;
   $("#clearSelection").disabled = state.selected.size === 0;
   $("#toggleSelect").textContent = state.selectMode ? "Selecting…" : "Select";
-  $("#collectionHint").textContent = state.activeCollectionId
-    ? "Choose a collection, then add selected items."
+  $("#collectionHint").textContent = state.targetCollectionId
+    ? "Ready to add selected items."
     : "Create or pick a collection first.";
 }
 
@@ -49,6 +50,7 @@ function renderCollections() {
     el.innerHTML = `<div><strong>${c.name}</strong></div><div class="muted">${c.count} items</div>`;
     el.onclick = () => {
       state.activeCollectionId = c.id;
+      state.targetCollectionId = c.id;
       $("#collectionSelect").value = c.id;
       loadAssets();
       renderCollections();
@@ -64,10 +66,10 @@ function renderCollections() {
     opt.textContent = c.name;
     sel.appendChild(opt);
   }
-  if (!state.activeCollectionId && state.collections.length) {
-    state.activeCollectionId = state.collections[0].id;
+  if (!state.targetCollectionId && state.collections.length) {
+    state.targetCollectionId = state.collections[0].id;
   }
-  if (state.activeCollectionId) sel.value = state.activeCollectionId;
+  if (state.targetCollectionId) sel.value = state.targetCollectionId;
 }
 
 function renderGrid() {
@@ -202,6 +204,13 @@ $("#showAll").onclick = () => {
   loadAssets();
 };
 
+$("#viewCollection").onclick = () => {
+  if (!state.targetCollectionId) return;
+  state.activeCollectionId = state.targetCollectionId;
+  renderCollections();
+  loadAssets();
+};
+
 $("#toggleSelect").onclick = () => {
   state.selectMode = !state.selectMode;
   setStats();
@@ -218,13 +227,13 @@ $("#newCollection").onclick = async () => {
   if (!name) return;
   const res = await api("/api/collections", { method: "POST", body: JSON.stringify({ name }) });
   state.collections.unshift(res.collection);
-  state.activeCollectionId = res.collection.id;
+  state.targetCollectionId = res.collection.id;
   renderCollections();
 };
 
 $("#addToCollection").onclick = async () => {
-  if (!state.activeCollectionId) return;
-  await api(`/api/collections/${state.activeCollectionId}/items`, {
+  if (!state.targetCollectionId) return;
+  await api(`/api/collections/${state.targetCollectionId}/items`, {
     method: "POST",
     body: JSON.stringify({ asset_ids: Array.from(state.selected) }),
   });
@@ -239,9 +248,9 @@ $("#clearSelection").onclick = () => {
 };
 
 $("#collectionSelect").onchange = (e) => {
-  state.activeCollectionId = e.target.value || "";
-  loadAssets();
+  state.targetCollectionId = e.target.value || "";
   renderCollections();
+  setStats();
 };
 
 async function init() {

@@ -36,7 +36,11 @@
             <select id="collectionSelect"></select>
             <button id="newCollection">New</button>
           </div>
-          <div class="muted" id="collectionHint" style="margin-top: 6px">Choose a collection, then add selected items.</div>
+          <div class="row" style="margin-top: 6px">
+            <button id="viewCollection">View Collection</button>
+            <button id="showAll">Show All</button>
+          </div>
+          <div class="muted" id="collectionHint" style="margin-top: 6px">Pick a collection to add items. Viewing is separate.</div>
         </div>
         <div class="section">
           <div class="sectionTitle">Selection</div>
@@ -52,7 +56,6 @@
           <div class="row">
             <button id="toggleSelect">Select</button>
             <button id="selectAll">Select All</button>
-            <button id="showAll">Show All</button>
           </div>
         </div>
         <div id="grid" class="grid"></div>
