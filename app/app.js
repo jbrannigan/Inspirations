@@ -403,12 +403,7 @@ $("#assetNotes").addEventListener("input", async (e) => {
 });
 
 function markerColor(idx) {
-  const palette = [
-    "rgba(164,140,255,0.32)",
-    "rgba(150,120,240,0.28)",
-    "rgba(176,152,255,0.3)",
-  ];
-  return palette[idx % palette.length];
+  return "#6F5AA8";
 }
 
 function setActiveAnnotation(id) {

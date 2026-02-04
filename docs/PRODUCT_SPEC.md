@@ -107,6 +107,7 @@ Long-term:
 - **Performance:** handle 4k+ assets without freezing; use thumbnails.
 - **Reliability:** storage backups; idempotent imports.
 - **Cost controls:** AI runs should be batchable, resumable, and incremental.
+- **Accessibility:** badges/labels meet WCAG contrast guidance (text ≥ 4.5:1; non-text ≥ 3:1).
 
 ## 7) Constraints & open questions
 ### Confirmed decisions (Feb 2026)

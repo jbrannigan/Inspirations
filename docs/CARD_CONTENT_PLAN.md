@@ -46,6 +46,14 @@ Cards should feel like *rich snapshots* of the original source while remaining c
 - “Badges” show: `source` (Pinterest/Facebook/Scan), notes count, and optional tag chips.
 - “Expand” toggles show/hide secondary content.
 
+## Badge color standard (selected)
+Chosen option: **Solid violet** for annotation badges
+- Border: `#2B2B30`
+- Fill: `#6F5AA8`
+- Text: `#F2F2F6`
+- Shadow: `rgba(111,90,168,0.35)`
+- Meets WCAG guidance for text and non‑text contrast.
+
 ## Implementation steps (next)
 1. Extend DB to store:
    - `source_domain` (both)
@@ -54,4 +62,3 @@ Cards should feel like *rich snapshots* of the original source while remaining c
 2. Update importers to populate these fields.
 3. Update UI cards to show Primary fields and toggle Secondary.
 4. Add per‑source card templates.
-
