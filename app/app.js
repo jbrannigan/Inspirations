@@ -466,6 +466,16 @@ $("#floatingText").addEventListener("input", (e) => {
   scheduleAnnotationUpdate(ann.id, { text: e.target.value });
 });
 
+$("#floatingText").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    state.activeAnnotationId = null;
+    renderAnnotations();
+    renderMarkers();
+    renderFloatingNote();
+  }
+});
+
 $("#collectionSelect").onchange = (e) => {
   state.targetCollectionId = e.target.value || "";
   renderCollections();
