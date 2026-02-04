@@ -23,6 +23,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .sidebar { border-right: 1px solid var(--border); padding: 12px; background: rgba(16,24,36,0.4); }
 .section { margin-bottom: 16px; }
 .sectionTitle { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.filterGroup { margin-bottom: 10px; }
+.filterTitle { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.filterList { display: grid; gap: 6px; }
+.filterItem { display: flex; gap: 8px; align-items: center; font-size: 12px; }
 .list { display: grid; gap: 8px; }
 .listItem { padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: rgba(15,23,34,0.55); cursor: pointer; }
 .listItem.on { border-color: rgba(141,213,255,0.45); }

@@ -16,6 +16,8 @@ def list_assets(
     *,
     q: str = "",
     source: str = "",
+    board: str = "",
+    label: str = "",
     collection_id: str = "",
     limit: int = 200,
     offset: int = 0,
@@ -23,8 +25,17 @@ def list_assets(
     clauses = []
     params: list[Any] = []
     if source:
-        clauses.append("a.source = ?")
-        params.append(source)
+        sources = [s.strip() for s in source.split(",") if s.strip()]
+        clauses.append("a.source in (%s)" % ",".join(["?"] * len(sources)))
+        params.extend(sources)
+    if board:
+        boards = [s.strip() for s in board.split(",") if s.strip()]
+        clauses.append("a.board in (%s)" % ",".join(["?"] * len(boards)))
+        params.extend(boards)
+    if label:
+        labels = [s.strip() for s in label.split(",") if s.strip()]
+        clauses.append("al.label in (%s)" % ",".join(["?"] * len(labels)))
+        params.extend(labels)
     if q:
         clauses.append("(a.title like ? or a.description like ? or a.board like ? or a.source_ref like ?)")
         qv = f"%{q}%"
@@ -39,6 +50,7 @@ def list_assets(
            a.created_at, a.imported_at, a.image_url, a.stored_path, a.thumb_path
     from assets a
     left join collection_items ci on ci.asset_id = a.id
+    left join asset_labels al on al.asset_id = a.id
     {where}
     order by a.imported_at desc
     limit ? offset ?;
@@ -46,6 +58,21 @@ def list_assets(
     params += [limit, offset]
     rows = db.query(sql, tuple(params))
     return [dict(r) for r in rows]
+
+
+def list_facets(db: Db) -> dict[str, Any]:
+    sources = db.query("select source, count(*) as n from assets group by source order by n desc")
+    boards = db.query(
+        "select board, count(*) as n from assets where board is not null and board != '' group by board order by n desc limit 50"
+    )
+    labels = db.query(
+        "select label, count(*) as n from asset_labels group by label order by n desc limit 50"
+    )
+    return {
+        "sources": [dict(r) for r in sources],
+        "boards": [dict(r) for r in boards],
+        "labels": [dict(r) for r in labels],
+    }
 
 
 def list_collections(db: Db) -> list[dict[str, Any]]:

@@ -17,6 +17,7 @@ from .store import (
     list_collection_items,
     list_collections,
     delete_collection,
+    list_facets,
     remove_item_from_collection,
     set_collection_order,
     update_annotation,
@@ -60,6 +61,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 list_assets,
                 q=q.get("q", [""])[0],
                 source=q.get("source", [""])[0],
+                board=q.get("board", [""])[0],
+                label=q.get("label", [""])[0],
                 collection_id=q.get("collection_id", [""])[0],
                 limit=int(q.get("limit", ["200"])[0]),
                 offset=int(q.get("offset", ["0"])[0]),
@@ -69,6 +72,10 @@ class ApiHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/collections":
             cols = self._with_db(list_collections)
             return _send(self, 200, {"collections": cols})
+
+        if parsed.path == "/api/facets":
+            facets = self._with_db(list_facets)
+            return _send(self, 200, {"facets": facets})
 
         m = re.match(r"^/api/collections/([^/]+)/items$", parsed.path)
         if m:

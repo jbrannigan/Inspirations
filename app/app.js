@@ -5,10 +5,13 @@ const state = {
   targetCollectionId: "",
   selected: new Set(),
   q: "",
-  source: "",
+  sources: new Set(),
+  boards: new Set(),
+  labels: new Set(),
   modalAsset: null,
   annotations: [],
   selectMode: true,
+  facets: { sources: [], boards: [], labels: [] },
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -118,9 +121,11 @@ async function loadCollections() {
 
 async function loadAssets() {
   const q = encodeURIComponent(state.q || "");
-  const source = encodeURIComponent(state.source || "");
+  const source = encodeURIComponent(Array.from(state.sources).join(","));
+  const board = encodeURIComponent(Array.from(state.boards).join(","));
+  const label = encodeURIComponent(Array.from(state.labels).join(","));
   const col = encodeURIComponent(state.activeCollectionId || "");
-  const data = await api(`/api/assets?q=${q}&source=${source}&collection_id=${col}`);
+  const data = await api(`/api/assets?q=${q}&source=${source}&board=${board}&label=${label}&collection_id=${col}`);
   state.assets = data.assets;
   renderGrid();
 }
@@ -195,10 +200,7 @@ $("#search").addEventListener("input", (e) => {
   state.q = e.target.value || "";
   loadAssets();
 });
-$("#source").addEventListener("change", (e) => {
-  state.source = e.target.value || "";
-  loadAssets();
-});
+// top source dropdown not used; filters panel handles sources
 $("#showAll").onclick = () => {
   state.activeCollectionId = "";
   renderCollections();
@@ -307,7 +309,48 @@ $("#collectionSelect").onchange = (e) => {
 
 async function init() {
   await loadCollections();
+  await loadFacets();
   await loadAssets();
 }
 
 init();
+
+async function loadFacets() {
+  const data = await api("/api/facets");
+  state.facets = data.facets;
+  renderFilters();
+}
+
+function renderFilters() {
+  const wrap = $("#filters");
+  wrap.innerHTML = "";
+  const groups = [
+    { key: "sources", label: "Source", set: state.sources },
+    { key: "boards", label: "Source Tags", set: state.boards },
+    { key: "labels", label: "AI Tags", set: state.labels },
+  ];
+
+  for (const g of groups) {
+    const items = state.facets[g.key] || [];
+    if (!items.length) continue;
+    const group = document.createElement("div");
+    group.className = "filterGroup";
+    group.innerHTML = `<div class="filterTitle">${g.label}</div>`;
+    const list = document.createElement("div");
+    list.className = "filterList";
+    items.slice(0, 15).forEach((it) => {
+      const value = it.source || it.board || it.label;
+      const row = document.createElement("label");
+      row.className = "filterItem";
+      row.innerHTML = `<input type="checkbox" ${g.set.has(value) ? "checked" : ""} /> ${value} <span class="muted">(${it.n})</span>`;
+      row.querySelector("input").addEventListener("change", (e) => {
+        if (e.target.checked) g.set.add(value);
+        else g.set.delete(value);
+        loadAssets();
+      });
+      list.appendChild(row);
+    });
+    group.appendChild(list);
+    wrap.appendChild(group);
+  }
+}

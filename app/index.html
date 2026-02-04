@@ -17,17 +17,17 @@
       </div>
       <div class="actions">
         <input id="search" placeholder="Search or type a tag (e.g., cabinets)" />
-        <select id="source">
-          <option value="">All Sources</option>
-          <option value="pinterest">Pinterest</option>
-          <option value="facebook">Facebook</option>
-          <option value="scan">Scans</option>
-        </select>
       </div>
     </header>
 
     <div class="layout">
       <aside class="sidebar">
+        <div class="section">
+          <div class="sectionTitle">Filters</div>
+          <div class="list" id="filters">
+            <div class="muted">Loading filters…</div>
+          </div>
+        </div>
         <div class="section">
           <div class="sectionTitle">Collections</div>
           <div id="collections" class="list"></div>
