@@ -32,7 +32,7 @@ function thumbFor(a) {
 function setStats() {
   $("#stats").textContent = `${state.assets.length} items`;
   $("#selectionCount").textContent = `${state.selected.size} selected`;
-  $("#addToCollection").disabled = state.selected.size === 0 || !state.activeCollectionId;
+  $("#addToCollection").disabled = state.selected.size === 0 || state.collections.length === 0;
   $("#clearSelection").disabled = state.selected.size === 0;
   $("#toggleSelect").textContent = state.selectMode ? "Selecting…" : "Select";
 }
@@ -46,11 +46,22 @@ function renderCollections() {
     el.innerHTML = `<div><strong>${c.name}</strong></div><div class="muted">${c.count} items</div>`;
     el.onclick = () => {
       state.activeCollectionId = c.id;
+      $("#collectionSelect").value = c.id;
       loadAssets();
       renderCollections();
     };
     wrap.appendChild(el);
   }
+
+  const sel = $("#collectionSelect");
+  sel.innerHTML = "";
+  for (const c of state.collections) {
+    const opt = document.createElement("option");
+    opt.value = c.id;
+    opt.textContent = c.name;
+    sel.appendChild(opt);
+  }
+  if (state.activeCollectionId) sel.value = state.activeCollectionId;
 }
 
 function renderGrid() {
@@ -206,7 +217,14 @@ $("#newCollection").onclick = async () => {
 };
 
 $("#addToCollection").onclick = async () => {
-  if (!state.activeCollectionId) return;
+  if (!state.activeCollectionId) {
+    const name = prompt("No collection selected. Create one?", "Kitchen — Round 1");
+    if (!name) return;
+    const res = await api("/api/collections", { method: "POST", body: JSON.stringify({ name }) });
+    state.collections.unshift(res.collection);
+    state.activeCollectionId = res.collection.id;
+    renderCollections();
+  }
   await api(`/api/collections/${state.activeCollectionId}/items`, {
     method: "POST",
     body: JSON.stringify({ asset_ids: Array.from(state.selected) }),
@@ -219,6 +237,12 @@ $("#addToCollection").onclick = async () => {
 $("#clearSelection").onclick = () => {
   state.selected.clear();
   setStats();
+};
+
+$("#collectionSelect").onchange = (e) => {
+  state.activeCollectionId = e.target.value || "";
+  loadAssets();
+  renderCollections();
 };
 
 async function init() {
