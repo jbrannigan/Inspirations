@@ -56,7 +56,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .marker.active { outline: 2px solid rgba(255,255,255,0.7); box-shadow: 0 0 0 6px rgba(255,255,255,0.12); }
 .marker .badgeIcons { position: absolute; right: -12px; top: -12px; display: none; gap: 3px; }
 .marker.active .badgeIcons { display: flex; }
-.marker .badgeIcons button { width: 18px; height: 18px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.35); font-size: 11px; padding: 0; cursor: pointer; background: rgba(16,24,36,0.95); color: var(--text); box-shadow: 0 2px 6px rgba(0,0,0,0.4); }
+.marker .badgeIcons button { width: 18px; height: 18px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.35); padding: 0; cursor: pointer; background: rgba(16,24,36,0.95); color: var(--text); box-shadow: 0 2px 6px rgba(0,0,0,0.4); display: grid; place-items: center; }
+.marker .badgeIcons svg { display: block; }
 .marker .badgeIcons .ok { color: #a7ffce; border-color: rgba(167,255,206,0.6); }
 .marker .badgeIcons .del { color: #ff7a7a; border-color: rgba(255,122,122,0.6); }
 .notes .listItem { cursor: default; }

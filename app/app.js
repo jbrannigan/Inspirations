@@ -219,10 +219,18 @@ function renderMarkers() {
     m.dataset.id = ann.id;
     m.style.background = markerColor(idx);
     m.innerHTML = `
-      <span style="color: rgba(210,210,218,0.9);">${idx + 1}</span>
+      <span style="color: #F2F2F6;">${idx + 1}</span>
       <div class="badgeIcons">
-        <button class="ok" data-ok="${ann.id}">✓</button>
-        <button class="del" data-del="${ann.id}">×</button>
+        <button class="ok" data-ok="${ann.id}" aria-label="Done">
+          <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+            <path d="M3.2 8.4l2.3 2.3L12.8 3.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <button class="del" data-del="${ann.id}" aria-label="Delete">
+          <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+            <path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
       </div>
     `;
     m.onpointerdown = (e) => {
