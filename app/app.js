@@ -14,6 +14,8 @@ const state = {
   facets: { sources: [], boards: [], labels: [] },
   tray: [],
   dragging: null,
+  activeAnnotationId: null,
+  noteTimers: {},
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -178,7 +180,7 @@ function renderAnnotations() {
   wrap.innerHTML = "";
   state.annotations.forEach((ann, idx) => {
     const el = document.createElement("div");
-    el.className = "listItem";
+    el.className = `listItem annItem ${state.activeAnnotationId === ann.id ? "active" : ""}`;
     el.innerHTML = `
       <div><strong>#${idx + 1}</strong></div>
       <textarea data-ann="${ann.id}">${ann.text || ""}</textarea>
@@ -186,18 +188,20 @@ function renderAnnotations() {
         <button data-del="${ann.id}">Delete</button>
       </div>
     `;
+    el.onclick = () => setActiveAnnotation(ann.id);
     const ta = el.querySelector("textarea");
     ta.addEventListener("input", async () => {
-      await api(`/api/annotations/${ann.id}`, {
-        method: "PUT",
-        body: JSON.stringify({ text: ta.value }),
-      });
+      ann.text = ta.value;
+      syncFloatingText(ann.id, ta.value);
+      scheduleAnnotationUpdate(ann.id, { text: ta.value });
     });
     el.querySelector("[data-del]").onclick = async () => {
       await api(`/api/annotations/${ann.id}`, { method: "DELETE" });
       state.annotations = state.annotations.filter((x) => x.id !== ann.id);
+      if (state.activeAnnotationId === ann.id) state.activeAnnotationId = null;
       renderAnnotations();
       renderMarkers();
+      renderFloatingNote();
     };
     wrap.appendChild(el);
   });
@@ -213,18 +217,24 @@ function renderMarkers() {
     m.style.left = `${ann.x * 100}%`;
     m.style.top = `${ann.y * 100}%`;
     m.dataset.id = ann.id;
+    m.style.background = markerColor(idx);
     m.onpointerdown = (e) => {
       e.stopPropagation();
       m.setPointerCapture(e.pointerId);
-      state.dragging = { id: ann.id, pointerId: e.pointerId };
+      state.dragging = { id: ann.id, pointerId: e.pointerId, moved: false };
     };
+    m.onclick = (e) => {
+      e.stopPropagation();
+      setActiveAnnotation(ann.id);
+    };
+    if (state.activeAnnotationId === ann.id) m.classList.add("active");
     stage.appendChild(m);
   });
 }
 
 $("#imageStage").addEventListener("click", async (e) => {
   if (!state.modalAsset) return;
-  if (state.dragging) return;
+  if (e.target.closest(".marker") || e.target.closest(".floatingNote")) return;
   const r = $("#imageStage").getBoundingClientRect();
   const x = (e.clientX - r.left) / r.width;
   const y = (e.clientY - r.top) / r.height;
@@ -233,8 +243,10 @@ $("#imageStage").addEventListener("click", async (e) => {
     body: JSON.stringify({ asset_id: state.modalAsset.id, x, y, text: "" }),
   });
   state.annotations.push(res.annotation);
+  state.activeAnnotationId = res.annotation.id;
   renderAnnotations();
   renderMarkers();
+  renderFloatingNote();
 });
 
 $("#imageStage").addEventListener("pointermove", async (e) => {
@@ -246,7 +258,9 @@ $("#imageStage").addEventListener("pointermove", async (e) => {
   if (!ann) return;
   ann.x = Math.max(0, Math.min(1, x));
   ann.y = Math.max(0, Math.min(1, y));
+  state.dragging.moved = true;
   renderMarkers();
+  renderFloatingNote();
 });
 
 $("#imageStage").addEventListener("pointerup", async (e) => {
@@ -362,6 +376,78 @@ $("#assetNotes").addEventListener("input", async (e) => {
     method: "PUT",
     body: JSON.stringify({ notes: e.target.value }),
   });
+});
+
+function markerColor(idx) {
+  const palette = ["#8dd5ff", "#a7ffce", "#ffda79", "#ff9ecb", "#b9a6ff", "#ffa66d"];
+  return palette[idx % palette.length];
+}
+
+function setActiveAnnotation(id) {
+  state.activeAnnotationId = id;
+  renderAnnotations();
+  renderMarkers();
+  renderFloatingNote();
+  const ta = document.querySelector(`textarea[data-ann="${id}"]`);
+  if (ta) ta.focus();
+}
+
+function renderFloatingNote() {
+  const box = $("#floatingNote");
+  const ta = $("#floatingText");
+  const del = $("#floatingDelete");
+  if (!state.activeAnnotationId) {
+    box.classList.add("hidden");
+    return;
+  }
+  const ann = state.annotations.find((a) => a.id === state.activeAnnotationId);
+  if (!ann) {
+    box.classList.add("hidden");
+    return;
+  }
+  box.classList.remove("hidden");
+  ta.value = ann.text || "";
+  const stage = $("#imageStage");
+  const r = stage.getBoundingClientRect();
+  const x = ann.x * r.width;
+  const y = ann.y * r.height;
+  const left = Math.min(r.width - 240, Math.max(10, x + 12));
+  const top = Math.min(r.height - 140, Math.max(10, y + 12));
+  box.style.left = `${left}px`;
+  box.style.top = `${top}px`;
+  del.onclick = async () => {
+    await api(`/api/annotations/${ann.id}`, { method: "DELETE" });
+    state.annotations = state.annotations.filter((x) => x.id !== ann.id);
+    state.activeAnnotationId = null;
+    renderAnnotations();
+    renderMarkers();
+    renderFloatingNote();
+  };
+}
+
+function syncFloatingText(id, text) {
+  if (state.activeAnnotationId !== id) return;
+  $("#floatingText").value = text;
+}
+
+function scheduleAnnotationUpdate(id, payload) {
+  if (state.noteTimers[id]) clearTimeout(state.noteTimers[id]);
+  state.noteTimers[id] = setTimeout(async () => {
+    await api(`/api/annotations/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  }, 250);
+}
+
+$("#floatingText").addEventListener("input", (e) => {
+  if (!state.activeAnnotationId) return;
+  const ann = state.annotations.find((a) => a.id === state.activeAnnotationId);
+  if (!ann) return;
+  ann.text = e.target.value;
+  const listTa = document.querySelector(`textarea[data-ann="${ann.id}"]`);
+  if (listTa) listTa.value = e.target.value;
+  scheduleAnnotationUpdate(ann.id, { text: e.target.value });
 });
 
 $("#collectionSelect").onchange = (e) => {
