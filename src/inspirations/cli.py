@@ -76,7 +76,11 @@ def cmd_import_facebook(args: argparse.Namespace) -> int:
         with Db(db_path) as db:
             ensure_schema(db)
             dl = download_and_attach_originals(
-                db=db, store_dir=store_dir, source="facebook", limit=args.download_limit
+                db=db,
+                store_dir=store_dir,
+                source="facebook",
+                limit=args.download_limit,
+                retry_non_image=args.retry_non_image,
             )
         report["downloaded"] = dl
 
@@ -168,6 +172,11 @@ def build_parser() -> argparse.ArgumentParser:
     fb.add_argument("--limit", type=int, default=0, help="Limit parsed records (0 = no limit)")
     fb.add_argument("--download", action="store_true", help="Download originals after import")
     fb.add_argument("--download-limit", type=int, default=0, help="Limit downloads (0 = no limit)")
+    fb.add_argument(
+        "--retry-non-image",
+        action="store_true",
+        help="Retry downloads for items that previously saved as .bin (non-image)",
+    )
     fb.set_defaults(func=cmd_import_facebook)
 
     sc = imp_sub.add_parser("scans", help="Import scans from an inbox folder")

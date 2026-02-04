@@ -31,6 +31,12 @@ PYTHONPATH=src python3 -m inspirations import pinterest --zip imports/raw/datase
 PYTHONPATH=src python3 -m inspirations import facebook --zip imports/raw/facebook-*.zip --download
 ```
 
+If some Facebook items are HTML pages, retry with preview-image extraction:
+
+```sh
+PYTHONPATH=src python3 -m inspirations import facebook --zip imports/raw/facebook-*.zip --download --retry-non-image
+```
+
 Scan PDF inbox (page-splitting) and generate thumbnails:
 
 ```sh
