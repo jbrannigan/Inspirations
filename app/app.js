@@ -403,7 +403,11 @@ $("#assetNotes").addEventListener("input", async (e) => {
 });
 
 function markerColor(idx) {
-  const palette = ["#8dd5ff", "#a7ffce", "#ffda79", "#ff9ecb", "#b9a6ff", "#ffa66d"];
+  const palette = [
+    "rgba(141,213,255,0.28)",
+    "rgba(167,255,206,0.24)",
+    "rgba(185,166,255,0.24)",
+  ];
   return palette[idx % palette.length];
 }
 
