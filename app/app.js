@@ -226,6 +226,7 @@ function renderMarkers() {
       </div>
     `;
     m.onpointerdown = (e) => {
+      if (e.target.closest(".badgeIcons")) return;
       e.stopPropagation();
       m.setPointerCapture(e.pointerId);
       state.dragging = { id: ann.id, pointerId: e.pointerId, moved: false };
