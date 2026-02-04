@@ -123,4 +123,3 @@ def download_and_attach_originals(db: Db, store_dir: Path, source: str, limit: i
         "errors": errors[:25],
         "note": "Errors are truncated to 25 in output.",
     }
-

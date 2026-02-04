@@ -21,7 +21,7 @@ Deliverable: `mockup/index.html` (no dependencies).
 - Import adapters:
   - Pinterest export adapter (pins → assets; idempotent re-import to pick up new pins)
   - Facebook export adapter (best-effort; only ingest entries with retrievable media URLs)
-  - Scan intake adapter (folder-based “inbox” workflow; idempotent by hash)
+  - Scan intake adapter (folder-based “inbox” workflow; PDF page splitting; idempotent by hash)
 - Dedupe: URL + exact hash; near-dup later
 - Basic export: HTML gallery + JSON metadata
 
@@ -72,3 +72,5 @@ Deliverable: `mockup/index.html` (no dependencies).
 - Keep raw exports and scans under `imports/` (gitignored) for reproducibility.
 - Keep downloaded images under `store/` (gitignored) with backup to external drive/cloud.
 - Prefer “re-export + idempotent import” for Pinterest/Facebook to capture updates without fragile scraping.
+- Ensure a working network/DNS environment for bulk image downloads.
+- Install a PDF renderer for scans (`pdftoppm` or `mutool`).

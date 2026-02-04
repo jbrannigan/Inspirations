@@ -21,7 +21,9 @@ class TestSecurity(unittest.TestCase):
         with mock.patch.object(security, "resolve_host", return_value=["93.184.216.34"]):
             self.assertTrue(security.is_safe_public_url("https://example.com/x"))
 
+    def test_allowlisted_hosts_pass_without_dns(self):
+        self.assertTrue(security.is_safe_public_url("https://i.pinimg.com/originals/a/b/c.jpg"))
+
 
 if __name__ == "__main__":
     unittest.main()
-

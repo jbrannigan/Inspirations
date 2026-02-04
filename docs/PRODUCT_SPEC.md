@@ -113,8 +113,9 @@ Long-term:
 1. **Download and store images** (durable; enables export-by-zip later).
 2. **Cloud AI is allowed** (Gemini/OpenAI/etc.).
 3. **Share-by-export first** (HTML/ZIP/PDF later), not live designer login initially.
+4. **Bulk download requires network/DNS** (plan for connectivity during import runs).
 
 ### Still open
 1. New pins workflow: how often do you want to re-export Pinterest (daily/weekly/on-demand)?
-2. Scan intake: do scans land as JPG/PNG, or do you primarily have PDFs that need page extraction?
+2. Scan intake: **PDFs from Adobe Scan** (page extraction required).
 3. Facebook update: are you expecting “new saves since last export”, or do you want a periodic re-export + idempotent import approach?

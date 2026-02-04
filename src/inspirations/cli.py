@@ -7,7 +7,10 @@ from pathlib import Path
 from .db import Db, ensure_schema
 from .importers.facebook_saved import import_facebook_saved_zip
 from .importers.pinterest_crawler import import_pinterest_crawler_zip
+from .importers.scans import import_scans_inbox
 from .storage import download_and_attach_originals
+from .thumbnails import generate_thumbnails
+from .ai import run_ai_labeler
 
 
 def _p(p: str) -> Path:
@@ -80,6 +83,53 @@ def cmd_import_facebook(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_import_scans(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    inbox = _p(args.inbox)
+    store_dir = _p(args.store)
+
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = import_scans_inbox(
+            db,
+            inbox_dir=inbox,
+            store_dir=store_dir,
+            format=args.format,
+            limit=args.limit,
+            max_pages=args.max_pages,
+            renderer=args.renderer,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_thumbs(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    store_dir = _p(args.store)
+    source = args.source.strip() or None
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = generate_thumbnails(
+            db,
+            store_dir=store_dir,
+            size=args.size,
+            limit=args.limit,
+            source=source,
+            tool=args.tool,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_ai_tag(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = run_ai_labeler(db, provider=args.provider, limit=args.limit)
+    print(json.dumps(report, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="inspirations", description="Inspiration library utilities")
     p.set_defaults(func=lambda _: p.print_help() or 2)
@@ -112,6 +162,28 @@ def build_parser() -> argparse.ArgumentParser:
     fb.add_argument("--download-limit", type=int, default=0, help="Limit downloads (0 = no limit)")
     fb.set_defaults(func=cmd_import_facebook)
 
+    sc = imp_sub.add_parser("scans", help="Import scans from an inbox folder")
+    sc.add_argument("--inbox", required=True, help="Path to scans inbox folder")
+    sc.add_argument("--format", default="jpg", help="Page image format: jpg or png")
+    sc.add_argument("--renderer", default="auto", help="PDF renderer: auto | pdftoppm | mutool")
+    sc.add_argument("--max-pages", type=int, default=0, help="Max pages per PDF (0 = all)")
+    sc.add_argument("--limit", type=int, default=0, help="Limit files (0 = no limit)")
+    sc.set_defaults(func=cmd_import_scans)
+
+    thumbs = sub.add_parser("thumbs", help="Generate thumbnails from stored originals/pages")
+    thumbs.add_argument("--size", type=int, default=512, help="Max dimension in pixels")
+    thumbs.add_argument("--limit", type=int, default=0, help="Limit assets (0 = no limit)")
+    thumbs.add_argument("--source", default="", help="Only generate for a source (pinterest/facebook/scan)")
+    thumbs.add_argument("--tool", default="auto", help="Tool: auto | sips | magick")
+    thumbs.set_defaults(func=cmd_thumbs)
+
+    ai = sub.add_parser("ai", help="AI utilities")
+    ai_sub = ai.add_subparsers(dest="ai_cmd")
+    tag = ai_sub.add_parser("tag", help="Run AI tagging")
+    tag.add_argument("--provider", default="mock", help="Provider: mock (others later)")
+    tag.add_argument("--limit", type=int, default=0, help="Limit assets (0 = no limit)")
+    tag.set_defaults(func=cmd_ai_tag)
+
     return p
 
 
@@ -119,4 +191,3 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     return int(args.func(args))
-

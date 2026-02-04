@@ -23,6 +23,26 @@ PYTHONPATH=src python3 -m inspirations import facebook --zip imports/raw/faceboo
 PYTHONPATH=src python3 -m inspirations list
 ```
 
+Download originals (requires network/DNS access):
+
+```sh
+PYTHONPATH=src python3 -m inspirations import pinterest --zip imports/raw/dataset_pinterest-crawler_*.zip --download
+PYTHONPATH=src python3 -m inspirations import facebook --zip imports/raw/facebook-*.zip --download
+```
+
+Scan PDF inbox (page-splitting) and generate thumbnails:
+
+```sh
+PYTHONPATH=src python3 -m inspirations import scans --inbox imports/scans/inbox --format jpg
+PYTHONPATH=src python3 -m inspirations thumbs --size 512
+```
+
+Run AI tagging (mock provider for now):
+
+```sh
+PYTHONPATH=src python3 -m inspirations ai tag --provider mock
+```
+
 Run tests:
 
 ```sh
