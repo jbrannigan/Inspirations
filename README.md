@@ -9,6 +9,7 @@ This repo contains a local, dependency-free HTML mockup plus a professional prod
 ## Quick start (mockup)
 
 1. Open `mockup/index.html` in a browser.
+2. Open `mockup/curation.html` for curated-workflow screens.
 2. Click **Import** to load a sample dataset or import your own JSON.
 3. Try searching, tagging, creating collections, and adding image annotations.
 
@@ -43,6 +44,14 @@ Run AI tagging (mock provider for now):
 ```sh
 PYTHONPATH=src python3 -m inspirations ai tag --provider mock
 ```
+
+## Run the local app
+
+```sh
+PYTHONPATH=src python3 -m inspirations serve --host 127.0.0.1 --port 8000
+```
+
+Then open http://127.0.0.1:8000
 
 Run tests:
 

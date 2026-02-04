@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Inspirations — Local App</title>
+    <link rel="stylesheet" href="/app/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo"></div>
+        <div>
+          <div class="title">Inspirations</div>
+          <div class="subtitle">Curate • Annotate • Share</div>
+        </div>
+      </div>
+      <div class="actions">
+        <input id="search" placeholder="Search (e.g., cabinets, lighting)" />
+        <select id="source">
+          <option value="">All Sources</option>
+          <option value="pinterest">Pinterest</option>
+          <option value="facebook">Facebook</option>
+          <option value="scan">Scans</option>
+        </select>
+        <button id="newCollection">New Collection</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="section">
+          <div class="sectionTitle">Collections</div>
+          <div id="collections" class="list"></div>
+        </div>
+        <div class="section">
+          <div class="sectionTitle">Selection</div>
+          <div class="muted" id="selectionCount">0 selected</div>
+          <button id="addToCollection" disabled>Add to Collection</button>
+          <button id="clearSelection" disabled>Clear</button>
+        </div>
+      </aside>
+
+      <main class="content">
+        <div class="toolbar">
+          <div id="stats" class="muted">Loading…</div>
+          <button id="showAll">Show All</button>
+        </div>
+        <div id="grid" class="grid"></div>
+      </main>
+    </div>
+
+    <div id="modal" class="modal hidden">
+      <div class="modalContent">
+        <div class="modalHeader">
+          <div>
+            <div id="modalTitle" class="modalTitle"></div>
+            <div id="modalMeta" class="muted"></div>
+          </div>
+          <button id="closeModal">Close</button>
+        </div>
+        <div class="modalBody">
+          <div class="imageStage" id="imageStage">
+            <img id="modalImage" alt="" />
+          </div>
+          <div class="notes">
+            <div class="sectionTitle">Annotations</div>
+            <div id="annList" class="list"></div>
+            <div class="muted">Click on the image to add a note.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/app/app.js"></script>
+  </body>
+</html>
+

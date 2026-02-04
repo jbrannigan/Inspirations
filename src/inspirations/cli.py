@@ -11,6 +11,7 @@ from .importers.scans import import_scans_inbox
 from .storage import download_and_attach_originals
 from .thumbnails import generate_thumbnails
 from .ai import run_ai_labeler
+from .server import run_server
 
 
 def _p(p: str) -> Path:
@@ -130,6 +131,13 @@ def cmd_ai_tag(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    app_dir = _p(args.app)
+    run_server(host=args.host, port=args.port, db_path=db_path, app_dir=app_dir)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="inspirations", description="Inspiration library utilities")
     p.set_defaults(func=lambda _: p.print_help() or 2)
@@ -183,6 +191,12 @@ def build_parser() -> argparse.ArgumentParser:
     tag.add_argument("--provider", default="mock", help="Provider: mock (others later)")
     tag.add_argument("--limit", type=int, default=0, help="Limit assets (0 = no limit)")
     tag.set_defaults(func=cmd_ai_tag)
+
+    serve = sub.add_parser("serve", help="Run local web app")
+    serve.add_argument("--host", default="127.0.0.1", help="Bind host (default 127.0.0.1)")
+    serve.add_argument("--port", type=int, default=8000, help="Port")
+    serve.add_argument("--app", default="app", help="App directory (static files)")
+    serve.set_defaults(func=cmd_serve)
 
     return p
 

@@ -86,6 +86,46 @@ def ensure_schema(db: Db) -> None:
     db.exec("create index if not exists ix_assets_sha256 on assets(sha256);")
     db.exec(
         """
+        create table if not exists collections (
+          id text primary key,
+          name text not null,
+          description text,
+          created_at text not null,
+          updated_at text not null
+        );
+        """
+    )
+    db.exec(
+        """
+        create table if not exists collection_items (
+          collection_id text not null,
+          asset_id text not null,
+          position integer not null,
+          primary key(collection_id, asset_id),
+          foreign key(collection_id) references collections(id) on delete cascade,
+          foreign key(asset_id) references assets(id) on delete cascade
+        );
+        """
+    )
+    db.exec("create index if not exists ix_collection_items_collection on collection_items(collection_id);")
+    db.exec("create index if not exists ix_collection_items_asset on collection_items(asset_id);")
+    db.exec(
+        """
+        create table if not exists annotations (
+          id text primary key,
+          asset_id text not null,
+          x real not null,
+          y real not null,
+          text text,
+          created_at text not null,
+          updated_at text not null,
+          foreign key(asset_id) references assets(id) on delete cascade
+        );
+        """
+    )
+    db.exec("create index if not exists ix_annotations_asset on annotations(asset_id);")
+    db.exec(
+        """
         create table if not exists ai_runs (
           id text primary key,
           provider text not null,

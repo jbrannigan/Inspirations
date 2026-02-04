@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Inspirations — UX Mockups (Curate First)</title>
+    <style>
+      :root {
+        --bg: #0b0f14;
+        --panel: #101824;
+        --panel-2: #0f1620;
+        --border: rgba(255, 255, 255, 0.08);
+        --text: rgba(255, 255, 255, 0.92);
+        --muted: rgba(255, 255, 255, 0.68);
+        --accent: #8dd5ff;
+        --accent-2: #a7ffce;
+        --shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+        --radius: 16px;
+        --radius-sm: 12px;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+      .wrap { padding: 20px; display: grid; gap: 16px; }
+      header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+      .brand { display: flex; align-items: center; gap: 10px; }
+      .logo { width: 36px; height: 36px; border-radius: 12px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+      .nav { display: flex; gap: 8px; flex-wrap: wrap; }
+      .btn { border: 1px solid var(--border); background: rgba(15, 22, 32, 0.7); color: var(--text); padding: 8px 12px; border-radius: 10px; cursor: pointer; font-size: 13px; }
+      .btn.on { border-color: rgba(141, 213, 255, 0.45); background: rgba(141, 213, 255, 0.12); }
+      .panel { border: 1px solid var(--border); border-radius: var(--radius); background: rgba(16,24,36,0.55); padding: 14px; box-shadow: var(--shadow); }
+      .row { display: flex; gap: 10px; align-items: center; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+      .card { border: 1px solid var(--border); border-radius: 14px; background: rgba(15,23,34,0.55); overflow: hidden; }
+      .thumb { width: 100%; aspect-ratio: 4/3; background: rgba(255,255,255,0.06); position: relative; }
+      .badge { position: absolute; left: 10px; bottom: 10px; background: rgba(11,15,20,0.65); border: 1px solid var(--border); padding: 4px 8px; border-radius: 999px; font-size: 11px; }
+      .cardBody { padding: 10px; font-size: 13px; }
+      .chip { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--border); padding: 6px 10px; border-radius: 999px; font-size: 12px; color: var(--muted); }
+      .pill { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--border); padding: 6px 10px; border-radius: 999px; font-size: 12px; }
+      .muted { color: var(--muted); font-size: 12px; }
+      .screen { display: none; }
+      .screen.on { display: block; }
+      .split { display: grid; grid-template-columns: 300px 1fr; gap: 12px; }
+      .list { display: grid; gap: 8px; }
+      .listItem { border: 1px solid var(--border); border-radius: 12px; padding: 10px; background: rgba(15,23,34,0.55); }
+      .big { font-size: 18px; font-weight: 650; }
+      .callout { border: 1px dashed rgba(141,213,255,0.4); background: rgba(141,213,255,0.08); padding: 10px; border-radius: 12px; font-size: 12px; color: var(--muted); }
+      .stage { border: 1px solid var(--border); border-radius: 14px; background: rgba(15,23,34,0.6); height: 380px; position: relative; }
+      .marker { position: absolute; width: 22px; height: 22px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.3); background: rgba(11,15,20,0.8); display: grid; place-items: center; font-size: 11px; }
+      .footer { font-size: 12px; color: var(--muted); }
+      .kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--border); padding: 2px 6px; border-radius: 999px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div class="brand">
+          <div class="logo"></div>
+          <div>
+            <div class="big">Inspirations — Curate First</div>
+            <div class="muted">Static UX mockups only (no code)</div>
+          </div>
+        </div>
+        <div class="nav">
+          <button class="btn on" data-screen="home">Home</button>
+          <button class="btn" data-screen="browse">Browse</button>
+          <button class="btn" data-screen="curate">Curate</button>
+          <button class="btn" data-screen="annotate">Annotate</button>
+          <button class="btn" data-screen="export">Export</button>
+        </div>
+      </header>
+
+      <!-- HOME -->
+      <section class="screen on" id="home">
+        <div class="panel">
+          <div class="row" style="justify-content: space-between">
+            <div>
+              <div class="big">Welcome back, Leslie</div>
+              <div class="muted">“What do you want to show the designer today?”</div>
+            </div>
+            <div class="row">
+              <div class="pill">1) Pick a room</div>
+              <div class="pill">2) Add notes</div>
+              <div class="pill">3) Share</div>
+            </div>
+          </div>
+        </div>
+        <div class="split">
+          <div class="panel">
+            <div class="big" style="font-size: 14px">Curate by Room</div>
+            <div class="list" style="margin-top: 8px">
+              <div class="listItem">Kitchen</div>
+              <div class="listItem">Primary Bath</div>
+              <div class="listItem">Exterior</div>
+              <div class="listItem">Living Room</div>
+              <div class="listItem">Mudroom</div>
+            </div>
+            <div class="callout" style="margin-top: 10px">Tap a room to auto‑filter images and start a collection.</div>
+          </div>
+          <div class="panel">
+            <div class="row" style="justify-content: space-between">
+              <div>
+                <div class="big" style="font-size: 14px">Today’s Shortlist</div>
+                <div class="muted">Kitchen • 12 items</div>
+              </div>
+              <div class="row">
+                <button class="btn">Add from Saved</button>
+                <button class="btn">Share Draft</button>
+              </div>
+            </div>
+            <div class="grid" style="margin-top: 12px">
+              <div class="card"><div class="thumb"><div class="badge">cabinet</div></div><div class="cardBody">White oak cabinets</div></div>
+              <div class="card"><div class="thumb"><div class="badge">backsplash</div></div><div class="cardBody">Calacatta slab</div></div>
+              <div class="card"><div class="thumb"><div class="badge">lighting</div></div><div class="cardBody">Brass pendants</div></div>
+              <div class="card"><div class="thumb"><div class="badge">hardware</div></div><div class="cardBody">Unlacquered brass</div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- BROWSE -->
+      <section class="screen" id="browse">
+        <div class="panel">
+          <div class="row" style="justify-content: space-between">
+            <div class="row">
+              <div class="chip">Search… <span class="kbd">/</span></div>
+              <div class="chip">Room: Kitchen</div>
+              <div class="chip">Tags: cabinets, brass</div>
+            </div>
+            <div class="row">
+              <button class="btn">Select</button>
+              <button class="btn">Add to Collection</button>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="grid">
+            <div class="card"><div class="thumb"><div class="badge">1 note</div></div><div class="cardBody">Shaker fronts</div></div>
+            <div class="card"><div class="thumb"><div class="badge">2 notes</div></div><div class="cardBody">Island hood</div></div>
+            <div class="card"><div class="thumb"><div class="badge">0 notes</div></div><div class="cardBody">Open shelves</div></div>
+            <div class="card"><div class="thumb"><div class="badge">3 notes</div></div><div class="cardBody">Counter details</div></div>
+            <div class="card"><div class="thumb"><div class="badge">1 note</div></div><div class="cardBody">Brass pulls</div></div>
+            <div class="card"><div class="thumb"><div class="badge">0 notes</div></div><div class="cardBody">Tile pattern</div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- CURATE -->
+      <section class="screen" id="curate">
+        <div class="panel">
+          <div class="row" style="justify-content: space-between">
+            <div>
+              <div class="big" style="font-size: 14px">Curate: Kitchen — Round 1</div>
+              <div class="muted">Drag to reorder • tap to annotate</div>
+            </div>
+            <div class="row">
+              <button class="btn">Add Items</button>
+              <button class="btn">Remove</button>
+              <button class="btn on">Share Preview</button>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="grid">
+            <div class="card"><div class="thumb"></div><div class="cardBody">Cabinet style #1</div></div>
+            <div class="card"><div class="thumb"></div><div class="cardBody">Cabinet style #2</div></div>
+            <div class="card"><div class="thumb"></div><div class="cardBody">Backsplash options</div></div>
+            <div class="card"><div class="thumb"></div><div class="cardBody">Lighting pick</div></div>
+          </div>
+          <div class="callout" style="margin-top: 10px">Curation flow: pick room → auto‑filter → add → reorder → annotate → export.</div>
+        </div>
+      </section>
+
+      <!-- ANNOTATE -->
+      <section class="screen" id="annotate">
+        <div class="panel">
+          <div class="row" style="justify-content: space-between">
+            <div>
+              <div class="big" style="font-size: 14px">Annotate (tap points)</div>
+              <div class="muted">“I want this exact profile and the brass hardware.”</div>
+            </div>
+            <div class="row">
+              <button class="btn">Save</button>
+              <button class="btn">Next Image</button>
+            </div>
+          </div>
+        </div>
+        <div class="split">
+          <div class="panel">
+            <div class="stage">
+              <div class="marker" style="left: 35%; top: 40%">1</div>
+              <div class="marker" style="left: 70%; top: 65%">2</div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="big" style="font-size: 14px">Notes</div>
+            <div class="list" style="margin-top: 8px">
+              <div class="listItem">#1 Cabinet profile — prefer thinner stile</div>
+              <div class="listItem">#2 Brass pulls — unlacquered</div>
+            </div>
+            <div class="callout" style="margin-top: 10px">Each note stays with the image across collections.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- EXPORT -->
+      <section class="screen" id="export">
+        <div class="panel">
+          <div class="row" style="justify-content: space-between">
+            <div>
+              <div class="big" style="font-size: 14px">Share with Designer</div>
+              <div class="muted">Export as HTML (fast), ZIP (with images), or PDF (later)</div>
+            </div>
+            <div class="row">
+              <button class="btn on">Generate HTML</button>
+              <button class="btn">Generate ZIP</button>
+              <button class="btn">Generate PDF</button>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="list">
+            <div class="listItem">
+              <div class="big" style="font-size: 13px">Kitchen — Round 1</div>
+              <div class="muted">12 images • 7 notes • updated today</div>
+            </div>
+            <div class="listItem">
+              <div class="big" style="font-size: 13px">Primary Bath — Round 1</div>
+              <div class="muted">8 images • 3 notes</div>
+            </div>
+          </div>
+          <div class="callout" style="margin-top: 10px">One-click share: creates a file you can email to the designer.</div>
+        </div>
+      </section>
+
+      <div class="footer">Tip: This is a static HTML mockup to confirm workflow before UX coding.</div>
+    </div>
+
+    <script>
+      const buttons = document.querySelectorAll("[data-screen]");
+      const screens = document.querySelectorAll(".screen");
+      buttons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          buttons.forEach((b) => b.classList.remove("on"));
+          btn.classList.add("on");
+          const id = btn.getAttribute("data-screen");
+          screens.forEach((s) => s.classList.toggle("on", s.id === id));
+        });
+      });
+    </script>
+  </body>
+</html>
+

@@ -1,0 +1,212 @@
+const state = {
+  assets: [],
+  collections: [],
+  activeCollectionId: "",
+  selected: new Set(),
+  q: "",
+  source: "",
+  modalAsset: null,
+  annotations: [],
+};
+
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { "Content-Type": "application/json" },
+    ...opts,
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(t || res.statusText);
+  }
+  return res.json();
+}
+
+function thumbFor(a) {
+  return a.thumb_path || a.stored_path || a.image_url || "";
+}
+
+function setStats() {
+  $("#stats").textContent = `${state.assets.length} items`;
+  $("#selectionCount").textContent = `${state.selected.size} selected`;
+  $("#addToCollection").disabled = state.selected.size === 0 || !state.activeCollectionId;
+  $("#clearSelection").disabled = state.selected.size === 0;
+}
+
+function renderCollections() {
+  const wrap = $("#collections");
+  wrap.innerHTML = "";
+  for (const c of state.collections) {
+    const el = document.createElement("div");
+    el.className = `listItem ${c.id === state.activeCollectionId ? "on" : ""}`;
+    el.innerHTML = `<div><strong>${c.name}</strong></div><div class="muted">${c.count} items</div>`;
+    el.onclick = () => {
+      state.activeCollectionId = c.id;
+      loadAssets();
+      renderCollections();
+    };
+    wrap.appendChild(el);
+  }
+}
+
+function renderGrid() {
+  const wrap = $("#grid");
+  wrap.innerHTML = "";
+  for (const a of state.assets) {
+    const el = document.createElement("div");
+    el.className = "card";
+    const img = thumbFor(a);
+    el.innerHTML = `
+      <div class="thumb">
+        ${img ? `<img src="${img}" />` : ""}
+        <div class="badge">${a.source}</div>
+      </div>
+      <div class="cardBody">${a.title || "(untitled)"}</div>
+    `;
+    el.onclick = () => openModal(a);
+    el.oncontextmenu = (e) => {
+      e.preventDefault();
+      toggleSelect(a.id);
+    };
+    wrap.appendChild(el);
+  }
+  setStats();
+}
+
+function toggleSelect(id) {
+  if (state.selected.has(id)) state.selected.delete(id);
+  else state.selected.add(id);
+  setStats();
+}
+
+async function loadCollections() {
+  const data = await api("/api/collections");
+  state.collections = data.collections;
+  if (!state.activeCollectionId && state.collections.length) {
+    state.activeCollectionId = state.collections[0].id;
+  }
+  renderCollections();
+}
+
+async function loadAssets() {
+  const q = encodeURIComponent(state.q || "");
+  const source = encodeURIComponent(state.source || "");
+  const col = encodeURIComponent(state.activeCollectionId || "");
+  const data = await api(`/api/assets?q=${q}&source=${source}&collection_id=${col}`);
+  state.assets = data.assets;
+  renderGrid();
+}
+
+async function openModal(asset) {
+  state.modalAsset = asset;
+  $("#modalTitle").textContent = asset.title || "(untitled)";
+  $("#modalMeta").textContent = `${asset.source} • ${asset.source_ref || ""}`;
+  $("#modalImage").src = thumbFor(asset);
+  $("#modal").classList.remove("hidden");
+  await loadAnnotations(asset.id);
+  renderAnnotations();
+  renderMarkers();
+}
+
+function closeModal() {
+  $("#modal").classList.add("hidden");
+  state.modalAsset = null;
+  state.annotations = [];
+}
+
+async function loadAnnotations(assetId) {
+  const data = await api(`/api/annotations?asset_id=${encodeURIComponent(assetId)}`);
+  state.annotations = data.annotations;
+}
+
+function renderAnnotations() {
+  const wrap = $("#annList");
+  wrap.innerHTML = "";
+  state.annotations.forEach((ann, idx) => {
+    const el = document.createElement("div");
+    el.className = "listItem";
+    el.innerHTML = `<div><strong>#${idx + 1}</strong> ${ann.text || ""}</div>`;
+    wrap.appendChild(el);
+  });
+}
+
+function renderMarkers() {
+  $$(".marker").forEach((m) => m.remove());
+  const stage = $("#imageStage");
+  state.annotations.forEach((ann, idx) => {
+    const m = document.createElement("div");
+    m.className = "marker";
+    m.textContent = idx + 1;
+    m.style.left = `${ann.x * 100}%`;
+    m.style.top = `${ann.y * 100}%`;
+    stage.appendChild(m);
+  });
+}
+
+$("#imageStage").addEventListener("click", async (e) => {
+  if (!state.modalAsset) return;
+  const r = $("#imageStage").getBoundingClientRect();
+  const x = (e.clientX - r.left) / r.width;
+  const y = (e.clientY - r.top) / r.height;
+  const text = prompt("Note:", "");
+  const res = await api("/api/annotations", {
+    method: "POST",
+    body: JSON.stringify({ asset_id: state.modalAsset.id, x, y, text }),
+  });
+  state.annotations.push(res.annotation);
+  renderAnnotations();
+  renderMarkers();
+});
+
+$("#closeModal").onclick = () => closeModal();
+$("#modal").onclick = (e) => {
+  if (e.target.id === "modal") closeModal();
+};
+
+$("#search").addEventListener("input", (e) => {
+  state.q = e.target.value || "";
+  loadAssets();
+});
+$("#source").addEventListener("change", (e) => {
+  state.source = e.target.value || "";
+  loadAssets();
+});
+$("#showAll").onclick = () => {
+  state.activeCollectionId = "";
+  renderCollections();
+  loadAssets();
+};
+
+$("#newCollection").onclick = async () => {
+  const name = prompt("Collection name:", "Kitchen — Round 1");
+  if (!name) return;
+  const res = await api("/api/collections", { method: "POST", body: JSON.stringify({ name }) });
+  state.collections.unshift(res.collection);
+  state.activeCollectionId = res.collection.id;
+  renderCollections();
+};
+
+$("#addToCollection").onclick = async () => {
+  if (!state.activeCollectionId) return;
+  await api(`/api/collections/${state.activeCollectionId}/items`, {
+    method: "POST",
+    body: JSON.stringify({ asset_ids: Array.from(state.selected) }),
+  });
+  state.selected.clear();
+  await loadCollections();
+  await loadAssets();
+};
+
+$("#clearSelection").onclick = () => {
+  state.selected.clear();
+  setStats();
+};
+
+async function init() {
+  await loadCollections();
+  await loadAssets();
+}
+
+init();
