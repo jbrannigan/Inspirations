@@ -240,11 +240,17 @@ $("#deleteCollection").onclick = async () => {
   const c = state.collections.find((x) => x.id === state.targetCollectionId);
   const ok = confirm(`Delete collection "${c ? c.name : ""}"? This cannot be undone.`);
   if (!ok) return;
-  await api(`/api/collections/${state.targetCollectionId}`, { method: "DELETE" });
-  state.targetCollectionId = "";
-  state.activeCollectionId = "";
-  await loadCollections();
-  await loadAssets();
+  try {
+    await api(`/api/collections/${state.targetCollectionId}`, { method: "DELETE" });
+    state.collections = state.collections.filter((x) => x.id !== state.targetCollectionId);
+    state.targetCollectionId = "";
+    state.activeCollectionId = "";
+    renderCollections();
+    await loadCollections();
+    await loadAssets();
+  } catch (e) {
+    alert(`Delete failed: ${e.message || e}`);
+  }
 };
 
 $("#addToCollection").onclick = async () => {
@@ -267,6 +273,11 @@ $("#collectionSelect").onchange = (e) => {
   state.targetCollectionId = e.target.value || "";
   renderCollections();
   setStats();
+};
+
+$("#refreshCollections").onclick = async () => {
+  await loadCollections();
+  await loadAssets();
 };
 
 async function init() {
