@@ -7,7 +7,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin, parse_qs
 
 from .db import Db
 from .security import is_safe_public_url
@@ -61,10 +61,14 @@ def _extract_preview_image(html: str) -> str | None:
     import re
 
     patterns = [
+        r'<meta[^>]+property=["\']og:image:secure_url["\'][^>]+content=["\']([^"\']+)["\']',
         r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+name=["\']twitter:image:src["\'][^>]+content=["\']([^"\']+)["\']',
         r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']',
         r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
         r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']twitter:image["\']',
+        r'<meta[^>]+itemprop=["\']image["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<link[^>]+rel=["\']image_src["\'][^>]+href=["\']([^"\']+)["\']',
     ]
     for pat in patterns:
         m = re.search(pat, html, re.IGNORECASE)
@@ -73,10 +77,39 @@ def _extract_preview_image(html: str) -> str | None:
     return None
 
 
+def _youtube_thumb_url(url: str) -> str | None:
+    try:
+        p = urlparse(url)
+    except Exception:
+        return None
+    host = (p.hostname or "").lower()
+    vid = None
+    if host in ("youtu.be", "www.youtu.be"):
+        vid = p.path.lstrip("/").split("/")[0]
+    if host in ("youtube.com", "www.youtube.com", "m.youtube.com"):
+        if p.path.startswith("/watch"):
+            q = parse_qs(p.query)
+            vid = (q.get("v") or [""])[0]
+        elif p.path.startswith("/shorts/"):
+            vid = p.path.split("/")[2] if len(p.path.split("/")) > 2 else None
+    if vid:
+        return f"https://img.youtube.com/vi/{vid}/hqdefault.jpg"
+    return None
+
+
 def resolve_image_url(url: str, *, timeout_s: float = 20.0, max_html_bytes: int = 512 * 1024) -> str | None:
     if not is_safe_public_url(url, allow_http=False):
         return None
-    req = urllib.request.Request(url, headers={"User-Agent": "Inspirations/0.1"})
+    yt = _youtube_thumb_url(url)
+    if yt:
+        return yt
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+    )
     with urllib.request.urlopen(req, timeout=timeout_s) as resp:
         ct = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
         if ct.startswith("image/"):
@@ -84,6 +117,11 @@ def resolve_image_url(url: str, *, timeout_s: float = 20.0, max_html_bytes: int 
         if ct in ("text/html", "application/xhtml+xml"):
             raw = resp.read(max_html_bytes).decode("utf-8", errors="ignore")
             preview = _extract_preview_image(raw)
+            if preview:
+                if preview.startswith("//"):
+                    preview = "https:" + preview
+                if preview.startswith("/"):
+                    preview = urljoin(url, preview)
             if preview and is_safe_public_url(preview, allow_http=False):
                 return preview
             return None
