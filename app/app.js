@@ -182,11 +182,11 @@ function renderAnnotations() {
     const el = document.createElement("div");
     el.className = `listItem annItem ${state.activeAnnotationId === ann.id ? "active" : ""}`;
     el.innerHTML = `
-      <div><strong>#${idx + 1}</strong></div>
-      <textarea data-ann="${ann.id}">${ann.text || ""}</textarea>
-      <div class="row" style="margin-top:6px">
-        <button data-del="${ann.id}">Delete</button>
+      <div class="annHeader">
+        <strong>#${idx + 1}</strong>
+        <button class="iconBtn danger" data-del="${ann.id}">×</button>
       </div>
+      <textarea data-ann="${ann.id}">${ann.text || ""}</textarea>
     `;
     el.onclick = () => setActiveAnnotation(ann.id);
     const ta = el.querySelector("textarea");
@@ -396,6 +396,7 @@ function renderFloatingNote() {
   const box = $("#floatingNote");
   const ta = $("#floatingText");
   const del = $("#floatingDelete");
+  const done = $("#floatingDone");
   if (!state.activeAnnotationId) {
     box.classList.add("hidden");
     return;
@@ -416,6 +417,12 @@ function renderFloatingNote() {
   box.style.left = `${left}px`;
   box.style.top = `${top}px`;
   setTimeout(() => ta.focus(), 0);
+  done.onclick = () => {
+    state.activeAnnotationId = null;
+    renderAnnotations();
+    renderMarkers();
+    renderFloatingNote();
+  };
   del.onclick = async () => {
     await api(`/api/annotations/${ann.id}`, { method: "DELETE" });
     state.annotations = state.annotations.filter((x) => x.id !== ann.id);
