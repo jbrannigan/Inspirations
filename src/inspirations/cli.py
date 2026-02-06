@@ -130,7 +130,19 @@ def cmd_ai_tag(args: argparse.Namespace) -> int:
     db_path = _p(args.db)
     with Db(db_path) as db:
         ensure_schema(db)
-        report = run_ai_labeler(db, provider=args.provider, limit=args.limit)
+        report = run_ai_labeler(
+            db,
+            provider=args.provider,
+            limit=args.limit,
+            api_key=args.api_key,
+            model=args.model,
+            recitation_fallback_model=args.recitation_fallback_model,
+            source=args.source,
+            image_kind=args.image_kind,
+            force=args.force,
+            store_dir=_p(args.store),
+            preflight=args.preflight,
+        )
     print(json.dumps(report, indent=2))
     return 0
 
@@ -203,8 +215,29 @@ def build_parser() -> argparse.ArgumentParser:
     ai = sub.add_parser("ai", help="AI utilities")
     ai_sub = ai.add_subparsers(dest="ai_cmd")
     tag = ai_sub.add_parser("tag", help="Run AI tagging")
-    tag.add_argument("--provider", default="mock", help="Provider: mock (others later)")
+    tag.add_argument("--provider", default="mock", help="Provider: mock | gemini")
     tag.add_argument("--limit", type=int, default=0, help="Limit assets (0 = no limit)")
+    tag.add_argument("--source", default="", help="Only tag a source (pinterest/facebook/scan)")
+    tag.add_argument("--model", default="", help="Gemini model name (default gemini-2.5-flash)")
+    tag.add_argument(
+        "--recitation-fallback-model",
+        default="",
+        help="Fallback model when primary returns finishReason=RECITATION (default gemini-2.0-flash)",
+    )
+    tag.add_argument("--api-key", default="", help="Gemini API key (or set GEMINI_API_KEY)")
+    tag.add_argument(
+        "--image-kind",
+        default="thumb",
+        choices=["thumb", "original"],
+        help="Tag from thumbnails or originals",
+    )
+    tag.add_argument("--force", action="store_true", help="Retag even if already tagged")
+    tag.add_argument(
+        "--preflight",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Preflight checks (download missing originals + generate thumbs)",
+    )
     tag.set_defaults(func=cmd_ai_tag)
 
     serve = sub.add_parser("serve", help="Run local web app")
