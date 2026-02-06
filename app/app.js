@@ -4,6 +4,7 @@ const state = {
   activeCollectionId: "",
   targetCollectionId: "",
   selected: new Set(),
+  expanded: new Set(),
   q: "",
   sources: new Set(),
   boards: new Set(),
@@ -20,6 +21,110 @@ const state = {
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+function escapeHtml(value) {
+  return (value || "")
+    .toString()
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function asList(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.filter((x) => x !== null && x !== undefined && `${x}`.trim() !== "");
+  return [value];
+}
+
+function parseAi(a) {
+  if (!a.ai_json) return null;
+  try {
+    return JSON.parse(a.ai_json);
+  } catch {
+    return null;
+  }
+}
+
+function aiLabelCount(ai) {
+  if (!ai) return 0;
+  const keys = [
+    "rooms",
+    "elements",
+    "materials",
+    "colors",
+    "styles",
+    "lighting",
+    "fixtures",
+    "appliances",
+    "text_in_image",
+    "brands_products",
+    "tags",
+  ];
+  return keys.reduce((acc, k) => acc + asList(ai[k]).length, 0);
+}
+
+function topTags(ai, max = 5) {
+  if (!ai) return [];
+  const buckets = [
+    "rooms",
+    "elements",
+    "materials",
+    "colors",
+    "styles",
+    "lighting",
+    "fixtures",
+    "appliances",
+    "tags",
+  ];
+  const out = [];
+  const seen = new Set();
+  for (const key of buckets) {
+    for (const item of asList(ai[key])) {
+      const v = `${item}`.trim();
+      if (!v || seen.has(v)) continue;
+      seen.add(v);
+      out.push(v);
+      if (out.length >= max) return out;
+    }
+  }
+  return out;
+}
+
+function renderChips(items) {
+  const list = asList(items);
+  if (!list.length) {
+    return '<span class="chip empty">none</span>';
+  }
+  return list.map((x) => `<span class="chip">${escapeHtml(x)}</span>`).join("");
+}
+
+function renderTagSections(ai) {
+  if (!ai) return "";
+  const sections = [
+    ["Rooms", "rooms"],
+    ["Elements", "elements"],
+    ["Materials", "materials"],
+    ["Colors", "colors"],
+    ["Styles", "styles"],
+    ["Lighting", "lighting"],
+    ["Fixtures", "fixtures"],
+    ["Appliances", "appliances"],
+    ["Text in image", "text_in_image"],
+    ["Brands / Products", "brands_products"],
+    ["Tags", "tags"],
+  ];
+  return sections
+    .map(
+      ([label, key]) => `
+      <div class="tagSection">
+        <div class="tagTitle">${label}</div>
+        <div class="chips">${renderChips(ai[key])}</div>
+      </div>`
+    )
+    .join("");
+}
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -41,15 +146,21 @@ function thumbFor(a) {
 
 function setStats() {
   const viewLabel = state.activeCollectionId ? "Viewing collection" : "Viewing all items";
+  const targetCollection = state.collections.find((c) => c.id === state.targetCollectionId);
   $("#stats").textContent = `${viewLabel} • ${state.assets.length} items`;
   $("#addSelected").disabled = state.selected.size === 0;
   $("#addFiltered").disabled = state.assets.length === 0;
   $("#clearSelection").disabled = state.selected.size === 0;
-  $("#collectionHint").textContent = state.targetCollectionId
-    ? "Ready to add selected items."
-    : "Create or pick a collection first.";
+  if (!targetCollection) {
+    $("#collectionHint").textContent = "Create or pick a collection first.";
+  } else if (state.tray.length > 0) {
+    $("#collectionHint").textContent = `Ready to add tray items to “${targetCollection.name}”.`;
+  } else {
+    $("#collectionHint").textContent = `Selected collection: “${targetCollection.name}”. Add items to tray to update it.`;
+  }
   $("#trayCount").textContent = `${state.tray.length} items`;
   $("#createFromTray").disabled = state.tray.length === 0;
+  $("#addTrayToCollection").disabled = state.tray.length === 0 || !state.targetCollectionId;
   $("#clearTray").disabled = state.tray.length === 0;
 }
 
@@ -92,15 +203,35 @@ function renderGrid() {
   wrap.innerHTML = "";
   for (const a of state.assets) {
     const el = document.createElement("div");
-    el.className = `card ${state.selected.has(a.id) ? "selected" : ""}`;
+    el.className = `card ${state.selected.has(a.id) ? "selected" : ""} ${state.expanded.has(a.id) ? "expanded" : ""}`;
     const img = thumbFor(a);
+    const ai = a.ai;
+    const summary = ai?.summary || a.ai_summary || a.description || "";
+    const imageType = ai?.image_type ? `${ai.image_type}` : "";
+    const labelCount = aiLabelCount(ai);
+    const top = topTags(ai, 6);
+    const metaParts = [];
+    if (a.board) metaParts.push(`Board: ${a.board}`);
+    metaParts.push(`Source: ${a.source}`);
+    if (imageType) metaParts.push(`Type: ${imageType}`);
+    const meta = metaParts.join(" • ");
     el.innerHTML = `
       <div class="thumb">
         ${img ? `<img src="${img}" />` : ""}
         <div class="badge">${a.source}</div>
         <label class="selectBox"><input type="checkbox" ${state.selected.has(a.id) ? "checked" : ""} /></label>
       </div>
-      <div class="cardBody">${a.title || "(untitled)"}</div>
+      <div class="cardBody">
+        <div class="cardTitle">${escapeHtml(a.title || "(untitled)")}</div>
+        ${summary ? `<div class="cardSummary">${escapeHtml(summary)}</div>` : `<div class="cardSummary">Not tagged yet.</div>`}
+        <div class="cardMeta">${escapeHtml(meta)}</div>
+        ${ai ? `<div class="compactTags">${renderChips(top)}</div>` : ""}
+        ${ai ? `<div class="tagGrid">${renderTagSections(ai)}</div>` : ""}
+        <div class="cardFooter">
+          <div>AI: ${escapeHtml(a.ai_model || a.ai_provider || "—")} • ${labelCount} tags</div>
+          <button class="miniBtn" data-annotate>Annotate</button>
+        </div>
+      </div>
     `;
     const checkbox = el.querySelector("input");
     checkbox.addEventListener("click", (e) => {
@@ -108,7 +239,15 @@ function renderGrid() {
       toggleSelect(a.id);
       renderGrid();
     });
-    el.onclick = () => openModal(a);
+    el.querySelector("[data-annotate]").addEventListener("click", (e) => {
+      e.stopPropagation();
+      openModal(a);
+    });
+    el.onclick = () => {
+      if (state.expanded.has(a.id)) state.expanded.delete(a.id);
+      else state.expanded.add(a.id);
+      renderGrid();
+    };
     wrap.appendChild(el);
   }
   setStats();
@@ -140,7 +279,7 @@ async function loadAssets() {
   const label = encodeURIComponent(Array.from(state.labels).join(","));
   const col = encodeURIComponent(state.activeCollectionId || "");
   const data = await api(`/api/assets?q=${q}&source=${source}&board=${board}&label=${label}&collection_id=${col}`);
-  state.assets = data.assets;
+  state.assets = data.assets.map((a) => ({ ...a, ai: parseAi(a) }));
   renderGrid();
 }
 
@@ -572,4 +711,21 @@ $("#createFromTray").onclick = async () => {
   });
   await loadCollections();
   await loadTray();
+};
+
+$("#addTrayToCollection").onclick = async () => {
+  if (!state.targetCollectionId || state.tray.length === 0) return;
+  try {
+    await api(`/api/collections/${state.targetCollectionId}/items`, {
+      method: "POST",
+      body: JSON.stringify({ asset_ids: state.tray.map((x) => x.id) }),
+    });
+    await api("/api/tray/clear", { method: "POST" });
+    state.activeCollectionId = state.targetCollectionId;
+    await loadCollections();
+    await loadTray();
+    await loadAssets();
+  } catch (e) {
+    alert(`Add to collection failed: ${e.message || e}`);
+  }
 };
