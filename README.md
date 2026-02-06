@@ -12,8 +12,8 @@ This repo contains a local, dependency-free HTML mockup plus a professional prod
 2. Open `mockup/curation.html` for curated-workflow screens.
 3. Open `mockup/cards.html` for Pinterest/Facebook card layouts.
 4. Open `mockup/badges.html` for badge color options.
-2. Click **Import** to load a sample dataset or import your own JSON.
-3. Try searching, tagging, creating collections, and adding image annotations.
+5. Click **Import** to load a sample dataset or import your own JSON.
+6. Try searching, tagging, creating collections, and adding image annotations.
 
 ## Quick start (local ingestion CLI)
 
@@ -47,11 +47,42 @@ PYTHONPATH=src python3 -m inspirations import scans --inbox imports/scans/inbox 
 PYTHONPATH=src python3 -m inspirations thumbs --size 512
 ```
 
-Run AI tagging (mock provider for now):
+Get a session snapshot (counts, model coverage, latest run):
+
+```sh
+PYTHONPATH=src python3 tools/session_sync.py
+```
+
+Run AI tagging:
 
 ```sh
 PYTHONPATH=src python3 -m inspirations ai tag --provider mock
+GEMINI_API_KEY="YOUR_KEY" PYTHONPATH=src \
+python3 -m inspirations ai tag --provider gemini --source pinterest --image-kind thumb
 ```
+
+Gemini defaults:
+- Primary model: `gemini-2.5-flash`
+- Automatic fallback for `finishReason=RECITATION`: `gemini-2.0-flash`
+
+Override or disable fallback:
+
+```sh
+GEMINI_API_KEY="YOUR_KEY" PYTHONPATH=src \
+python3 -m inspirations ai tag --provider gemini --recitation-fallback-model gemini-2.0-flash
+
+GEMINI_API_KEY="YOUR_KEY" PYTHONPATH=src \
+python3 -m inspirations ai tag --provider gemini --recitation-fallback-model ""
+```
+
+Preflight + auto-select batch vs interactive (recommended):
+
+```sh
+GEMINI_API_KEY="YOUR_KEY" PYTHONPATH=src \
+python3 tools/tagging_pipeline.py --mode auto --limit 0
+```
+
+The pipeline/runner skip assets already tagged by provider (`gemini`) across any model, so reruns no-op once provider coverage is complete.
 
 ## Run the local app
 
@@ -60,6 +91,8 @@ PYTHONPATH=src python3 -m inspirations serve --host 127.0.0.1 --port 8000
 ```
 
 Then open http://127.0.0.1:8000
+
+The app grid now renders AI summaries + tag buckets (compact by default, expand on click).
 
 Run tests:
 
@@ -74,3 +107,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 - `docs/BUILD_TEST_PLAN.md`
 - `docs/EXPORT_IMPRESSIONS.md`
 - `docs/WORKFLOWS.md`
+- `docs/AI_TAGGING_PLAN.md`
+- `docs/SEARCH_STRATEGY.md`
+- `docs/tagging_pipeline.md`
+- `docs/next_steps.md`
