@@ -8,6 +8,7 @@
 - Added a one-command session sync tool for restart baselines.
 - Completed remaining Pinterest tagging with an explicit recitation fallback path.
 - Added AI error triage and first semantic-search slice (Gemini embeddings + similarity CLI).
+- Added hybrid ranking controls for semantic search (semantic + lexical blend with score threshold).
 
 ## Key Changes
 - UI: `app/app.js`, `app/styles.css` now render AI summaries + tag buckets; expand-on-click; annotate button opens modal.
@@ -30,7 +31,9 @@
   - New CLI triage command: `inspirations ai errors` (actionable vs historical).
   - New CLI embedding command: `inspirations ai embed`.
   - New CLI similarity command: `inspirations ai similar`.
+  - Similarity command now supports `--semantic-weight`, `--lexical-weight`, and `--min-score`.
   - New API endpoint: `GET /api/search/similar`.
+  - Similar endpoint now accepts `semantic_weight`, `lexical_weight`, and `min_score`.
   - App search supports semantic mode via `sem:` prefix (press Enter to run).
   - `tools/session_sync.py` now reports actionable error row count.
 

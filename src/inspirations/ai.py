@@ -49,6 +49,29 @@ KEYWORDS = [
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 DEFAULT_GEMINI_RECITATION_FALLBACK_MODEL = "gemini-2.0-flash"
 DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001"
+LEXICAL_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "this",
+    "to",
+    "with",
+}
 DEFAULT_GEMINI_PROMPT = """You are an interior design tagging assistant. Analyze the image and return ONLY valid JSON:
 {
   "summary": "short, 1-2 sentence description",
@@ -378,10 +401,17 @@ def _gemini_embed_text(
 
 def _build_embedding_input_text(row: dict[str, Any]) -> str:
     parts: list[str] = []
-    for key in ("title", "description", "board", "notes", "ai_summary"):
+    field_order = [
+        ("title", "title"),
+        ("ai_summary", "summary"),
+        ("description", "description"),
+        ("board", "board"),
+        ("notes", "notes"),
+    ]
+    for key, label in field_order:
         value = str(row.get(key) or "").strip()
         if value:
-            parts.append(value)
+            parts.append(f"{label}: {value}")
     labels_csv = str(row.get("labels_csv") or "").strip()
     if labels_csv:
         labels = [x.strip() for x in labels_csv.split("|") if x.strip()]
@@ -402,6 +432,29 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     if na <= 0.0 or nb <= 0.0:
         return 0.0
     return dot / (na * nb)
+
+
+def _tokenize_lexical(text: str) -> set[str]:
+    tokens = set(re.findall(r"[a-z0-9]+", (text or "").lower()))
+    return {t for t in tokens if t and t not in LEXICAL_STOPWORDS}
+
+
+def _lexical_overlap_score(query_text: str, doc_text: str) -> float:
+    q = _tokenize_lexical(query_text)
+    if not q:
+        return 0.0
+    d = _tokenize_lexical(doc_text)
+    if not d:
+        return 0.0
+    overlap = len(q.intersection(d)) / float(len(q))
+
+    # Phrase boost helps preserve exact-intent queries for interiors/design styles.
+    phrase_boost = 0.0
+    q_norm = " ".join((query_text or "").lower().split())
+    d_norm = " ".join((doc_text or "").lower().split())
+    if q_norm and len(q_norm.split()) >= 2 and q_norm in d_norm:
+        phrase_boost = 0.15
+    return min(1.0, overlap + phrase_boost)
 
 
 def _classify_ai_error(error: str, raw: str | None = None) -> str:
@@ -671,12 +724,23 @@ def run_similarity_search(
     model: str = DEFAULT_GEMINI_EMBEDDING_MODEL,
     source: str = "",
     limit: int = 25,
+    semantic_weight: float = 0.85,
+    lexical_weight: float = 0.15,
+    min_score: float = 0.0,
 ) -> dict[str, Any]:
     query_text = (query or "").strip()
     if not query_text:
         raise ValueError("query is required")
     if limit <= 0:
         limit = 25
+    semantic_weight = max(0.0, float(semantic_weight))
+    lexical_weight = max(0.0, float(lexical_weight))
+    if semantic_weight == 0.0 and lexical_weight == 0.0:
+        semantic_weight = 1.0
+    weight_sum = semantic_weight + lexical_weight
+    semantic_weight /= weight_sum
+    lexical_weight /= weight_sum
+    min_score = max(0.0, min(1.0, float(min_score)))
 
     query_vec = _gemini_embed_text(
         api_key=api_key,
@@ -722,7 +786,21 @@ def run_similarity_search(
         if len(vector) != len(query_vec):
             skipped_mismatch += 1
             continue
-        score = _cosine_similarity(query_vec, vector)
+        semantic_score = _cosine_similarity(query_vec, vector)
+        doc_text_parts = [
+            str(r["title"] or ""),
+            str(r["description"] or ""),
+            str(r["board"] or ""),
+            str(r["notes"] or ""),
+            str(r["ai_summary"] or ""),
+        ]
+        ai_json_text = str(r["ai_json"] or "")
+        if ai_json_text:
+            doc_text_parts.append(ai_json_text)
+        lexical_score = _lexical_overlap_score(query_text, " ".join(doc_text_parts))
+        score = (semantic_weight * semantic_score) + (lexical_weight * lexical_score)
+        if score < min_score:
+            continue
         scored.append(
             {
                 "id": r["asset_id"],
@@ -741,6 +819,8 @@ def run_similarity_search(
                 "ai_model": r["ai_model"],
                 "ai_provider": r["ai_provider"],
                 "ai_created_at": r["ai_created_at"],
+                "semantic_score": semantic_score,
+                "lexical_score": lexical_score,
                 "score": score,
                 "embedding_created_at": r["created_at"],
             }
@@ -751,6 +831,9 @@ def run_similarity_search(
         "query": query_text,
         "provider": "gemini",
         "model": model,
+        "semantic_weight": semantic_weight,
+        "lexical_weight": lexical_weight,
+        "min_score": min_score,
         "compared_assets": len(scored),
         "skipped_dimension_mismatch": skipped_mismatch,
         "results": scored[:limit],
