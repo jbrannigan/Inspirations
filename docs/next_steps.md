@@ -5,6 +5,15 @@ When you restart, open a new Codex terminal in this repo and read:
 - `docs/handoff.md` — full history + key commands
 - `docs/pr_summary.md` — PR summary of latest changes
 - `docs/next_steps.md` — this file
+- `docs/potential_future_options.md` — roadmap and ingestion/sync options
+
+Before you stop work, always create a durable checkpoint entry:
+```bash
+PYTHONPATH=src python3 tools/session_checkpoint.py \
+  --note "short summary of this session" \
+  --next "first concrete next action" \
+  --next "second concrete next action"
+```
 
 ### Coordination checklist (for multiple Codex instances)
 1. **Declare intent** in chat: what you plan to change and why.
@@ -17,6 +26,12 @@ When you restart, open a new Codex terminal in this repo and read:
 ```
 Please read docs/handoff.md and docs/next_steps.md, then summarize current state, active processes, and open tasks. 
 Run `PYTHONPATH=src python3 tools/session_sync.py` and report results before making changes.
+```
+
+### Standard checkpoint prompt (copy/paste before pausing)
+```
+Run `PYTHONPATH=src python3 tools/session_checkpoint.py --note "<session summary>" --next "<next action>"`.
+Confirm the latest checkpoint section was appended to docs/handoff.md and list the recorded next actions.
 ```
 
 ### Roles (optional but helpful)
