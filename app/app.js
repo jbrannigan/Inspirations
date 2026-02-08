@@ -25,6 +25,8 @@ const state = {
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 const IMAGE_SUFFIX_RE = /\.(jpg|jpeg|png|webp|gif|bmp|svg)(\?.*)?$/i;
+const EXTREME_ASPECT_RATIO_MAX = 1.8;
+const EXTREME_ASPECT_RATIO_MIN = 0.8;
 
 function escapeHtml(value) {
   return (value || "")
@@ -175,6 +177,12 @@ function previewForAsset(a) {
   if (a.stored_path && looksLikeImageRef(a.stored_path)) return { url: `/media/${a.id}?kind=original`, kind: "stored" };
   if (a.image_url && looksLikeImageRef(a.image_url)) return { url: a.image_url, kind: "remote" };
   return { url: "", kind: "none" };
+}
+
+function shouldContainFit(img) {
+  if (!img || !img.naturalWidth || !img.naturalHeight) return false;
+  const ratio = img.naturalWidth / img.naturalHeight;
+  return ratio > EXTREME_ASPECT_RATIO_MAX || ratio < EXTREME_ASPECT_RATIO_MIN;
 }
 
 function thumbFor(a) {
@@ -372,9 +380,20 @@ function renderGrid() {
       </div>
     `;
     const imageEl = el.querySelector(".thumb img");
+    const thumbEl = el.querySelector(".thumb");
     if (imageEl) {
+      const applyFit = () => {
+        if (!thumbEl) return;
+        thumbEl.classList.toggle("fitContain", shouldContainFit(imageEl));
+      };
+      imageEl.addEventListener("load", applyFit);
+      if (typeof imageEl.decode === "function") {
+        imageEl.decode().then(applyFit).catch(() => {});
+      } else {
+        setTimeout(applyFit, 0);
+      }
+      if (imageEl.complete) applyFit();
       imageEl.addEventListener("error", () => {
-        const thumbEl = el.querySelector(".thumb");
         if (!thumbEl || thumbEl.querySelector(".thumbPlaceholder")) return;
         imageEl.remove();
         const placeholder = document.createElement("div");
