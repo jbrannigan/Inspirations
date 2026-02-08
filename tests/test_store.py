@@ -13,7 +13,6 @@ from inspirations.store import (
     list_collection_items,
     list_collections,
     remove_items_from_collection,
-    set_collection_order,
 )
 
 
