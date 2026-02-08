@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 import re
 import secrets
@@ -169,7 +170,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     },
                 )
             password = (body.get("password") or "").strip()
-            if password != expected:
+            if not secrets.compare_digest(password, expected):
                 return _send(self, 403, {"error": "invalid admin password"})
             token = secrets.token_urlsafe(32)
             self.server.admin_tokens[token] = time.time() + 3600
@@ -373,7 +374,9 @@ class ApiHandler(BaseHTTPRequestHandler):
     def _serve_file(self, rel: str, mime: str) -> None:
         base = Path(self.server.app_dir).resolve()
         target = (base / rel).resolve()
-        if not str(target).startswith(str(base)):
+        try:
+            target.relative_to(base)
+        except ValueError:
             return self.send_error(403)
         if not target.exists() or not target.is_file():
             return self.send_error(404)
@@ -400,7 +403,9 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return self.send_error(404)
             base = Path(self.server.store_dir).resolve()
             target = Path(path).resolve()
-            if not str(target).startswith(str(base)):
+            try:
+                target.relative_to(base)
+            except ValueError:
                 return self.send_error(403)
             if not target.exists() or not target.is_file():
                 return self.send_error(404)
@@ -413,14 +418,18 @@ class ApiHandler(BaseHTTPRequestHandler):
 
 
 def _guess_mime(path: str) -> str:
-    if path.endswith(".js"):
+    p = path.lower()
+    if p.endswith(".js"):
         return "application/javascript"
-    if path.endswith(".css"):
+    if p.endswith(".css"):
         return "text/css"
-    if path.endswith(".html"):
+    if p.endswith(".html"):
         return "text/html"
-    if path.endswith(".svg"):
+    if p.endswith(".svg"):
         return "image/svg+xml"
+    guessed, _ = mimetypes.guess_type(p)
+    if guessed:
+        return guessed
     return "application/octet-stream"
 
 
