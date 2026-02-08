@@ -15,6 +15,7 @@
 - Improved link-card handling for non-image Facebook items (no broken thumbnails) and prioritized media-rich cards in canvas ordering.
 - Added smart card preview fitting for extreme-aspect images to reduce over-zoom/cropping on text-heavy cards.
 - Improved link preview URL resolution to recover more thumbnails from Facebook saved links.
+- Added SVG thumbnail fallback so cards can still render a preview when local tools cannot rasterize SVG.
 
 ## Key Changes
 - UI: `app/app.js`, `app/styles.css` now render AI summaries + tag buckets; expand-on-click; annotate button opens modal.
@@ -54,6 +55,7 @@
   - Non-image/broken-image cards now show an explicit link-style placeholder instead of a broken image icon.
   - Extreme-aspect thumbnails now auto-switch to `contain` fitting in cards, while standard photos stay `cover`.
   - Preview resolver now handles more metadata variants, upgrades `http` image metadata to `https`, skips tracking-pixel URLs, and falls back to first real page `<img>` when OG/Twitter tags are absent.
+  - Thumbnail generation now falls back to using the original `.svg` as `thumb_path` when conversion to raster fails.
 - Asset ordering:
   - `src/inspirations/store.py` now prioritizes cards with usable preview media (`thumb_path` first, then image-like `stored_path`, then image-like `image_url`) before recency in `/api/assets`.
 
