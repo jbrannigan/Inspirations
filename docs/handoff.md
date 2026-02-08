@@ -433,3 +433,27 @@ PYTHONPATH=src python3 -m unittest -q tests/test_ai_gemini_parse.py tests/test_a
 
 UI/API smoke:
 - Local serve + `GET /api/assets?source=pinterest&limit=5` returned 5 assets with `ai_json` populated.
+
+## Update: API Regression Tests Added for Admin/Delete Flow (2026-02-08)
+Resumed from `docs/next_steps.md` restart flow, then validated the in-progress collection/admin-delete feature set.
+
+What was verified:
+- Session sync still reports provider-level tagging complete (`3661/3661` tagged for Gemini provider).
+- Manual API smoke checks confirmed:
+  - `POST /api/collections/{id}/items/remove` removes selected assets from a collection.
+  - `POST /api/admin/login` + `POST /api/admin/assets/delete` deletes DB rows and media files and creates DB backups.
+
+What was added:
+- New integration tests in `tests/test_server_api.py` covering:
+  - collection bulk-remove endpoint,
+  - admin delete auth requirement,
+  - admin delete success path (backup creation + media deletion + cascade cleanup).
+
+Validation commands:
+```bash
+PYTHONPATH=src python3 -m unittest -q tests/test_server_api.py
+PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -q
+```
+
+Result:
+- All tests passed (`30` total).

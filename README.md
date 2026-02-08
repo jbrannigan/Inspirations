@@ -1,76 +1,246 @@
-# Inspirations (Home Build Moodboard)
+# Inspirations
 
-This repo contains a local, dependency-free HTML mockup plus a professional product/architecture spec for a tool that:
-- Ingests Pinterest pins, Facebook saves, and scanned magazine clippings
-- Auto-tags/classifies images (e.g., via Gemini or similar)
-- Lets you curate collections and annotate images
-- Exports shareable collections (HTML/ZIP/PDF later) and can evolve into a web app (Vercel-ready)
+Local-first inspiration library for home design research.
 
-## Quick start (mockup)
+Inspirations ingests Pinterest saves, Facebook saves, and scanned pages into a single SQLite-backed catalog with local media storage, AI tagging, search/filtering, collections, tray workflows, and per-image annotations.
 
-1. Open `mockup/index.html` in a browser.
-2. Open `mockup/curation.html` for curated-workflow screens.
-3. Open `mockup/cards.html` for Pinterest/Facebook card layouts.
-4. Open `mockup/badges.html` for badge color options.
-2. Click **Import** to load a sample dataset or import your own JSON.
-3. Try searching, tagging, creating collections, and adding image annotations.
+## What The Project Does Today
 
-## Quick start (local ingestion CLI)
+- Ingests data from:
+  - Pinterest crawler ZIP exports
+  - Facebook saved-items ZIP exports
+  - Local scan inbox (images and PDFs)
+- Downloads and stores originals locally with safe URL validation.
+- Generates thumbnails for fast UI browsing.
+- Runs AI image tagging with Gemini and stores:
+  - Full JSON payloads
+  - Searchable `ai_summary`
+  - Normalized labels/facets
+  - Structured error rows for retry analysis
+- Serves a local web app with:
+  - Search, source/board/label filtering
+  - Compact card grid + expand-on-click tag details
+  - Notes and visual annotations
+  - Collections and tray-to-collection workflows
+- Provides interactive and batch tagging pipelines plus status tooling for resumable work.
 
-This repo now includes a small Python-based ingestion CLI (SQLite + secure downloader).
+## Current AI Tagging Behavior
+
+- Primary model: `gemini-2.5-flash`
+- Automatic fallback for `finishReason=RECITATION`: `gemini-2.0-flash`
+- Candidate selection dedupes by Gemini provider (any model), so completed coverage does not get reprocessed repeatedly.
+
+Check current coverage and run state at any time:
+
+```sh
+PYTHONPATH=src python3 tools/session_sync.py
+```
+
+## Tech Stack
+
+- Python 3.11+
+- SQLite
+- Local filesystem storage (`store/`)
+- Standard-library HTTP server for local app/API
+- Optional external tools:
+  - `sips` (macOS) or ImageMagick (`magick`) for thumbnails
+  - Pillow fallback for formats unsupported by `sips`
+  - `pdftoppm` or `mutool` for PDF page rendering
+
+## Repository Layout
+
+- `src/inspirations/` - CLI, DB layer, importers, AI pipeline, server
+- `app/` - local web app assets
+- `tools/` - operational scripts (pipeline, batch, runner, sync, dashboard)
+- `tests/` - unit tests
+- `docs/` - architecture, plans, handoff, runbooks
+- `imports/` - local input datasets
+- `store/` - downloaded originals and generated thumbnails
+- `data/` - SQLite DB and batch artifacts
+
+## Setup
+
+### Option A: Run from source with `PYTHONPATH`
+
+```sh
+PYTHONPATH=src python3 -m inspirations --help
+```
+
+### Option B: Editable install
+
+```sh
+python3 -m pip install -e .
+inspirations --help
+```
+
+## Quick Start
+
+1. Initialize DB + store directories:
 
 ```sh
 PYTHONPATH=src python3 -m inspirations init
+```
+
+2. Import Pinterest and Facebook exports:
+
+```sh
 PYTHONPATH=src python3 -m inspirations import pinterest --zip imports/raw/dataset_pinterest-crawler_*.zip
 PYTHONPATH=src python3 -m inspirations import facebook --zip imports/raw/facebook-*.zip
 PYTHONPATH=src python3 -m inspirations list
 ```
 
-Download originals (requires network/DNS access):
+3. Download originals (network required):
 
 ```sh
 PYTHONPATH=src python3 -m inspirations import pinterest --zip imports/raw/dataset_pinterest-crawler_*.zip --download
 PYTHONPATH=src python3 -m inspirations import facebook --zip imports/raw/facebook-*.zip --download
 ```
 
-If some Facebook items are HTML pages, retry with preview-image extraction:
+4. Generate thumbnails:
 
 ```sh
-PYTHONPATH=src python3 -m inspirations import facebook --zip imports/raw/facebook-*.zip --download --retry-non-image
+PYTHONPATH=src python3 -m inspirations thumbs --size 512
 ```
 
-Scan PDF inbox (page-splitting) and generate thumbnails:
+5. Start the app:
+
+```sh
+PYTHONPATH=src python3 -m inspirations serve --host 127.0.0.1 --port 8000 --app app --store store
+```
+
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
+
+## Scan Import Workflow
+
+Generate mock scans (optional), then import images/PDF pages:
 
 ```sh
 python3 scripts/make_mock_scans.py
 PYTHONPATH=src python3 -m inspirations import scans --inbox imports/scans/inbox --format jpg
-PYTHONPATH=src python3 -m inspirations thumbs --size 512
+PYTHONPATH=src python3 -m inspirations thumbs --size 512 --source scan
 ```
 
-Run AI tagging (mock provider for now):
+## AI Tagging Workflows
+
+### Mock tagger
 
 ```sh
 PYTHONPATH=src python3 -m inspirations ai tag --provider mock
 ```
 
-## Run the local app
+### Gemini CLI tagger
 
 ```sh
-PYTHONPATH=src python3 -m inspirations serve --host 127.0.0.1 --port 8000
+GEMINI_API_KEY="YOUR_KEY" PYTHONPATH=src \
+python3 -m inspirations ai tag --provider gemini --source pinterest --image-kind thumb
 ```
 
-Then open http://127.0.0.1:8000
+Useful flags:
 
-Run tests:
+```sh
+# Disable/override recitation fallback
+GEMINI_API_KEY="YOUR_KEY" PYTHONPATH=src \
+python3 -m inspirations ai tag --provider gemini --recitation-fallback-model ""
+
+GEMINI_API_KEY="YOUR_KEY" PYTHONPATH=src \
+python3 -m inspirations ai tag --provider gemini --recitation-fallback-model gemini-2.0-flash
+
+# Force re-tagging even if already tagged
+GEMINI_API_KEY="YOUR_KEY" PYTHONPATH=src \
+python3 -m inspirations ai tag --provider gemini --force
+```
+
+### Preflight + auto mode pipeline (recommended)
+
+```sh
+GEMINI_API_KEY="YOUR_KEY" PYTHONPATH=src \
+python3 tools/tagging_pipeline.py --mode auto --limit 0
+```
+
+Pipeline features:
+
+- Repairs missing originals/thumbs (default)
+- Preflight validation before API spend
+- ETA and optional cost estimation
+- Auto-select batch vs interactive
+- RECITATION-aware fallback in interactive mode
+
+### Batch tools
+
+- `tools/tagging_batch.py` - submit/watch/fetch/ingest batch jobs
+- `tools/tagging_pipeline.py` - orchestrates preflight + mode selection
+- `tools/tagging_runner.py` - concurrent interactive runner
+- `tools/session_sync.py` - one-command status snapshot for handoff
+
+## Local API (served by `inspirations serve`)
+
+Core endpoints:
+
+- `GET /api/assets`
+- `GET /api/facets`
+- `GET /api/collections`
+- `POST /api/collections`
+- `GET /api/tray`
+- `POST /api/tray/add`
+- `POST /api/tray/remove`
+- `POST /api/tray/clear`
+- `POST /api/tray/create-collection`
+- `GET /api/annotations?asset_id=...`
+- `POST /api/annotations`
+- `PUT /api/annotations/{id}`
+- `DELETE /api/annotations/{id}`
+- `GET /media/{asset_id}?kind=thumb|original`
+
+`/api/assets` includes AI fields used by the UI:
+
+- `ai_summary`
+- `ai_json`
+- `ai_model`
+- `ai_provider`
+- `ai_created_at`
+
+## Testing
+
+Run all tests:
 
 ```sh
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
+## GitHub Workflow Requirements
+
+For major features and substantial behavior changes, use a pull request workflow:
+
+- Create a feature branch and open a PR to merge into the main branch.
+- Do not merge major features directly to `main` without a PR.
+- Include test evidence and a clear change summary in the PR description.
+- Keep `docs/pr_summary.md` aligned with the implemented behavior.
+
+README maintenance policy:
+
+- Update this `README.md` whenever a feature is added, removed, or substantially changed.
+- If a change affects setup, commands, API behavior, or UI workflows, the README update is required in the same PR.
+- If no README update is needed, explicitly state that in the PR checklist/review notes.
+
+## Security And Data Notes
+
+- Downloader enforces safe public URL checks (blocks private/non-public targets).
+- API keys are passed via environment variables; do not commit keys.
+- AI provider/model metadata is stored for traceability.
+- `asset_ai_errors` captures failed tagging attempts for retries and analysis.
+
 ## Docs
 
+- `CONTRIBUTING.md`
 - `docs/PRODUCT_SPEC.md`
 - `docs/ARCHITECTURE.md`
-- `docs/BUILD_TEST_PLAN.md`
-- `docs/EXPORT_IMPRESSIONS.md`
-- `docs/WORKFLOWS.md`
+- `docs/AI_TAGGING_PLAN.md`
+- `docs/SEARCH_STRATEGY.md`
+- `docs/tagging_pipeline.md`
+- `docs/handoff.md`
+- `docs/next_steps.md`
+- `docs/pr_summary.md`
+
+## License
+
+Proprietary.

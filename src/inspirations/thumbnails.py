@@ -8,6 +8,24 @@ from typing import Any
 from .db import Db
 
 
+def _can_use_pillow() -> bool:
+    try:
+        import PIL  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def _make_thumb_pillow(src: Path, dst: Path, size: int) -> None:
+    from PIL import Image
+
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with Image.open(src) as im:
+        im = im.convert("RGB")
+        im.thumbnail((size, size))
+        im.save(dst, format="JPEG", quality=85)
+
+
 def _select_tool(tool: str) -> str | None:
     if tool != "auto":
         return tool
@@ -15,6 +33,8 @@ def _select_tool(tool: str) -> str | None:
         return "sips"
     if shutil.which("magick"):
         return "magick"
+    if _can_use_pillow():
+        return "pillow"
     return None
 
 
@@ -25,6 +45,9 @@ def _make_thumb(tool: str, src: Path, dst: Path, size: int) -> None:
         return
     if tool == "magick":
         subprocess.run(["magick", str(src), "-resize", f"{size}x{size}", str(dst)], check=True)
+        return
+    if tool == "pillow":
+        _make_thumb_pillow(src, dst, size)
         return
     raise ValueError(f"Unknown thumbnail tool: {tool}")
 
@@ -74,9 +97,20 @@ def generate_thumbnails(
                 errors.append({"id": asset_id, "error": "Skipping .bin (not an image)"})
                 continue
             dst = store_dir / "thumbs" / src / f"{asset_id}.jpg"
-            _make_thumb(tool, stored, dst, size)
-            db.exec("update assets set thumb_path=? where id=?", (str(dst), asset_id))
-            generated += 1
+            try:
+                _make_thumb(tool, stored, dst, size)
+                db.exec("update assets set thumb_path=? where id=?", (str(dst), asset_id))
+                generated += 1
+            except Exception as e:
+                if tool != "pillow" and _can_use_pillow():
+                    try:
+                        _make_thumb("pillow", stored, dst, size)
+                        db.exec("update assets set thumb_path=? where id=?", (str(dst), asset_id))
+                        generated += 1
+                        continue
+                    except Exception:
+                        pass
+                errors.append({"id": asset_id, "error": str(e)})
         except Exception as e:
             errors.append({"id": asset_id, "error": str(e)})
 

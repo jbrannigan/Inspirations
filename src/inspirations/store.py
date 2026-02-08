@@ -24,6 +24,7 @@ def list_assets(
 ) -> list[dict[str, Any]]:
     clauses = []
     params: list[Any] = []
+    joins: list[str] = []
     if source:
         sources = [s.strip() for s in source.split(",") if s.strip()]
         clauses.append("a.source in (%s)" % ",".join(["?"] * len(sources)))
@@ -34,25 +35,37 @@ def list_assets(
         params.extend(boards)
     if label:
         labels = [s.strip() for s in label.split(",") if s.strip()]
+        joins.append("left join asset_labels al on al.asset_id = a.id")
         clauses.append("al.label in (%s)" % ",".join(["?"] * len(labels)))
         params.extend(labels)
     if q:
+        if not any(j.startswith("left join asset_labels") for j in joins):
+            joins.append("left join asset_labels al on al.asset_id = a.id")
         clauses.append(
-            "(a.title like ? or a.description like ? or a.board like ? or a.source_ref like ? or a.notes like ?)"
+            "(a.title like ? or a.description like ? or a.board like ? or a.source_ref like ? or a.notes like ? or a.ai_summary like ? or al.label like ?)"
         )
         qv = f"%{q}%"
-        params += [qv, qv, qv, qv, qv]
+        params += [qv, qv, qv, qv, qv, qv, qv]
     if collection_id:
+        joins.append("join collection_items ci on ci.asset_id = a.id")
         clauses.append("ci.collection_id = ?")
         params.append(collection_id)
     where = "where " + " and ".join(clauses) if clauses else ""
+    join_sql = "\n    " + "\n    ".join(joins) if joins else ""
 
     sql = f"""
-    select a.id, a.source, a.source_ref, a.title, a.description, a.board, a.notes,
+    select distinct a.id, a.source, a.source_ref, a.title, a.description, a.board, a.notes,
+           coalesce(
+             (select ai.summary from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1),
+             a.ai_summary
+           ) as ai_summary,
+           (select ai.json from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_json,
+           (select ai.model from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_model,
+           (select ai.provider from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_provider,
+           (select ai.created_at from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_created_at,
            a.created_at, a.imported_at, a.image_url, a.stored_path, a.thumb_path
     from assets a
-    left join collection_items ci on ci.asset_id = a.id
-    left join asset_labels al on al.asset_id = a.id
+    {join_sql}
     {where}
     order by a.imported_at desc
     limit ? offset ?;
@@ -118,6 +131,34 @@ def add_items_to_collection(db: Db, *, collection_id: str, asset_ids: list[str])
     return len(rows)
 
 
+def remove_items_from_collection(db: Db, *, collection_id: str, asset_ids: list[str]) -> int:
+    if not asset_ids:
+        return 0
+    unique_ids: list[str] = []
+    seen: set[str] = set()
+    for aid in asset_ids:
+        aid_s = str(aid or "").strip()
+        if not aid_s or aid_s in seen:
+            continue
+        seen.add(aid_s)
+        unique_ids.append(aid_s)
+    if not unique_ids:
+        return 0
+
+    placeholders = ",".join(["?"] * len(unique_ids))
+    params = [collection_id, *unique_ids]
+    removed = db.query_value(
+        f"select count(*) from collection_items where collection_id=? and asset_id in ({placeholders})",
+        tuple(params),
+    )
+    db.exec(
+        f"delete from collection_items where collection_id=? and asset_id in ({placeholders})",
+        tuple(params),
+    )
+    db.exec("update collections set updated_at=? where id=?", (_now_iso(), collection_id))
+    return int(removed or 0)
+
+
 def set_collection_order(db: Db, *, collection_id: str, asset_ids: list[str]) -> None:
     for idx, aid in enumerate(asset_ids):
         db.exec(
@@ -134,6 +175,34 @@ def remove_item_from_collection(db: Db, *, collection_id: str, asset_id: str) ->
 
 def delete_collection(db: Db, *, collection_id: str) -> None:
     db.exec("delete from collections where id=?", (collection_id,))
+
+
+def delete_assets(db: Db, *, asset_ids: list[str]) -> dict[str, Any]:
+    unique_ids: list[str] = []
+    seen: set[str] = set()
+    for aid in asset_ids:
+        aid_s = str(aid or "").strip()
+        if not aid_s or aid_s in seen:
+            continue
+        seen.add(aid_s)
+        unique_ids.append(aid_s)
+    if not unique_ids:
+        return {"deleted": 0, "paths": []}
+
+    placeholders = ",".join(["?"] * len(unique_ids))
+    rows = db.query(
+        f"select id, stored_path, thumb_path from assets where id in ({placeholders})",
+        tuple(unique_ids),
+    )
+    paths: list[str] = []
+    for r in rows:
+        if r["stored_path"]:
+            paths.append(r["stored_path"])
+        if r["thumb_path"]:
+            paths.append(r["thumb_path"])
+
+    db.exec(f"delete from assets where id in ({placeholders})", tuple(unique_ids))
+    return {"deleted": len(rows), "paths": paths}
 
 
 def update_asset_notes(db: Db, *, asset_id: str, notes: str) -> None:

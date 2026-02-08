@@ -53,7 +53,6 @@ def import_pinterest_crawler_zip(db: Db, zip_path: Path, limit: int = 0) -> dict
     if not isinstance(data, list):
         raise ValueError("Expected top-level list in pinterest crawler JSON")
 
-    inserted = 0
     skipped = 0
     errors = 0
 
@@ -106,10 +105,7 @@ def import_pinterest_crawler_zip(db: Db, zip_path: Path, limit: int = 0) -> dict
         rows,
     )
 
-    # SQLite doesn't directly tell us insert count via executemany reliably; compute via before/after
     total_after = db.query_value("select count(*) from assets where source='pinterest'")
-    # best-effort: estimate inserted as min(rows, delta) is not available without before count
-    inserted = len(rows)
 
     return {
         "source": "pinterest",
@@ -120,4 +116,3 @@ def import_pinterest_crawler_zip(db: Db, zip_path: Path, limit: int = 0) -> dict
         "note": "Counts are best-effort in this MVP; re-import is idempotent via (source, source_ref).",
         "total_assets_for_source": total_after,
     }
-

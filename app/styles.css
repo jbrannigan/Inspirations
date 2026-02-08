@@ -15,6 +15,8 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 .title { font-weight: 650; font-size: 14px; }
 .subtitle { font-size: 12px; color: var(--muted); }
 .actions { display: flex; gap: 8px; align-items: center; }
+.adminNav { color: var(--muted); text-decoration: none; font-size: 12px; border: 1px solid var(--border); border-radius: 10px; padding: 7px 10px; background: rgba(15,22,32,0.55); }
+.adminNav:hover { color: var(--text); border-color: rgba(141,213,255,0.45); }
 input, select, button { border: 1px solid var(--border); background: rgba(15,22,32,0.7); color: var(--text); padding: 8px 10px; border-radius: 10px; }
 select { min-width: 160px; }
 button { cursor: pointer; }
@@ -30,9 +32,23 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .filterItem { display: flex; gap: 8px; align-items: center; font-size: 12px; }
 .list { display: grid; gap: 8px; }
 .listItem { padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: rgba(15,23,34,0.55); cursor: pointer; }
-.listItem.on { border-color: rgba(141,213,255,0.45); }
+.listItem.on {
+  border-color: rgba(141,213,255,0.65);
+  background: rgba(141,213,255,0.2);
+  box-shadow: 0 0 0 2px rgba(141,213,255,0.2);
+}
 .content { padding: 12px; overflow: auto; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.toolbarMeta { display: grid; gap: 4px; }
+.canvasContext {
+  font-size: 12px;
+  color: var(--text);
+  border: 1px solid rgba(141, 213, 255, 0.35);
+  background: rgba(141, 213, 255, 0.12);
+  border-radius: 999px;
+  padding: 4px 10px;
+  display: inline-block;
+}
 .row { display: flex; gap: 8px; align-items: center; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
 .card { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: rgba(15,23,34,0.55); cursor: pointer; }
@@ -42,7 +58,22 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .selectBox { position: absolute; right: 8px; top: 8px; background: rgba(11,15,20,0.8); border: 1px solid var(--border); width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; font-size: 12px; }
 .selectBox input { width: 16px; height: 16px; margin: 0; }
 .card.selected { outline: 2px solid rgba(141,213,255,0.6); }
-.cardBody { padding: 8px; font-size: 13px; }
+.cardBody { padding: 10px; font-size: 13px; display: grid; gap: 8px; }
+.cardTitle { font-weight: 600; font-size: 13px; }
+.cardSummary { color: var(--muted); font-size: 12px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.cardMeta { color: var(--muted); font-size: 12px; display: flex; flex-wrap: wrap; gap: 6px; }
+.tagGrid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+.tagSection { border: 1px dashed rgba(255,255,255,0.12); border-radius: 10px; padding: 6px 8px; background: rgba(15,22,32,0.55); }
+.tagTitle { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { padding: 3px 7px; border-radius: 999px; border: 1px solid var(--border); background: rgba(255,255,255,0.08); font-size: 10px; }
+.chip.empty { color: var(--muted); background: transparent; border-style: dashed; }
+.cardFooter { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); padding-top: 6px; }
+.compactTags { display: flex; flex-wrap: wrap; gap: 6px; }
+.miniBtn { border: 1px solid var(--border); background: rgba(15,22,32,0.7); color: var(--text); padding: 4px 8px; border-radius: 999px; font-size: 11px; cursor: pointer; }
+.card:not(.expanded) .tagGrid { display: none; }
+.card.expanded .compactTags { display: none; }
+.card.expanded .cardSummary { -webkit-line-clamp: unset; overflow: visible; }
 .muted { color: var(--muted); font-size: 12px; }
 .modal { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.6); }
 .modal.hidden { display: none; }

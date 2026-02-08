@@ -79,6 +79,7 @@ def ensure_schema(db: Db) -> None:
         {
             "thumb_path": "text",
             "notes": "text",
+            "ai_summary": "text",
         },
     )
     db.exec("create unique index if not exists ux_assets_source_ref on assets(source, source_ref);")
@@ -148,6 +149,21 @@ def ensure_schema(db: Db) -> None:
     )
     db.exec(
         """
+        create table if not exists asset_ai (
+          id text primary key,
+          asset_id text not null,
+          provider text not null,
+          model text,
+          summary text,
+          json text,
+          created_at text not null,
+          foreign key(asset_id) references assets(id) on delete cascade
+        );
+        """
+    )
+    db.exec("create index if not exists ix_asset_ai_asset on asset_ai(asset_id);")
+    db.exec(
+        """
         create table if not exists asset_labels (
           id text primary key,
           asset_id text not null,
@@ -163,3 +179,20 @@ def ensure_schema(db: Db) -> None:
     )
     db.exec("create unique index if not exists ux_asset_labels on asset_labels(asset_id, label, source);")
     db.exec("create index if not exists ix_asset_labels_asset on asset_labels(asset_id);")
+
+    db.exec(
+        """
+        create table if not exists asset_ai_errors (
+          id text primary key,
+          asset_id text,
+          provider text not null,
+          model text,
+          error text,
+          raw text,
+          run_id text,
+          created_at text not null,
+          foreign key(asset_id) references assets(id) on delete cascade
+        );
+        """
+    )
+    db.exec("create index if not exists ix_asset_ai_errors_asset on asset_ai_errors(asset_id);")

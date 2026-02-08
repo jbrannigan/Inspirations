@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Inspirations Admin</title>
+    <link rel="stylesheet" href="/app/styles.css" />
+  </head>
+  <body class="adminPage">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo"></div>
+        <div>
+          <div class="title">Inspirations Admin</div>
+          <div class="subtitle">Database Maintenance</div>
+        </div>
+      </div>
+      <div class="actions">
+        <a href="/app/index.html" class="adminNav">Back to App</a>
+      </div>
+    </header>
+
+    <main class="adminShell">
+      <section class="section">
+        <div class="sectionTitle">Access</div>
+        <div class="row" style="flex-wrap: wrap">
+          <input id="adminPassword" type="password" placeholder="Admin password" />
+          <button id="unlockAdmin">Enter Admin Mode</button>
+          <button id="lockAdmin" disabled>Exit Admin Mode</button>
+        </div>
+        <div id="authStatus" class="muted" style="margin-top: 8px">Enter admin password to unlock delete actions.</div>
+      </section>
+
+      <section class="section">
+        <div class="sectionTitle">Delete From Primary Database</div>
+        <div class="row" style="flex-wrap: wrap">
+          <input id="adminSearch" placeholder="Search assets by title, notes, tags..." disabled />
+          <button id="reloadAssets" disabled>Load Assets</button>
+          <button id="selectAllAssets" disabled>Select All Visible</button>
+          <button id="clearAssetSelection" disabled>Clear Selection</button>
+          <button id="deleteFromDb" disabled>Delete Selected From DB</button>
+        </div>
+        <div id="selectionCount" class="muted" style="margin-top: 8px">0 selected</div>
+        <div id="deleteStatus" class="muted" style="margin-top: 8px">
+          Deleting from DB creates a backup first, then removes media records and linked files.
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="sectionTitle">Assets</div>
+        <div id="adminAssets" class="list"></div>
+      </section>
+    </main>
+
+    <script src="/app/admin.js"></script>
+  </body>
+</html>

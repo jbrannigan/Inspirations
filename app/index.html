@@ -17,6 +17,7 @@
       </div>
       <div class="actions">
         <input id="search" placeholder="Search or type a tag (e.g., cabinets)" />
+        <a href="/app/admin.html" class="adminNav">Admin</a>
       </div>
     </header>
 
@@ -32,25 +33,26 @@
           <div class="sectionTitle">Collections</div>
           <div id="collections" class="list"></div>
           <div class="row" style="margin-top: 8px">
-            <select id="collectionSelect">
-              <option value="">Select collection…</option>
-            </select>
             <button id="newCollection">New</button>
             <button id="deleteCollection">Delete</button>
           </div>
-          <div class="muted" id="collectionHint" style="margin-top: 6px">Pick a collection to add items. Viewing is separate.</div>
+          <div class="muted" id="collectionHint" style="margin-top: 6px">No collection selected. Main canvas is showing all items.</div>
         </div>
       </aside>
 
       <main class="content">
         <div class="toolbar">
-          <div id="stats" class="muted">Loading…</div>
+          <div class="toolbarMeta">
+            <div id="canvasContext" class="canvasContext">Canvas: Loading...</div>
+            <div id="stats" class="muted">Loading...</div>
+          </div>
           <div class="row">
             <button id="selectAll">Select All</button>
             <button id="addSelected" disabled>Add Selected to Tray</button>
+            <button id="addSelectedToCollection" disabled>Add Selected to Collection</button>
+            <button id="removeSelectedFromCollection" disabled>Remove Selected from Collection</button>
             <button id="addFiltered" disabled>Add Filtered to Tray</button>
             <button id="clearSelection" disabled>Clear Selection</button>
-            <button id="viewCollection">View Collection</button>
             <button id="showAll">Show All</button>
           </div>
         </div>
@@ -62,11 +64,12 @@
           <div class="sectionTitle">Curate Tray</div>
           <div class="muted" id="trayCount">0 items</div>
           <div id="tray" class="list" style="margin-top: 8px"></div>
-          <div class="row" style="margin-top: 8px">
+          <div class="row" style="margin-top: 8px; flex-wrap: wrap">
             <button id="createFromTray" disabled>Create Collection</button>
+            <button id="addTrayToCollection" disabled>Add Tray to Collection</button>
             <button id="clearTray" disabled>Clear Tray</button>
           </div>
-          <div class="muted" style="margin-top: 6px">Tray is your “shopping cart”. Add items from any filter; then create a collection.</div>
+          <div class="muted" style="margin-top: 6px">Tray is your “shopping cart”. Add items from any filter, then create a new collection or add to an existing one.</div>
         </div>
       </aside>
     </div>

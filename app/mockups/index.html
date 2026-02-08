@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Inspirations — Mockups</title>
+    <style>
+      :root {
+        --bg: #0b0f14;
+        --panel: #101824;
+        --border: rgba(255, 255, 255, 0.08);
+        --text: rgba(255, 255, 255, 0.92);
+        --muted: rgba(255, 255, 255, 0.68);
+        --accent: #8dd5ff;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      }
+      .page { max-width: 900px; margin: 0 auto; padding: 32px 20px; }
+      h1 { margin: 0 0 6px; font-size: 18px; }
+      .muted { color: var(--muted); font-size: 12px; }
+      .list { display: grid; gap: 10px; margin-top: 18px; }
+      a {
+        display: block;
+        padding: 12px 14px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        text-decoration: none;
+        color: var(--text);
+        background: rgba(15, 22, 32, 0.7);
+      }
+      a:hover { border-color: rgba(141, 213, 255, 0.35); }
+      .label { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <h1>Mockups</h1>
+      <div class="muted">Pinned mockups for review (dark theme).</div>
+      <div class="list">
+        <a href="/app/mockups/pinterest_tag_cards.html">
+          Pinterest tag cards (full)
+          <div class="label">All tag buckets visible</div>
+        </a>
+        <a href="/app/mockups/pinterest_tag_cards_compact.html">
+          Pinterest tag cards (compact feed)
+          <div class="label">Scan‑first layout with expandable details</div>
+        </a>
+      </div>
+    </div>
+  </body>
+</html>

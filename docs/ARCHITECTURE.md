@@ -63,12 +63,19 @@ This document proposes three viable architectures, from fastest local MVP to a p
 2. **Dedupe** by URL + hashes (SHA-256 for exact; pHash for near-dup).
 3. **Thumbnailing** for UI performance.
 4. **AI pipeline** (batch, resumable):
+   - Preflight validation (missing files, unsupported types)
    - Labels/tags
    - Caption/summary (optional)
    - Embedding vector (optional but recommended)
+   - Error capture (`asset_ai_errors`) for retries
 5. **Indexing**:
    - Keyword: title/notes/tags/labels
    - Semantic: embedding similarity
+
+## AI tagging + search strategy
+For the current Gemini tagging workflow and the hybrid/graph search plan, see:
+- `docs/AI_TAGGING_PLAN.md`
+- `docs/SEARCH_STRATEGY.md`
 
 ## Integration notes (imports)
 Because exports vary and can be noisy:
