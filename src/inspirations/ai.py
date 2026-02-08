@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import os
 import re
 import urllib.error
 import urllib.request
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +48,7 @@ KEYWORDS = [
 
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 DEFAULT_GEMINI_RECITATION_FALLBACK_MODEL = "gemini-2.0-flash"
+DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001"
 DEFAULT_GEMINI_PROMPT = """You are an interior design tagging assistant. Analyze the image and return ONLY valid JSON:
 {
   "summary": "short, 1-2 sentence description",
@@ -331,6 +333,412 @@ def _gemini_generate(
     if last_exc:
         raise last_exc
     raise RuntimeError("Gemini request failed before a response was received")
+
+
+def _gemini_embed_text(
+    *,
+    api_key: str,
+    model: str,
+    text: str,
+    task_type: str = "RETRIEVAL_DOCUMENT",
+    timeout_s: float = 60.0,
+) -> list[float]:
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent"
+    payload = {
+        "content": {
+            "parts": [{"text": text}],
+        },
+        "taskType": task_type,
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            data = json.loads(resp.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="ignore") if hasattr(e, "read") else ""
+        raise RuntimeError(f"Gemini embed HTTP {e.code}: {detail}") from e
+
+    values = (data.get("embedding") or {}).get("values")
+    if values is None and isinstance(data.get("embeddings"), list) and data["embeddings"]:
+        values = (data["embeddings"][0] or {}).get("values")
+    if not isinstance(values, list) or not values:
+        raise RuntimeError("No embedding values in Gemini embed response")
+    try:
+        return [float(v) for v in values]
+    except Exception as e:
+        raise RuntimeError(f"Invalid embedding values in Gemini response: {e}") from e
+
+
+def _build_embedding_input_text(row: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for key in ("title", "description", "board", "notes", "ai_summary"):
+        value = str(row.get(key) or "").strip()
+        if value:
+            parts.append(value)
+    labels_csv = str(row.get("labels_csv") or "").strip()
+    if labels_csv:
+        labels = [x.strip() for x in labels_csv.split("|") if x.strip()]
+        if labels:
+            parts.append(f"labels: {', '.join(labels[:80])}")
+    text = "\n".join(parts).strip()
+    if len(text) > 4000:
+        text = text[:4000].strip()
+    return text
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na <= 0.0 or nb <= 0.0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def _classify_ai_error(error: str, raw: str | None = None) -> str:
+    err = (error or "").lower()
+    raw_l = (raw or "").lower()
+    if "nodename nor servname provided" in err or "temporary failure in name resolution" in err:
+        return "network_dns"
+    if "no json object" in err:
+        if "recitation" in err or ("finishreason" in raw_l and "recitation" in raw_l):
+            return "no_json_recitation"
+        return "no_json_other"
+    if "no image available" in err:
+        return "missing_image"
+    if "unsupported image type" in err:
+        return "unsupported_image"
+    if "gemini http" in err:
+        return "gemini_http"
+    return "other"
+
+
+def _triage_action_for_error(category: str, resolved_after_error: bool) -> str:
+    if resolved_after_error:
+        return "historical_resolved"
+    if category == "network_dns":
+        return "retry_when_network_available"
+    if category == "no_json_recitation":
+        return "use_fallback_or_alt_model"
+    if category == "no_json_other":
+        return "inspect_prompt_or_parser"
+    if category in {"missing_image", "unsupported_image"}:
+        return "repair_media"
+    if category == "gemini_http":
+        return "inspect_api_response"
+    return "manual_investigation"
+
+
+def run_ai_error_triage(
+    db: Db,
+    *,
+    source: str = "",
+    provider: str = "",
+    model: str = "",
+    days: int = 0,
+    limit: int = 0,
+    examples_per_action: int = 3,
+) -> dict[str, Any]:
+    cutoff = ""
+    if days > 0:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if source:
+        clauses.append("a.source = ?")
+        params.append(source)
+    if provider:
+        clauses.append("e.provider = ?")
+        params.append(provider)
+    if model:
+        clauses.append("coalesce(e.model, '') = ?")
+        params.append(model)
+    if cutoff:
+        clauses.append("e.created_at >= ?")
+        params.append(cutoff)
+    where = "where " + " and ".join(clauses) if clauses else ""
+
+    sql = f"""
+    select e.id, e.asset_id, e.provider, e.model, e.error, e.raw, e.run_id, e.created_at,
+           a.source,
+           exists(
+             select 1
+             from asset_ai ai
+             where ai.asset_id = e.asset_id
+               and ai.provider = e.provider
+               and ai.created_at >= e.created_at
+           ) as resolved_after_error
+    from asset_ai_errors e
+    left join assets a on a.id = e.asset_id
+    {where}
+    order by e.created_at desc
+    """
+    if limit > 0:
+        sql += " limit ?"
+        params.append(limit)
+    rows = [dict(r) for r in db.query(sql, tuple(params))]
+
+    category_stats: dict[str, dict[str, int]] = {}
+    action_stats: dict[str, int] = {}
+    examples: dict[str, list[dict[str, Any]]] = {}
+    unique_assets: set[str] = set()
+    actionable_assets: set[str] = set()
+    actionable_errors = 0
+
+    for row in rows:
+        asset_id = str(row.get("asset_id") or "").strip()
+        if asset_id:
+            unique_assets.add(asset_id)
+        resolved_after_error = bool(row.get("resolved_after_error"))
+        category = _classify_ai_error(str(row.get("error") or ""), row.get("raw"))
+        action = _triage_action_for_error(category, resolved_after_error)
+        if not resolved_after_error:
+            actionable_errors += 1
+            if asset_id:
+                actionable_assets.add(asset_id)
+
+        if category not in category_stats:
+            category_stats[category] = {"total": 0, "actionable": 0, "resolved": 0}
+        category_stats[category]["total"] += 1
+        if resolved_after_error:
+            category_stats[category]["resolved"] += 1
+        else:
+            category_stats[category]["actionable"] += 1
+
+        action_stats[action] = action_stats.get(action, 0) + 1
+        if action not in examples:
+            examples[action] = []
+        if len(examples[action]) < max(1, examples_per_action):
+            examples[action].append(
+                {
+                    "error_id": row.get("id"),
+                    "asset_id": row.get("asset_id"),
+                    "source": row.get("source"),
+                    "provider": row.get("provider"),
+                    "model": row.get("model"),
+                    "created_at": row.get("created_at"),
+                    "error": row.get("error"),
+                    "category": category,
+                    "resolved_after_error": resolved_after_error,
+                }
+            )
+
+    categories = [
+        {"category": name, **vals}
+        for name, vals in sorted(category_stats.items(), key=lambda kv: (-kv[1]["total"], kv[0]))
+    ]
+    actions = [
+        {"action": name, "count": count}
+        for name, count in sorted(action_stats.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
+    action_examples = [
+        {"action": action, "examples": ex}
+        for action, ex in sorted(examples.items(), key=lambda kv: kv[0])
+    ]
+
+    return {
+        "filters": {
+            "source": source or None,
+            "provider": provider or None,
+            "model": model or None,
+            "days": days if days > 0 else None,
+            "limit": limit if limit > 0 else None,
+        },
+        "total_errors": len(rows),
+        "total_assets": len(unique_assets),
+        "actionable_errors": actionable_errors,
+        "actionable_assets": len(actionable_assets),
+        "categories": categories,
+        "actions": actions,
+        "examples_by_action": action_examples,
+    }
+
+
+def run_gemini_text_embedder(
+    db: Db,
+    *,
+    api_key: str,
+    model: str = DEFAULT_GEMINI_EMBEDDING_MODEL,
+    source: str = "",
+    limit: int = 0,
+    force: bool = False,
+) -> dict[str, Any]:
+    run_id = str(uuid.uuid4())
+    now = _now_iso()
+    db.exec(
+        "insert into ai_runs (id, provider, model, created_at) values (?, ?, ?, ?)",
+        (run_id, "gemini-embed", model, now),
+    )
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if source:
+        clauses.append("a.source = ?")
+        params.append(source)
+    if not force:
+        clauses.append(
+            "a.id not in (select asset_id from asset_embeddings where provider=? and model=?)"
+        )
+        params.extend(["gemini", model])
+    where = "where " + " and ".join(clauses) if clauses else ""
+    rows = db.query(
+        f"""
+        select a.id, a.source, a.title, a.description, a.board, a.notes,
+               coalesce(
+                 (select ai.summary from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1),
+                 a.ai_summary
+               ) as ai_summary,
+               (select group_concat(al.label, '|') from asset_labels al where al.asset_id=a.id and al.source='ai') as labels_csv
+        from assets a
+        {where}
+        order by a.imported_at asc
+        """,
+        tuple(params),
+    )
+
+    attempted = 0
+    embedded = 0
+    errors: list[dict[str, str]] = []
+    for r in rows:
+        if limit and attempted >= limit:
+            break
+        attempted += 1
+        row = dict(r)
+        asset_id = row["id"]
+        text = _build_embedding_input_text(row)
+        if not text:
+            errors.append({"id": asset_id, "error": "No text content available for embedding"})
+            continue
+        try:
+            vector = _gemini_embed_text(
+                api_key=api_key,
+                model=model,
+                text=text,
+                task_type="RETRIEVAL_DOCUMENT",
+            )
+            db.exec(
+                """
+                insert into asset_embeddings
+                  (id, asset_id, provider, model, input_text, vector_json, dimensions, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict(asset_id, provider, model) do update set
+                  input_text=excluded.input_text,
+                  vector_json=excluded.vector_json,
+                  dimensions=excluded.dimensions,
+                  created_at=excluded.created_at
+                """,
+                (
+                    str(uuid.uuid4()),
+                    asset_id,
+                    "gemini",
+                    model,
+                    text,
+                    json.dumps(vector),
+                    len(vector),
+                    now,
+                ),
+            )
+            embedded += 1
+        except Exception as e:
+            errors.append({"id": asset_id, "error": str(e)})
+
+    return {
+        "provider": "gemini",
+        "model": model,
+        "run_id": run_id,
+        "attempted": attempted,
+        "embedded_assets": embedded,
+        "errors": errors[:25],
+        "note": "Errors are truncated to 25 in output.",
+    }
+
+
+def run_similarity_search(
+    db: Db,
+    *,
+    api_key: str,
+    query: str,
+    model: str = DEFAULT_GEMINI_EMBEDDING_MODEL,
+    source: str = "",
+    limit: int = 25,
+) -> dict[str, Any]:
+    query_text = (query or "").strip()
+    if not query_text:
+        raise ValueError("query is required")
+    if limit <= 0:
+        limit = 25
+
+    query_vec = _gemini_embed_text(
+        api_key=api_key,
+        model=model,
+        text=query_text,
+        task_type="RETRIEVAL_QUERY",
+    )
+
+    clauses = ["e.provider = ?", "e.model = ?"]
+    params: list[Any] = ["gemini", model]
+    if source:
+        clauses.append("a.source = ?")
+        params.append(source)
+    where = "where " + " and ".join(clauses)
+
+    rows = db.query(
+        f"""
+        select e.asset_id, e.vector_json, e.dimensions, e.created_at,
+               a.source, a.title, a.board,
+               coalesce(
+                 (select ai.summary from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1),
+                 a.ai_summary
+               ) as ai_summary
+        from asset_embeddings e
+        join assets a on a.id = e.asset_id
+        {where}
+        """,
+        tuple(params),
+    )
+
+    scored: list[dict[str, Any]] = []
+    skipped_mismatch = 0
+    for r in rows:
+        try:
+            vector = [float(x) for x in json.loads(r["vector_json"] or "[]")]
+        except Exception:
+            continue
+        if len(vector) != len(query_vec):
+            skipped_mismatch += 1
+            continue
+        score = _cosine_similarity(query_vec, vector)
+        scored.append(
+            {
+                "asset_id": r["asset_id"],
+                "source": r["source"],
+                "title": r["title"],
+                "board": r["board"],
+                "ai_summary": r["ai_summary"],
+                "score": score,
+                "embedding_created_at": r["created_at"],
+            }
+        )
+    scored.sort(key=lambda x: x["score"], reverse=True)
+
+    return {
+        "query": query_text,
+        "provider": "gemini",
+        "model": model,
+        "compared_assets": len(scored),
+        "skipped_dimension_mismatch": skipped_mismatch,
+        "results": scored[:limit],
+    }
 
 
 def run_mock_labeler(db: Db, *, limit: int = 0) -> dict[str, Any]:

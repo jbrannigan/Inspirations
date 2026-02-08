@@ -81,15 +81,31 @@ python3 tools/tagging_pipeline.py --mode auto --limit 0
 - Click a card to expand full tag buckets
 - Click **Annotate** to open the note/badge modal
 
-## 5) Investigate failures (optional)
+## 5) Investigate failures (triage command)
+Use the triage command to separate actionable errors from already-resolved historical rows:
+```bash
+PYTHONPATH=src python3 -m inspirations ai errors \
+  --source pinterest --provider gemini --model gemini-2.5-flash
+```
+
+Raw SQL fallback:
 ```bash
 sqlite3 /Users/minime/Projects/Inspirations/data/inspirations.sqlite \
   "select error, count(*) from asset_ai_errors group by error order by count(*) desc;"
 ```
 
 ## 6) Current product priorities
-1. Triage `asset_ai_errors` into actionable vs historical failures.
-2. Define and implement first embeddings/similarity search slice (`docs/SEARCH_STRATEGY.md`).
+1. Backfill embeddings:
+```bash
+GEMINI_API_KEY="YOUR_KEY" PYTHONPATH=src \
+python3 -m inspirations ai embed --source pinterest --model gemini-embedding-001
+```
+2. Validate similarity quality:
+```bash
+GEMINI_API_KEY="YOUR_KEY" PYTHONPATH=src \
+python3 -m inspirations ai similar --query "warm kitchen with white oak cabinets" --source pinterest --limit 20
+```
+3. Add API/UI semantic-query entrypoint after embedding quality is acceptable.
 
 ## Files to know
 - `docs/handoff.md` — detailed run history + commands
