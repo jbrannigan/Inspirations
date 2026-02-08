@@ -134,8 +134,74 @@ Cons:
 4. Add Facebook reference-only ingest mode.
 5. Add a manual capture path (bookmarklet/browser helper) for gaps between exports.
 6. Add reboot-safe development continuity workflow (below).
+7. Start a dedicated scan-recipe intake lane (folder convention + classification + review queue).
+8. Plan and build a kitchen-focused recipe PWA route that is separate from the inspiration canvas.
 
-## 5) Reboot/Update Continuity Workflow (To Avoid Lost Progress)
+## 5) Scan + Recipe Split UX Plan
+
+### Goal
+- Keep Inspirations as the primary design-research app (Pinterest/Facebook/scans for interiors and products).
+- Add a second, recipe-first experience for iPad kitchen use (PWA), fed by scanned printed recipes and recipe links.
+
+### Phase 0: Baseline (already available)
+- Scan import exists today via:
+  - `PYTHONPATH=src python3 -m inspirations import scans --inbox imports/scans/inbox --format jpg`
+- Thumbnails can be generated via:
+  - `PYTHONPATH=src python3 -m inspirations thumbs --size 512 --source scan`
+
+### Phase 1: Reliable Recipe Scan Intake
+1. Define intake folders and usage:
+- `imports/scans/inbox/recipes/`
+- `imports/scans/inbox/inspirations/`
+2. Add import telemetry for scans:
+- scanned files seen
+- pages imported
+- duplicates skipped
+- import errors by reason
+3. Add a first-pass classifier:
+- mark each scan asset as `recipe` or `inspiration` (manual batch tagging first, then AI-assisted).
+4. Add a review pass in the UI:
+- filter by `source=scan`
+- bulk move uncertain items into a `Needs Recipe Review` collection.
+
+### Phase 2: Recipe Data Enrichment
+1. Add OCR text extraction for scan pages.
+2. Add parsed recipe fields (initially optional):
+- title
+- ingredients text
+- steps text
+3. Keep both:
+- raw scan image (source of truth)
+- normalized recipe text (for search and display).
+
+### Phase 3: UX Split
+1. Main Inspirations UX:
+- default hide `recipe` assets (or provide a simple toggle).
+- continue current canvas and annotation workflow for design content.
+2. Kitchen UX (new route):
+- recipe-only search and browse
+- large touch targets for iPad
+- step-by-step reading mode
+- minimal distractions and quick reopen behavior.
+
+### Phase 4: iPad PWA Hardening
+1. Add installable PWA support:
+- web app manifest
+- service worker cache strategy
+- offline support for recently viewed recipes.
+2. Add kitchen-specific usability:
+- high-contrast reading mode
+- keep-screen-awake option (where supported)
+- large typography and spacing for countertop viewing distance.
+
+### Suggested Delivery Order
+1. Scan intake telemetry + folder convention.
+2. Recipe vs inspiration classification field and filters.
+3. OCR extraction for scanned recipes.
+4. Kitchen route skeleton in web app.
+5. PWA install/offline polish.
+
+## 6) Reboot/Update Continuity Workflow (To Avoid Lost Progress)
 
 Use this every time before stopping work:
 
