@@ -207,6 +207,21 @@ Run all tests:
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
+## GitHub Workflow Requirements
+
+For major features and substantial behavior changes, use a pull request workflow:
+
+- Create a feature branch and open a PR to merge into the main branch.
+- Do not merge major features directly to `main` without a PR.
+- Include test evidence and a clear change summary in the PR description.
+- Keep `docs/pr_summary.md` aligned with the implemented behavior.
+
+README maintenance policy:
+
+- Update this `README.md` whenever a feature is added, removed, or substantially changed.
+- If a change affects setup, commands, API behavior, or UI workflows, the README update is required in the same PR.
+- If no README update is needed, explicitly state that in the PR checklist/review notes.
+
 ## Security And Data Notes
 
 - Downloader enforces safe public URL checks (blocks private/non-public targets).
@@ -216,6 +231,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests -v
 
 ## Docs
 
+- `CONTRIBUTING.md`
 - `docs/PRODUCT_SPEC.md`
 - `docs/ARCHITECTURE.md`
 - `docs/AI_TAGGING_PLAN.md`

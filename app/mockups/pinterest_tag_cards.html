@@ -1,0 +1,577 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Inspirations — Pinterest Tag Cards</title>
+    <style>
+      :root {
+        --bg: #0b0f14;
+        --panel: #101824;
+        --border: rgba(255, 255, 255, 0.08);
+        --text: rgba(255, 255, 255, 0.92);
+        --muted: rgba(255, 255, 255, 0.68);
+        --accent: #8dd5ff;
+        --accent-2: #a7ffce;
+        --chip: rgba(255, 255, 255, 0.08);
+        --shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+        --radius-lg: 16px;
+        --radius-md: 12px;
+        --radius-pill: 999px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        color: var(--text);
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+        background: var(--bg);
+        min-height: 100vh;
+      }
+
+      .page {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 32px 20px 80px;
+      }
+
+      header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 24px;
+      }
+
+      h1 {
+        font-size: 20px;
+        letter-spacing: 0.2px;
+        margin: 0;
+        font-weight: 600;
+      }
+
+      .subtitle {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 6px;
+      }
+
+      .filters {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .pill {
+        padding: 6px 12px;
+        border-radius: var(--radius-pill);
+        border: 1px solid var(--border);
+        background: rgba(15, 22, 32, 0.7);
+        font-size: 12px;
+      }
+
+      .grid {
+        display: grid;
+        gap: 18px;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      }
+
+      .card {
+        background: rgba(15, 23, 34, 0.55);
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--border);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        animation: rise 0.6s ease both;
+      }
+
+      .card:nth-child(2) { animation-delay: 0.05s; }
+      .card:nth-child(3) { animation-delay: 0.1s; }
+
+      @keyframes rise {
+        from { transform: translateY(14px); opacity: 0; }
+        to { transform: translateY(0); opacity: 1; }
+      }
+
+      .media {
+        position: relative;
+        aspect-ratio: 4 / 3;
+        background: rgba(255, 255, 255, 0.05);
+      }
+
+      .media img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+
+      .badges {
+        position: absolute;
+        left: 12px;
+        bottom: 12px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .badge {
+        padding: 4px 10px;
+        border-radius: var(--radius-pill);
+        background: rgba(11, 15, 20, 0.65);
+        border: 1px solid var(--border);
+        font-size: 11px;
+        font-weight: 600;
+      }
+
+      .badge.accent {
+        background: rgba(141, 213, 255, 0.12);
+        border-color: rgba(141, 213, 255, 0.35);
+        color: var(--accent);
+      }
+
+      .badge.warning {
+        background: rgba(167, 255, 206, 0.12);
+        border-color: rgba(167, 255, 206, 0.35);
+        color: var(--accent-2);
+      }
+
+      .body {
+        padding: 16px 16px 18px;
+        display: grid;
+        gap: 12px;
+      }
+
+      .title {
+        font-size: 16px;
+        font-weight: 600;
+        margin: 0;
+      }
+
+      .summary {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .tag-grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      }
+
+      .tag-section {
+        border: 1px dashed rgba(255, 255, 255, 0.12);
+        border-radius: var(--radius-md);
+        padding: 8px 10px;
+        background: rgba(15, 22, 32, 0.55);
+      }
+
+      .tag-title {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .chip {
+        padding: 4px 8px;
+        border-radius: var(--radius-pill);
+        background: var(--chip);
+        border: 1px solid var(--border);
+        font-size: 11px;
+      }
+
+      .chip.empty {
+        color: var(--muted);
+        background: transparent;
+        border-style: dashed;
+      }
+
+      .footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        border-top: 1px solid var(--border);
+        padding-top: 10px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .button {
+        border: 1px solid var(--border);
+        padding: 6px 10px;
+        border-radius: var(--radius-pill);
+        background: rgba(15, 22, 32, 0.7);
+        color: var(--text);
+        cursor: pointer;
+        font-size: 12px;
+      }
+
+      .details {
+        display: none;
+        gap: 8px;
+        font-size: 12px;
+        color: var(--muted);
+        border-top: 1px dashed var(--border);
+        padding-top: 12px;
+      }
+
+      .card.expanded .details {
+        display: grid;
+      }
+
+      .detail-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      @media (max-width: 700px) {
+        .page { padding: 24px 16px 60px; }
+        .tag-grid { grid-template-columns: 1fr 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header>
+        <div>
+          <h1>Pinterest Tag Cards</h1>
+          <div class="subtitle">Mockup: rich tag visibility for AI‑tagged pins.</div>
+        </div>
+        <div class="filters">
+          <span class="pill">Source: Pinterest</span>
+          <span class="pill">Model: gemini-2.5-flash</span>
+          <span class="pill">Image kind: thumb</span>
+        </div>
+      </header>
+
+      <section class="grid">
+        <article class="card" data-card>
+          <div class="media">
+            <img src="https://images.unsplash.com/photo-1502005097973-6a7082348e28?auto=format&fit=crop&w=1200&q=60" alt="" />
+            <div class="badges">
+              <span class="badge">Pinterest</span>
+              <span class="badge accent">interior</span>
+              <span class="badge">confidence 0.70</span>
+              <span class="badge warning">tagged</span>
+            </div>
+          </div>
+          <div class="body">
+            <div>
+              <div class="title">Warm white‑oak kitchen with brass hardware</div>
+              <div class="summary">Airy galley kitchen with white oak millwork, slab cabinets, and brass pulls. Soft daylight and a neutral palette create a calm, modern mood.</div>
+              <div class="meta">
+                <span>Board: Kitchen Ideas</span>
+                <span>Saved: Feb 2, 2026</span>
+                <span>Source: architecturaldigest.com</span>
+              </div>
+            </div>
+
+            <div class="tag-grid">
+              <div class="tag-section">
+                <div class="tag-title">Rooms</div>
+                <div class="chips">
+                  <span class="chip">kitchen</span>
+                </div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Elements</div>
+                <div class="chips">
+                  <span class="chip">cabinets</span>
+                  <span class="chip">backsplash</span>
+                  <span class="chip">island</span>
+                </div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Materials</div>
+                <div class="chips">
+                  <span class="chip">white oak</span>
+                  <span class="chip">quartz</span>
+                  <span class="chip">brass</span>
+                </div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Colors</div>
+                <div class="chips">
+                  <span class="chip">warm white</span>
+                  <span class="chip">sand</span>
+                  <span class="chip">brass</span>
+                </div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Styles</div>
+                <div class="chips">
+                  <span class="chip">modern</span>
+                  <span class="chip">minimal</span>
+                </div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Lighting</div>
+                <div class="chips">
+                  <span class="chip">recessed</span>
+                  <span class="chip">pendant</span>
+                </div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Fixtures</div>
+                <div class="chips">
+                  <span class="chip">bridge faucet</span>
+                </div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Appliances</div>
+                <div class="chips">
+                  <span class="chip">range</span>
+                  <span class="chip">paneled fridge</span>
+                </div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Text in image</div>
+                <div class="chips">
+                  <span class="chip empty">none</span>
+                </div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Brands / Products</div>
+                <div class="chips">
+                  <span class="chip">schoolhouse</span>
+                  <span class="chip">kohler</span>
+                </div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Tags</div>
+                <div class="chips">
+                  <span class="chip">cabinet hardware</span>
+                  <span class="chip">slab fronts</span>
+                  <span class="chip">natural light</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="footer">
+              <div>AI model: gemini‑2.5‑flash · run: 4a12…</div>
+              <button class="button" data-toggle>Details</button>
+            </div>
+
+            <div class="details">
+              <div class="detail-row"><span>Asset ID</span><span>7b18…92f</span></div>
+              <div class="detail-row"><span>Tagged at</span><span>2026‑02‑05 18:31</span></div>
+              <div class="detail-row"><span>Labels count</span><span>28</span></div>
+              <div class="detail-row"><span>JSON source</span><span>gemini response</span></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="card" data-card>
+          <div class="media">
+            <img src="https://images.unsplash.com/photo-1507089947368-19c1da9775ae?auto=format&fit=crop&w=1200&q=60" alt="" />
+            <div class="badges">
+              <span class="badge">Pinterest</span>
+              <span class="badge accent">interior</span>
+              <span class="badge">confidence 0.66</span>
+              <span class="badge warning">tagged</span>
+            </div>
+          </div>
+          <div class="body">
+            <div>
+              <div class="title">Moody bathroom with matte black fixtures</div>
+              <div class="summary">Compact bathroom with vertical subway tile, arched mirror, and matte black hardware. Balanced by warm wood vanity and soft sconces.</div>
+              <div class="meta">
+                <span>Board: Bath</span>
+                <span>Saved: Jan 18, 2026</span>
+                <span>Source: domino.com</span>
+              </div>
+            </div>
+
+            <div class="tag-grid">
+              <div class="tag-section">
+                <div class="tag-title">Rooms</div>
+                <div class="chips"><span class="chip">bathroom</span></div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Elements</div>
+                <div class="chips">
+                  <span class="chip">vanity</span>
+                  <span class="chip">tile</span>
+                  <span class="chip">mirror</span>
+                </div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Materials</div>
+                <div class="chips">
+                  <span class="chip">ceramic tile</span>
+                  <span class="chip">oak</span>
+                  <span class="chip">black metal</span>
+                </div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Colors</div>
+                <div class="chips">
+                  <span class="chip">charcoal</span>
+                  <span class="chip">white</span>
+                  <span class="chip">warm wood</span>
+                </div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Styles</div>
+                <div class="chips"><span class="chip">modern</span><span class="chip">scandi</span></div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Lighting</div>
+                <div class="chips"><span class="chip">sconce</span><span class="chip">warm light</span></div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Fixtures</div>
+                <div class="chips"><span class="chip">matte black faucet</span></div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Appliances</div>
+                <div class="chips"><span class="chip empty">none</span></div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Text in image</div>
+                <div class="chips"><span class="chip empty">none</span></div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Brands / Products</div>
+                <div class="chips"><span class="chip">rejuvenation</span></div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Tags</div>
+                <div class="chips"><span class="chip">arched mirror</span><span class="chip">vertical tile</span></div>
+              </div>
+            </div>
+
+            <div class="footer">
+              <div>AI model: gemini‑2.5‑flash · run: c90b…</div>
+              <button class="button" data-toggle>Details</button>
+            </div>
+
+            <div class="details">
+              <div class="detail-row"><span>Asset ID</span><span>b2aa…012</span></div>
+              <div class="detail-row"><span>Tagged at</span><span>2026‑02‑05 18:31</span></div>
+              <div class="detail-row"><span>Labels count</span><span>23</span></div>
+              <div class="detail-row"><span>Notes</span><span>Muted palette, brass accent desired</span></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="card" data-card>
+          <div class="media">
+            <img src="https://images.unsplash.com/photo-1472220625704-91e1462799b2?auto=format&fit=crop&w=1200&q=60" alt="" />
+            <div class="badges">
+              <span class="badge">Pinterest</span>
+              <span class="badge accent">exterior</span>
+              <span class="badge">confidence 0.63</span>
+              <span class="badge warning">tagged</span>
+            </div>
+          </div>
+          <div class="body">
+            <div>
+              <div class="title">Cedar‑sided cabin with black windows</div>
+              <div class="summary">Modern cabin exterior with vertical cedar siding, black steel windows, and a stone plinth. Low‑profile roofline and muted landscaping.</div>
+              <div class="meta">
+                <span>Board: Exteriors</span>
+                <span>Saved: Dec 12, 2025</span>
+                <span>Source: dezeen.com</span>
+              </div>
+            </div>
+
+            <div class="tag-grid">
+              <div class="tag-section">
+                <div class="tag-title">Rooms</div>
+                <div class="chips"><span class="chip empty">n/a</span></div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Elements</div>
+                <div class="chips"><span class="chip">siding</span><span class="chip">window</span><span class="chip">roof</span></div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Materials</div>
+                <div class="chips"><span class="chip">cedar</span><span class="chip">stone</span><span class="chip">steel</span></div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Colors</div>
+                <div class="chips"><span class="chip">black</span><span class="chip">warm wood</span></div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Styles</div>
+                <div class="chips"><span class="chip">modern cabin</span><span class="chip">minimal</span></div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Lighting</div>
+                <div class="chips"><span class="chip">natural light</span></div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Fixtures</div>
+                <div class="chips"><span class="chip empty">none</span></div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Appliances</div>
+                <div class="chips"><span class="chip empty">none</span></div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Text in image</div>
+                <div class="chips"><span class="chip empty">none</span></div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Brands / Products</div>
+                <div class="chips"><span class="chip empty">none</span></div>
+              </div>
+              <div class="tag-section">
+                <div class="tag-title">Tags</div>
+                <div class="chips"><span class="chip">vertical siding</span><span class="chip">black windows</span></div>
+              </div>
+            </div>
+
+            <div class="footer">
+              <div>AI model: gemini‑2.5‑flash · run: 1a28…</div>
+              <button class="button" data-toggle>Details</button>
+            </div>
+
+            <div class="details">
+              <div class="detail-row"><span>Asset ID</span><span>fe08…b02</span></div>
+              <div class="detail-row"><span>Tagged at</span><span>2026‑02‑05 18:31</span></div>
+              <div class="detail-row"><span>Labels count</span><span>19</span></div>
+              <div class="detail-row"><span>Annotation</span><span>Consider warm landscape palette</span></div>
+            </div>
+          </div>
+        </article>
+      </section>
+    </div>
+
+    <script>
+      document.querySelectorAll("[data-toggle]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const card = btn.closest(".card");
+          card.classList.toggle("expanded");
+          btn.textContent = card.classList.contains("expanded") ? "Hide" : "Details";
+        });
+      });
+    </script>
+  </body>
+</html>

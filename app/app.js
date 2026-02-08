@@ -2,7 +2,7 @@ const state = {
   assets: [],
   collections: [],
   activeCollectionId: "",
-  targetCollectionId: "",
+  viewCollectionId: "",
   selected: new Set(),
   expanded: new Set(),
   q: "",
@@ -17,6 +17,7 @@ const state = {
   dragging: null,
   activeAnnotationId: null,
   noteTimers: {},
+  assetsRequestSeq: 0,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -144,58 +145,92 @@ function thumbFor(a) {
   return a.image_url || "";
 }
 
+function getCollectionById(collectionId) {
+  if (!collectionId) return null;
+  return state.collections.find((c) => c.id === collectionId) || null;
+}
+
+function getActiveCollection() {
+  return getCollectionById(state.activeCollectionId);
+}
+
+function getViewCollection() {
+  return getCollectionById(state.viewCollectionId);
+}
+
+function activeFilterParts() {
+  const parts = [];
+  if (state.q.trim()) parts.push(`search "${state.q.trim()}"`);
+  if (state.sources.size > 0) parts.push(`${state.sources.size} source filter${state.sources.size === 1 ? "" : "s"}`);
+  if (state.boards.size > 0) parts.push(`${state.boards.size} source tag filter${state.boards.size === 1 ? "" : "s"}`);
+  if (state.labels.size > 0) parts.push(`${state.labels.size} AI tag filter${state.labels.size === 1 ? "" : "s"}`);
+  return parts;
+}
+
+async function selectCollection(collectionId) {
+  state.activeCollectionId = collectionId || "";
+  state.viewCollectionId = collectionId || "";
+  renderCollections();
+  setStats();
+  await loadAssets();
+}
+
 function setStats() {
-  const viewLabel = state.activeCollectionId ? "Viewing collection" : "Viewing all items";
-  const targetCollection = state.collections.find((c) => c.id === state.targetCollectionId);
-  $("#stats").textContent = `${viewLabel} • ${state.assets.length} items`;
+  const activeCollection = getActiveCollection();
+  const viewCollection = getViewCollection();
+  const filters = activeFilterParts();
+  const scope = viewCollection ? `Collection "${viewCollection.name}"` : "All items";
+  const filterState = filters.length ? "Filtered" : "Unfiltered";
+  const destination = activeCollection ? ` • Add-to "${activeCollection.name}"` : "";
+  $("#canvasContext").textContent = `Canvas: ${scope} • ${filterState}${destination}`;
+  $("#stats").textContent = `${state.assets.length} items shown${filters.length ? ` • ${filters.join(" • ")}` : ""}`;
   $("#addSelected").disabled = state.selected.size === 0;
+  $("#addSelectedToCollection").textContent = activeCollection ? `Add Selected to "${activeCollection.name}"` : "Add Selected to Collection";
+  $("#addSelectedToCollection").disabled = state.selected.size === 0 || !activeCollection;
+  $("#removeSelectedFromCollection").textContent = viewCollection
+    ? `Remove Selected from "${viewCollection.name}"`
+    : "Remove Selected from Collection";
+  $("#removeSelectedFromCollection").disabled = state.selected.size === 0 || !viewCollection;
   $("#addFiltered").disabled = state.assets.length === 0;
   $("#clearSelection").disabled = state.selected.size === 0;
-  if (!targetCollection) {
-    $("#collectionHint").textContent = "Create or pick a collection first.";
+  if (!activeCollection) {
+    $("#collectionHint").textContent =
+      state.selected.size > 0
+        ? 'Pick a collection to enable "Add Selected to Collection".'
+        : "No collection selected. Pick one to enable direct add and tray add.";
+  } else if (!viewCollection) {
+    $("#collectionHint").textContent = `Selected collection: "${activeCollection.name}". Canvas is showing all items.`;
   } else if (state.tray.length > 0) {
-    $("#collectionHint").textContent = `Ready to add tray items to “${targetCollection.name}”.`;
+    $("#collectionHint").textContent = `Selected collection: "${activeCollection.name}". Ready to add ${state.tray.length} tray item${state.tray.length === 1 ? "" : "s"}.`;
   } else {
-    $("#collectionHint").textContent = `Selected collection: “${targetCollection.name}”. Add items to tray to update it.`;
+    $("#collectionHint").textContent = `Selected collection: "${activeCollection.name}". Add selected items, remove selected items, or use tray for batch curation.`;
   }
   $("#trayCount").textContent = `${state.tray.length} items`;
   $("#createFromTray").disabled = state.tray.length === 0;
-  $("#addTrayToCollection").disabled = state.tray.length === 0 || !state.targetCollectionId;
+  $("#addTrayToCollection").textContent = activeCollection ? `Add Tray to "${activeCollection.name}"` : "Add Tray to Collection";
+  $("#addTrayToCollection").disabled = state.tray.length === 0 || !activeCollection;
   $("#clearTray").disabled = state.tray.length === 0;
 }
 
 function renderCollections() {
   const wrap = $("#collections");
   wrap.innerHTML = "";
+  if (!state.collections.length) {
+    wrap.innerHTML = '<div class="muted">No collections yet.</div>';
+    return;
+  }
   for (const c of state.collections) {
+    const isViewing = c.id === state.viewCollectionId;
+    const isDestination = c.id === state.activeCollectionId;
+    const stateText = isViewing ? "Viewing" : isDestination ? "Destination" : "";
     const el = document.createElement("div");
-    el.className = `listItem ${c.id === state.activeCollectionId ? "on" : ""}`;
-    el.innerHTML = `<div><strong>${c.name}</strong></div><div class="muted">${c.count} items</div>`;
-    el.onclick = () => {
-      state.targetCollectionId = c.id;
-      $("#collectionSelect").value = c.id;
-      renderCollections();
-      setStats();
+    el.className = `listItem ${isViewing ? "on" : ""}`;
+    el.innerHTML = `<div><strong>${c.name}</strong></div><div class="muted">${c.count} items${stateText ? ` • ${stateText}` : ""}</div>`;
+    el.onclick = async () => {
+      await selectCollection(c.id);
     };
     wrap.appendChild(el);
   }
-
-  const sel = $("#collectionSelect");
-  sel.innerHTML = "";
-  const placeholder = document.createElement("option");
-  placeholder.value = "";
-  placeholder.textContent = "Select collection…";
-  sel.appendChild(placeholder);
-  for (const c of state.collections) {
-    const opt = document.createElement("option");
-    opt.value = c.id;
-    opt.textContent = c.name;
-    sel.appendChild(opt);
-  }
-  if (!state.targetCollectionId && state.collections.length) {
-    state.targetCollectionId = state.collections[0].id;
-  }
-  if (state.targetCollectionId) sel.value = state.targetCollectionId;
 }
 
 function renderGrid() {
@@ -262,7 +297,14 @@ function toggleSelect(id) {
 async function loadCollections() {
   const data = await api("/api/collections");
   state.collections = data.collections;
+  if (state.activeCollectionId && !state.collections.some((c) => c.id === state.activeCollectionId)) {
+    state.activeCollectionId = "";
+  }
+  if (state.viewCollectionId && !state.collections.some((c) => c.id === state.viewCollectionId)) {
+    state.viewCollectionId = "";
+  }
   renderCollections();
+  setStats();
 }
 
 async function loadTray() {
@@ -273,12 +315,14 @@ async function loadTray() {
 }
 
 async function loadAssets() {
+  const requestSeq = ++state.assetsRequestSeq;
   const q = encodeURIComponent(state.q || "");
   const source = encodeURIComponent(Array.from(state.sources).join(","));
   const board = encodeURIComponent(Array.from(state.boards).join(","));
   const label = encodeURIComponent(Array.from(state.labels).join(","));
-  const col = encodeURIComponent(state.activeCollectionId || "");
+  const col = encodeURIComponent(state.viewCollectionId || "");
   const data = await api(`/api/assets?q=${q}&source=${source}&board=${board}&label=${label}&collection_id=${col}`);
+  if (requestSeq !== state.assetsRequestSeq) return;
   state.assets = data.assets.map((a) => ({ ...a, ai: parseAi(a) }));
   renderGrid();
 }
@@ -456,17 +500,11 @@ $("#search").addEventListener("input", (e) => {
   loadAssets();
 });
 // top source dropdown not used; filters panel handles sources
-$("#showAll").onclick = () => {
-  state.activeCollectionId = "";
+$("#showAll").onclick = async () => {
+  state.viewCollectionId = "";
   renderCollections();
-  loadAssets();
-};
-
-$("#viewCollection").onclick = () => {
-  if (!state.targetCollectionId) return;
-  state.activeCollectionId = state.targetCollectionId;
-  renderCollections();
-  loadAssets();
+  setStats();
+  await loadAssets();
 };
 
 $("#selectAll").onclick = () => {
@@ -479,22 +517,20 @@ $("#newCollection").onclick = async () => {
   const name = prompt("Collection name:", "Kitchen — Round 1");
   if (!name) return;
   const res = await api("/api/collections", { method: "POST", body: JSON.stringify({ name }) });
-  state.collections.unshift(res.collection);
-  state.targetCollectionId = res.collection.id;
-  renderCollections();
+  await loadCollections();
+  await selectCollection(res.collection.id);
 };
 
 $("#deleteCollection").onclick = async () => {
-  if (!state.targetCollectionId) return;
-  const c = state.collections.find((x) => x.id === state.targetCollectionId);
+  const collectionId = state.activeCollectionId;
+  if (!collectionId) return;
+  const c = state.collections.find((x) => x.id === collectionId);
   const ok = confirm(`Delete collection "${c ? c.name : ""}"? This cannot be undone.`);
   if (!ok) return;
   try {
-    await api(`/api/collections/${state.targetCollectionId}`, { method: "DELETE" });
-    state.collections = state.collections.filter((x) => x.id !== state.targetCollectionId);
-    state.targetCollectionId = "";
+    await api(`/api/collections/${collectionId}`, { method: "DELETE" });
     state.activeCollectionId = "";
-    renderCollections();
+    if (state.viewCollectionId === collectionId) state.viewCollectionId = "";
     await loadCollections();
     await loadAssets();
   } catch (e) {
@@ -502,12 +538,10 @@ $("#deleteCollection").onclick = async () => {
     try {
       await api(`/api/collections`, {
         method: "DELETE",
-        body: JSON.stringify({ id: state.targetCollectionId }),
+        body: JSON.stringify({ id: collectionId }),
       });
-      state.collections = state.collections.filter((x) => x.id !== state.targetCollectionId);
-      state.targetCollectionId = "";
       state.activeCollectionId = "";
-      renderCollections();
+      if (state.viewCollectionId === collectionId) state.viewCollectionId = "";
       await loadCollections();
       await loadAssets();
     } catch (e2) {
@@ -526,6 +560,42 @@ $("#addSelected").onclick = async () => {
   await loadAssets();
 };
 
+$("#addSelectedToCollection").onclick = async () => {
+  if (!state.activeCollectionId || state.selected.size === 0) return;
+  try {
+    await api(`/api/collections/${state.activeCollectionId}/items`, {
+      method: "POST",
+      body: JSON.stringify({ asset_ids: Array.from(state.selected) }),
+    });
+    state.selected.clear();
+    await loadCollections();
+    await loadAssets();
+  } catch (e) {
+    alert(`Add selected to collection failed: ${e.message || e}`);
+  }
+};
+
+$("#removeSelectedFromCollection").onclick = async () => {
+  if (!state.viewCollectionId || state.selected.size === 0) return;
+  const ids = Array.from(state.selected);
+  const col = getViewCollection();
+  const ok = confirm(
+    `Remove ${ids.length} selected item${ids.length === 1 ? "" : "s"} from "${col ? col.name : "this collection"}"?`
+  );
+  if (!ok) return;
+  try {
+    await api(`/api/collections/${state.viewCollectionId}/items/remove`, {
+      method: "POST",
+      body: JSON.stringify({ asset_ids: ids }),
+    });
+    state.selected.clear();
+    await loadCollections();
+    await loadAssets();
+  } catch (e) {
+    alert(`Remove from collection failed: ${e.message || e}`);
+  }
+};
+
 $("#addFiltered").onclick = async () => {
   const ids = state.assets.map((a) => a.id);
   await api(`/api/tray/add`, {
@@ -536,6 +606,7 @@ $("#addFiltered").onclick = async () => {
   await loadTray();
   await loadAssets();
 };
+
 $("#clearSelection").onclick = () => {
   state.selected.clear();
   setStats();
@@ -622,12 +693,6 @@ $("#floatingText").addEventListener("keydown", (e) => {
   }
 });
 
-$("#collectionSelect").onchange = (e) => {
-  state.targetCollectionId = e.target.value || "";
-  renderCollections();
-  setStats();
-};
-
 // refresh button removed
 
 async function init() {
@@ -705,23 +770,23 @@ $("#clearTray").onclick = async () => {
 $("#createFromTray").onclick = async () => {
   const name = prompt("Collection name:", "Curated — Round 1");
   if (!name) return;
-  await api("/api/tray/create-collection", {
+  const res = await api("/api/tray/create-collection", {
     method: "POST",
     body: JSON.stringify({ name }),
   });
   await loadCollections();
   await loadTray();
+  await selectCollection(res.collection.id);
 };
 
 $("#addTrayToCollection").onclick = async () => {
-  if (!state.targetCollectionId || state.tray.length === 0) return;
+  if (!state.activeCollectionId || state.tray.length === 0) return;
   try {
-    await api(`/api/collections/${state.targetCollectionId}/items`, {
+    await api(`/api/collections/${state.activeCollectionId}/items`, {
       method: "POST",
       body: JSON.stringify({ asset_ids: state.tray.map((x) => x.id) }),
     });
     await api("/api/tray/clear", { method: "POST" });
-    state.activeCollectionId = state.targetCollectionId;
     await loadCollections();
     await loadTray();
     await loadAssets();

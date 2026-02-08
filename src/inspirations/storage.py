@@ -32,12 +32,14 @@ def _ext_from_content_type(ct: str | None) -> str | None:
         "image/webp": ".webp",
         "image/gif": ".gif",
         "image/svg+xml": ".svg",
+        "image/bmp": ".bmp",
+        "image/x-ms-bmp": ".bmp",
     }.get(ct)
 
 
 def _ext_from_url(url: str) -> str | None:
     path = urlparse(url).path
-    m = re.search(r"(\\.jpg|\\.jpeg|\\.png|\\.webp|\\.gif)$", path, re.IGNORECASE)
+    m = re.search(r"(\.jpg|\.jpeg|\.png|\.webp|\.gif|\.bmp)$", path, re.IGNORECASE)
     if not m:
         return None
     ext = m.group(1).lower()
@@ -53,6 +55,8 @@ def _sniff_image_ext(chunk: bytes) -> str | None:
         return ".gif"
     if chunk.startswith(b"RIFF") and chunk[8:12] == b"WEBP":
         return ".webp"
+    if chunk.startswith(b"BM"):
+        return ".bmp"
     return None
 
 
@@ -152,9 +156,10 @@ def download_url_to_store(
         ct = resp.headers.get("Content-Type")
         ct_short = (ct or "").split(";")[0].strip().lower()
         if ct_short and not ct_short.startswith("image/"):
-            raise ValueError(f"Non-image content-type: {ct_short}")
+            # Some hosts return octet-stream for images (e.g., .bmp).
+            if ct_short not in ("application/octet-stream",):
+                raise ValueError(f"Non-image content-type: {ct_short}")
         ext = _ext_from_content_type(ct) or _ext_from_url(url)
-        out_path = dest_dir / f"{filename_stem}{ext}"
 
         # pre-check size if available
         clen = resp.headers.get("Content-Length")
@@ -165,20 +170,21 @@ def download_url_to_store(
             except ValueError:
                 pass
 
+        first = resp.read(1024 * 64)
+        if first:
+            total += len(first)
+            if total > max_bytes:
+                raise ValueError(f"Refusing to download >{max_bytes} bytes: {url}")
+        if ext is None:
+            sniff = _sniff_image_ext(first)
+            if not sniff:
+                raise ValueError("Unknown image type (missing content-type)")
+            ext = sniff
+
+        out_path = dest_dir / f"{filename_stem}{ext}"
         tmp_path = out_path.with_suffix(out_path.suffix + ".part")
         with open(tmp_path, "wb") as f:
-            first = resp.read(1024 * 64)
             if first:
-                total += len(first)
-                if total > max_bytes:
-                    raise ValueError(f"Refusing to download >{max_bytes} bytes: {url}")
-                if ext is None:
-                    sniff = _sniff_image_ext(first)
-                    if not sniff:
-                        raise ValueError("Unknown image type (missing content-type)")
-                    ext = sniff
-                    out_path = dest_dir / f"{filename_stem}{ext}"
-                    tmp_path = out_path.with_suffix(out_path.suffix + ".part")
                 sha.update(first)
                 f.write(first)
             while True:
