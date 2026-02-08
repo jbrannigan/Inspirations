@@ -24,6 +24,7 @@ const state = {
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+const IMAGE_SUFFIX_RE = /\.(jpg|jpeg|png|webp|gif|bmp|svg)(\?.*)?$/i;
 
 function escapeHtml(value) {
   return (value || "")
@@ -151,10 +152,33 @@ function formatApiError(err) {
   return msg;
 }
 
+function looksLikeImageRef(value) {
+  const text = `${value || ""}`.trim().toLowerCase();
+  if (!text) return false;
+  if (IMAGE_SUFFIX_RE.test(text)) return true;
+  if (text.includes(".jpg?") || text.includes(".jpeg?") || text.includes(".png?")) return true;
+  return false;
+}
+
+function sourceHost(value) {
+  const text = `${value || ""}`.trim();
+  if (!text) return "";
+  try {
+    return new URL(text).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function previewForAsset(a) {
+  if (a.thumb_path) return { url: `/media/${a.id}?kind=thumb`, kind: "thumb" };
+  if (a.stored_path && looksLikeImageRef(a.stored_path)) return { url: `/media/${a.id}?kind=original`, kind: "stored" };
+  if (a.image_url && looksLikeImageRef(a.image_url)) return { url: a.image_url, kind: "remote" };
+  return { url: "", kind: "none" };
+}
+
 function thumbFor(a) {
-  if (a.thumb_path) return `/media/${a.id}?kind=thumb`;
-  if (a.stored_path) return `/media/${a.id}?kind=original`;
-  return a.image_url || "";
+  return previewForAsset(a).url;
 }
 
 function getCollectionById(collectionId) {
@@ -284,12 +308,15 @@ function renderGrid() {
   for (const a of state.assets) {
     const el = document.createElement("div");
     el.className = `card ${state.selected.has(a.id) ? "selected" : ""} ${state.expanded.has(a.id) ? "expanded" : ""}`;
-    const img = thumbFor(a);
+    const preview = previewForAsset(a);
+    const img = preview.url;
     const ai = a.ai;
     const summary = ai?.summary || a.ai_summary || a.description || "";
     const imageType = ai?.image_type ? `${ai.image_type}` : "";
     const labelCount = aiLabelCount(ai);
     const top = topTags(ai, 6);
+    const host = sourceHost(a.source_ref || a.image_url || "");
+    const placeholderLabel = host ? `No preview (${host})` : "No preview image";
     const metaParts = [];
     if (typeof a.score === "number") {
       metaParts.push(`Similarity: ${(a.score * 100).toFixed(1)}%`);
@@ -304,7 +331,11 @@ function renderGrid() {
     const createdDate = `${a.created_at || ""}`.slice(0, 10);
     el.innerHTML = `
       <div class="thumb">
-        ${img ? `<img src="${img}" />` : ""}
+        ${
+          img
+            ? `<img src="${escapeHtml(img)}" loading="lazy" alt="" />`
+            : `<div class="thumbPlaceholder"><div class="thumbPlaceholderText">${escapeHtml(placeholderLabel)}</div></div>`
+        }
         <div class="badge">${a.source}</div>
         <label class="selectBox"><input type="checkbox" ${state.selected.has(a.id) ? "checked" : ""} /></label>
       </div>
@@ -340,6 +371,21 @@ function renderGrid() {
         </div>
       </div>
     `;
+    const imageEl = el.querySelector(".thumb img");
+    if (imageEl) {
+      imageEl.addEventListener("error", () => {
+        const thumbEl = el.querySelector(".thumb");
+        if (!thumbEl || thumbEl.querySelector(".thumbPlaceholder")) return;
+        imageEl.remove();
+        const placeholder = document.createElement("div");
+        placeholder.className = "thumbPlaceholder";
+        const text = document.createElement("div");
+        text.className = "thumbPlaceholderText";
+        text.textContent = placeholderLabel;
+        placeholder.appendChild(text);
+        thumbEl.prepend(placeholder);
+      });
+    }
     const checkbox = el.querySelector("input");
     checkbox.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -424,7 +470,15 @@ async function openModal(asset) {
   state.modalAsset = asset;
   $("#modalTitle").textContent = asset.title || "(untitled)";
   $("#modalMeta").textContent = `${asset.source} • ${asset.source_ref || ""}`;
-  $("#modalImage").src = thumbFor(asset);
+  const modalImage = $("#modalImage");
+  const previewUrl = thumbFor(asset);
+  if (previewUrl) {
+    modalImage.src = previewUrl;
+    modalImage.style.display = "block";
+  } else {
+    modalImage.removeAttribute("src");
+    modalImage.style.display = "none";
+  }
   $("#assetNotes").value = asset.notes || "";
   const link = $("#sourceLink");
   if (asset.source_ref) {
@@ -444,6 +498,7 @@ function closeModal() {
   $("#modal").classList.add("hidden");
   state.modalAsset = null;
   state.annotations = [];
+  $("#modalImage").style.display = "block";
 }
 
 async function loadAnnotations(assetId) {

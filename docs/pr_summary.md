@@ -12,6 +12,7 @@
 - Added zero-touch local post-merge maintenance (stale branch cleanup + checkpoint snapshot).
 - Fixed frontend UX regressions: responsive mobile layout and graceful semantic-search error handling.
 - Fixed card expansion visibility for sparse records by showing explicit expanded details on all cards.
+- Improved link-card handling for non-image Facebook items (no broken thumbnails) and prioritized media-rich cards in canvas ordering.
 
 ## Key Changes
 - UI: `app/app.js`, `app/styles.css` now render AI summaries + tag buckets; expand-on-click; annotate button opens modal.
@@ -48,6 +49,9 @@
   - `app/app.js`: API error handling for `loadAssets()` and UI messaging for semantic search failures (e.g., missing `GEMINI_API_KEY`) without unhandled client errors.
   - Empty-state rendering now shows a clear error or “no results” message instead of silently failing.
   - Expanded card state now reveals a details panel (source link/import timestamps and no-AI hint) even when AI tags are absent.
+  - Non-image/broken-image cards now show an explicit link-style placeholder instead of a broken image icon.
+- Asset ordering:
+  - `src/inspirations/store.py` now prioritizes cards with usable preview media (`thumb_path` first, then image-like `stored_path`, then image-like `image_url`) before recency in `/api/assets`.
 
 ## Testing
 - Unit tests:
@@ -59,6 +63,7 @@
 - Additional checks:
   - `python3 -m py_compile tools/post_merge_maintenance.py tools/session_checkpoint.py`
   - Browser UX smoke (Firefox headless, local): desktop + mobile flows passed for search, semantic mode, modal open/close, and tray actions.
+  - Added regression test in `tests/test_store.py` verifying preview-quality ordering in `list_assets`.
 
 ## Notes / Follow-ups
 - Provider-level Pinterest tagging is complete.
