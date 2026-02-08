@@ -198,6 +198,13 @@ function semanticSourceFilter() {
   return Array.from(state.sources)[0] || "";
 }
 
+function shortRef(value, max = 64) {
+  const text = `${value || ""}`.trim();
+  if (!text) return "";
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 1)}…`;
+}
+
 async function selectCollection(collectionId) {
   state.activeCollectionId = collectionId || "";
   state.viewCollectionId = collectionId || "";
@@ -291,6 +298,10 @@ function renderGrid() {
     metaParts.push(`Source: ${a.source}`);
     if (imageType) metaParts.push(`Type: ${imageType}`);
     const meta = metaParts.join(" • ");
+    const sourceRef = `${a.source_ref || ""}`.trim();
+    const sourceRefDisplay = shortRef(sourceRef);
+    const importedDate = `${a.imported_at || ""}`.slice(0, 10);
+    const createdDate = `${a.created_at || ""}`.slice(0, 10);
     el.innerHTML = `
       <div class="thumb">
         ${img ? `<img src="${img}" />` : ""}
@@ -303,6 +314,26 @@ function renderGrid() {
         <div class="cardMeta">${escapeHtml(meta)}</div>
         ${ai ? `<div class="compactTags">${renderChips(top)}</div>` : ""}
         ${ai ? `<div class="tagGrid">${renderTagSections(ai)}</div>` : ""}
+        <div class="expandedInfo">
+          <div class="expandedRow">
+            ${
+              sourceRef
+                ? `<a class="sourceRefInline" href="${escapeHtml(sourceRef)}" target="_blank" rel="noopener">${escapeHtml(sourceRefDisplay)}</a>`
+                : `<span class="muted">No source link</span>`
+            }
+          </div>
+          ${
+            importedDate
+              ? `<div class="expandedRow">Imported: ${escapeHtml(importedDate)}</div>`
+              : ""
+          }
+          ${
+            createdDate && createdDate !== importedDate
+              ? `<div class="expandedRow">Created: ${escapeHtml(createdDate)}</div>`
+              : ""
+          }
+          ${!ai ? '<div class="expandedRow muted">No AI tags available for this item.</div>' : ""}
+        </div>
         <div class="cardFooter">
           <div>AI: ${escapeHtml(a.ai_model || a.ai_provider || "—")} • ${labelCount} tags</div>
           <button class="miniBtn" data-annotate>Annotate</button>

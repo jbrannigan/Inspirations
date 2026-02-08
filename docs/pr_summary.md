@@ -11,6 +11,7 @@
 - Added hybrid ranking controls for semantic search (semantic + lexical blend with score threshold).
 - Added zero-touch local post-merge maintenance (stale branch cleanup + checkpoint snapshot).
 - Fixed frontend UX regressions: responsive mobile layout and graceful semantic-search error handling.
+- Fixed card expansion visibility for sparse records by showing explicit expanded details on all cards.
 
 ## Key Changes
 - UI: `app/app.js`, `app/styles.css` now render AI summaries + tag buckets; expand-on-click; annotate button opens modal.
@@ -46,6 +47,7 @@
   - `app/styles.css`: responsive layout rules for tablet/mobile so sidebars stack instead of overlaying card interactions.
   - `app/app.js`: API error handling for `loadAssets()` and UI messaging for semantic search failures (e.g., missing `GEMINI_API_KEY`) without unhandled client errors.
   - Empty-state rendering now shows a clear error or “no results” message instead of silently failing.
+  - Expanded card state now reveals a details panel (source link/import timestamps and no-AI hint) even when AI tags are absent.
 
 ## Testing
 - Unit tests:

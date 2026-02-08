@@ -71,7 +71,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .cardFooter { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); padding-top: 6px; }
 .compactTags { display: flex; flex-wrap: wrap; gap: 6px; }
 .miniBtn { border: 1px solid var(--border); background: rgba(15,22,32,0.7); color: var(--text); padding: 4px 8px; border-radius: 999px; font-size: 11px; cursor: pointer; }
+.expandedInfo { display: grid; gap: 4px; font-size: 11px; color: var(--muted); border-top: 1px dashed var(--border); padding-top: 6px; }
+.expandedRow { line-height: 1.35; }
+.sourceRefInline { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; word-break: break-word; }
+.sourceRefInline:hover { text-decoration: underline; }
 .card:not(.expanded) .tagGrid { display: none; }
+.card:not(.expanded) .expandedInfo { display: none; }
 .card.expanded .compactTags { display: none; }
 .card.expanded .cardSummary { -webkit-line-clamp: unset; overflow: visible; }
 .muted { color: var(--muted); font-size: 12px; }
