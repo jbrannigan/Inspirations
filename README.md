@@ -11,6 +11,7 @@ Inspirations ingests Pinterest saves, Facebook saves, and scanned pages into a s
   - Facebook saved-items ZIP exports
   - Local scan inbox (images and PDFs)
 - Downloads and stores originals locally with safe URL validation.
+- Resolves preview images from saved link pages (Open Graph/Twitter tags with `<img>` fallback) to backfill missing thumbnails.
 - Generates thumbnails for fast UI browsing.
 - Runs AI image tagging with Gemini and stores:
   - Full JSON payloads

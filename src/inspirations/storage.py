@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import html as html_lib
 import os
 import re
 import urllib.request
@@ -61,24 +62,87 @@ def _sniff_image_ext(chunk: bytes) -> str | None:
 
 
 def _extract_preview_image(html: str) -> str | None:
-    # Very small HTML parser for og:image / twitter:image
-    import re
+    candidates = _extract_preview_image_candidates(html)
+    return candidates[0] if candidates else None
 
-    patterns = [
+
+def _extract_preview_image_candidates(html: str) -> list[str]:
+    # Small HTML parser for preview image tags plus a best-effort <img> fallback.
+    meta_patterns = [
         r'<meta[^>]+property=["\']og:image:secure_url["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image:secure_url["\']',
         r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
-        r'<meta[^>]+name=["\']twitter:image:src["\'][^>]+content=["\']([^"\']+)["\']',
-        r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']',
         r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+        r'<meta[^>]+name=["\']twitter:image:src["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']twitter:image:src["\']',
+        r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']',
         r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']twitter:image["\']',
         r'<meta[^>]+itemprop=["\']image["\'][^>]+content=["\']([^"\']+)["\']',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+itemprop=["\']image["\']',
         r'<link[^>]+rel=["\']image_src["\'][^>]+href=["\']([^"\']+)["\']',
+        r'<link[^>]+href=["\']([^"\']+)["\'][^>]+rel=["\']image_src["\']',
     ]
-    for pat in patterns:
-        m = re.search(pat, html, re.IGNORECASE)
-        if m:
-            return m.group(1)
-    return None
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for pat in meta_patterns:
+        for m in re.finditer(pat, html, re.IGNORECASE):
+            val = html_lib.unescape((m.group(1) or "").strip())
+            if not val or val in seen:
+                continue
+            seen.add(val)
+            candidates.append(val)
+    if candidates:
+        return candidates
+
+    image_patterns = [
+        r'<img[^>]+src=["\']([^"\']+)["\']',
+        r'<img[^>]+data-src=["\']([^"\']+)["\']',
+        r'<img[^>]+data-original=["\']([^"\']+)["\']',
+    ]
+    for pat in image_patterns:
+        for m in re.finditer(pat, html, re.IGNORECASE):
+            val = html_lib.unescape((m.group(1) or "").strip())
+            if not val or val.startswith("data:") or val in seen:
+                continue
+            seen.add(val)
+            candidates.append(val)
+    return candidates
+
+
+def _normalize_preview_candidate(base_url: str, candidate: str) -> str | None:
+    cand = (candidate or "").strip()
+    if not cand:
+        return None
+    if cand.startswith("//"):
+        cand = "https:" + cand
+    elif cand.startswith("/"):
+        cand = urljoin(base_url, cand)
+    else:
+        p = urlparse(cand)
+        if not p.scheme:
+            cand = urljoin(base_url, cand)
+    if cand.startswith("http://"):
+        cand = "https://" + cand[len("http://") :]
+    return cand if cand.startswith("https://") else None
+
+
+def _is_tracking_preview(url: str) -> bool:
+    try:
+        p = urlparse(url)
+    except Exception:
+        return True
+    host = (p.hostname or "").lower()
+    path = (p.path or "").lower()
+    query = (p.query or "").lower()
+    if host.endswith("facebook.com") and path.startswith("/tr"):
+        return True
+    if host.endswith("pinterest.com") and path.startswith("/v3/"):
+        return True
+    if "event=init" in query and host.endswith("pinterest.com"):
+        return True
+    if "doubleclick.net" in host or "google-analytics.com" in host:
+        return True
+    return False
 
 
 def _youtube_thumb_url(url: str) -> str | None:
@@ -120,14 +184,12 @@ def resolve_image_url(url: str, *, timeout_s: float = 20.0, max_html_bytes: int 
             return url
         if ct in ("text/html", "application/xhtml+xml"):
             raw = resp.read(max_html_bytes).decode("utf-8", errors="ignore")
-            preview = _extract_preview_image(raw)
-            if preview:
-                if preview.startswith("//"):
-                    preview = "https:" + preview
-                if preview.startswith("/"):
-                    preview = urljoin(url, preview)
-            if preview and is_safe_public_url(preview, allow_http=False):
-                return preview
+            for candidate in _extract_preview_image_candidates(raw):
+                preview = _normalize_preview_candidate(url, candidate)
+                if not preview or _is_tracking_preview(preview):
+                    continue
+                if is_safe_public_url(preview, allow_http=False):
+                    return preview
             return None
         # if content-type missing, try sniff from the first chunk
         first = resp.read(64 * 1024)
