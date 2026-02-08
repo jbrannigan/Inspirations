@@ -19,6 +19,7 @@ const state = {
   noteTimers: {},
   assetsRequestSeq: 0,
   semanticMode: false,
+  error: "",
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -140,6 +141,16 @@ async function api(path, opts = {}) {
   return res.json();
 }
 
+function formatApiError(err) {
+  const msg = `${(err && err.message) || err || "Request failed"}`.trim();
+  if (!msg) return "Request failed";
+  try {
+    const parsed = JSON.parse(msg);
+    if (parsed && typeof parsed.error === "string" && parsed.error.trim()) return parsed.error.trim();
+  } catch {}
+  return msg;
+}
+
 function thumbFor(a) {
   if (a.thumb_path) return `/media/${a.id}?kind=thumb`;
   if (a.stored_path) return `/media/${a.id}?kind=original`;
@@ -203,7 +214,8 @@ function setStats() {
   const filterState = filters.length ? "Filtered" : "Unfiltered";
   const destination = activeCollection ? ` • Add-to "${activeCollection.name}"` : "";
   $("#canvasContext").textContent = `Canvas: ${scope} • ${filterState}${destination}`;
-  $("#stats").textContent = `${state.assets.length} items shown${filters.length ? ` • ${filters.join(" • ")}` : ""}`;
+  const statsBase = `${state.assets.length} items shown${filters.length ? ` • ${filters.join(" • ")}` : ""}`;
+  $("#stats").textContent = state.error ? `${statsBase} • Error: ${state.error}` : statsBase;
   $("#addSelected").disabled = state.selected.size === 0;
   $("#addSelectedToCollection").textContent = activeCollection ? `Add Selected to "${activeCollection.name}"` : "Add Selected to Collection";
   $("#addSelectedToCollection").disabled = state.selected.size === 0 || !activeCollection;
@@ -256,6 +268,12 @@ function renderCollections() {
 function renderGrid() {
   const wrap = $("#grid");
   wrap.innerHTML = "";
+  if (!state.assets.length) {
+    const message = state.error ? `Unable to load items: ${state.error}` : "No items match current filters.";
+    wrap.innerHTML = `<div class="muted">${escapeHtml(message)}</div>`;
+    setStats();
+    return;
+  }
   for (const a of state.assets) {
     const el = document.createElement("div");
     el.className = `card ${state.selected.has(a.id) ? "selected" : ""} ${state.expanded.has(a.id) ? "expanded" : ""}`;
@@ -341,25 +359,34 @@ async function loadAssets() {
   const requestSeq = ++state.assetsRequestSeq;
   const semanticQuery = semanticQueryFromInput(state.q);
   state.semanticMode = !!semanticQuery;
-  if (semanticQuery) {
-    const source = encodeURIComponent(semanticSourceFilter());
-    const q = encodeURIComponent(semanticQuery);
-    const data = await api(`/api/search/similar?q=${q}&source=${source}&limit=120`);
-    if (requestSeq !== state.assetsRequestSeq) return;
-    state.assets = (data.results || []).map((a) => ({ ...a, ai: parseAi(a) }));
-    renderGrid();
-    return;
-  }
+  try {
+    if (semanticQuery) {
+      const source = encodeURIComponent(semanticSourceFilter());
+      const q = encodeURIComponent(semanticQuery);
+      const data = await api(`/api/search/similar?q=${q}&source=${source}&limit=120`);
+      if (requestSeq !== state.assetsRequestSeq) return;
+      state.error = "";
+      state.assets = (data.results || []).map((a) => ({ ...a, ai: parseAi(a) }));
+      renderGrid();
+      return;
+    }
 
-  const q = encodeURIComponent(state.q || "");
-  const source = encodeURIComponent(Array.from(state.sources).join(","));
-  const board = encodeURIComponent(Array.from(state.boards).join(","));
-  const label = encodeURIComponent(Array.from(state.labels).join(","));
-  const col = encodeURIComponent(state.viewCollectionId || "");
-  const data = await api(`/api/assets?q=${q}&source=${source}&board=${board}&label=${label}&collection_id=${col}`);
-  if (requestSeq !== state.assetsRequestSeq) return;
-  state.assets = data.assets.map((a) => ({ ...a, ai: parseAi(a) }));
-  renderGrid();
+    const q = encodeURIComponent(state.q || "");
+    const source = encodeURIComponent(Array.from(state.sources).join(","));
+    const board = encodeURIComponent(Array.from(state.boards).join(","));
+    const label = encodeURIComponent(Array.from(state.labels).join(","));
+    const col = encodeURIComponent(state.viewCollectionId || "");
+    const data = await api(`/api/assets?q=${q}&source=${source}&board=${board}&label=${label}&collection_id=${col}`);
+    if (requestSeq !== state.assetsRequestSeq) return;
+    state.error = "";
+    state.assets = data.assets.map((a) => ({ ...a, ai: parseAi(a) }));
+    renderGrid();
+  } catch (err) {
+    if (requestSeq !== state.assetsRequestSeq) return;
+    state.assets = [];
+    state.error = formatApiError(err);
+    renderGrid();
+  }
 }
 
 async function openModal(asset) {
