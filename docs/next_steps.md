@@ -131,6 +131,32 @@ python3 -m inspirations ai similar --query "warm kitchen with white oak cabinets
 ```
 3. Tune semantic relevance and ranking quality after embedding backfill (prompt text, filters, and score cutoffs).
 
+## 7) New workstream: scanned recipes + split UX
+
+### Objective
+- Add a reliable scanned-recipe intake flow.
+- Prepare a future split where Inspirations excludes recipes by default and a separate iPad-first recipe UX handles kitchen usage.
+
+### Immediate execution plan
+1. Stand up recipe scan intake convention:
+```bash
+mkdir -p imports/scans/inbox/recipes imports/scans/inbox/inspirations
+```
+2. Import new scans in batches and generate thumbs:
+```bash
+PYTHONPATH=src python3 -m inspirations import scans --inbox imports/scans/inbox --format jpg
+PYTHONPATH=src python3 -m inspirations thumbs --size 512 --source scan
+```
+3. Create a working collection for scanned recipes and move known recipe scans there.
+4. Define classification target field (`recipe` vs `inspiration`) and apply first pass manually.
+5. Plan OCR + recipe-text extraction spike so recipe search quality does not depend only on titles.
+
+### Medium-term delivery milestones
+1. Add scan import telemetry (seen/imported/skipped/errors).
+2. Add recipe classification and filtering in API + UI.
+3. Add OCR-backed searchable text for scanned recipes.
+4. Add `/kitchen` recipe-focused route, then make it installable as a PWA for iPad.
+
 ## Files to know
 - `docs/handoff.md` — detailed run history + commands
 - `docs/tagging_pipeline.md` — pipeline flow + flags
