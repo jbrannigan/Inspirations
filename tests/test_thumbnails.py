@@ -56,7 +56,12 @@ class TestThumbnails(unittest.TestCase):
                     side_effect=RuntimeError("svg conversion failed"),
                 ):
                     with mock.patch("inspirations.thumbnails._can_use_pillow", return_value=False):
-                        report = generate_thumbnails(db, store_dir=store_dir, source="facebook")
+                        report = generate_thumbnails(
+                            db,
+                            store_dir=store_dir,
+                            source="facebook",
+                            tool="sips",
+                        )
                 row = db.query("select thumb_path from assets where id=?", ("a1",))[0]
 
             self.assertEqual(report["generated"], 1)
@@ -86,7 +91,12 @@ class TestThumbnails(unittest.TestCase):
                     side_effect=RuntimeError("conversion failed"),
                 ):
                     with mock.patch("inspirations.thumbnails._can_use_pillow", return_value=False):
-                        report = generate_thumbnails(db, store_dir=store_dir, source="facebook")
+                        report = generate_thumbnails(
+                            db,
+                            store_dir=store_dir,
+                            source="facebook",
+                            tool="sips",
+                        )
                 row = db.query("select thumb_path from assets where id=?", ("a1",))[0]
 
             self.assertEqual(report["generated"], 0)
