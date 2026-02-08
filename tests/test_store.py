@@ -84,6 +84,70 @@ class TestStore(unittest.TestCase):
             self.assertEqual(len(res_label), 1)
             self.assertEqual(len(res_summary), 1)
 
+    def test_list_assets_prioritizes_records_with_preview_media(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at, image_url)
+                    values (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "a1",
+                        "facebook",
+                        "https://example.com/article-a1",
+                        "No preview",
+                        "2026-02-08T00:00:00+00:00",
+                        "https://example.com/article-a1",
+                    ),
+                )
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at, image_url)
+                    values (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "a2",
+                        "facebook",
+                        "https://example.com/image-a2.jpg",
+                        "Remote image",
+                        "2026-02-07T00:00:00+00:00",
+                        "https://example.com/image-a2.jpg",
+                    ),
+                )
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at, stored_path)
+                    values (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "a3",
+                        "facebook",
+                        "https://example.com/article-a3",
+                        "Stored image",
+                        "2026-02-06T00:00:00+00:00",
+                        "/tmp/a3.jpg",
+                    ),
+                )
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at, thumb_path)
+                    values (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "a4",
+                        "facebook",
+                        "https://example.com/article-a4",
+                        "Thumb image",
+                        "2026-02-05T00:00:00+00:00",
+                        "/tmp/a4.jpg",
+                    ),
+                )
+                res = list_assets(db, source="facebook", limit=10)
+            self.assertEqual([r["id"] for r in res[:4]], ["a4", "a3", "a2", "a1"])
+
     def test_remove_items_from_collection(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "t.sqlite"

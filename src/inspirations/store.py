@@ -67,7 +67,30 @@ def list_assets(
     from assets a
     {join_sql}
     {where}
-    order by a.imported_at desc
+    order by
+      case
+        when a.thumb_path is not null and a.thumb_path != '' then 3
+        when a.stored_path is not null and (
+          lower(a.stored_path) like '%.jpg'
+          or lower(a.stored_path) like '%.jpeg'
+          or lower(a.stored_path) like '%.png'
+          or lower(a.stored_path) like '%.webp'
+          or lower(a.stored_path) like '%.gif'
+          or lower(a.stored_path) like '%.bmp'
+          or lower(a.stored_path) like '%.svg'
+        ) then 2
+        when a.image_url is not null and (
+          lower(a.image_url) like '%.jpg%'
+          or lower(a.image_url) like '%.jpeg%'
+          or lower(a.image_url) like '%.png%'
+          or lower(a.image_url) like '%.webp%'
+          or lower(a.image_url) like '%.gif%'
+          or lower(a.image_url) like '%.bmp%'
+          or lower(a.image_url) like '%.svg%'
+        ) then 1
+        else 0
+      end desc,
+      a.imported_at desc
     limit ? offset ?;
     """
     params += [limit, offset]

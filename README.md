@@ -20,6 +20,8 @@ Inspirations ingests Pinterest saves, Facebook saves, and scanned pages into a s
 - Serves a local web app with:
   - Search, source/board/label filtering
   - Compact card grid + expand-on-click tag details
+  - Preview-aware ordering (thumbs/originals/image URLs before link-only items)
+  - Link-style placeholders for non-image/broken-image cards (no broken thumbnail icon)
   - Notes and visual annotations
   - Collections and tray-to-collection workflows
 - Provides interactive and batch tagging pipelines plus status tooling for resumable work.
