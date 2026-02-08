@@ -493,3 +493,39 @@ PYTHONPATH=src python3 tools/session_sync.py
 
 Test result:
 - `36` tests passing.
+
+## Update: Semantic API + UI Entrypoint (2026-02-08 05:07Z)
+Implemented a lightweight semantic-query path in the app and backend.
+
+What changed:
+- API endpoint added: `GET /api/search/similar`
+  - Requires `GEMINI_API_KEY` in server environment
+  - Calls embedding-based cosine similarity search
+  - Returns asset-shaped rows plus similarity score
+- App search semantic mode:
+  - Prefix query with `sem:` (or `similar:`) and press Enter
+  - Uses `/api/search/similar` instead of `/api/assets`
+  - Similarity score is shown in card meta
+- Similarity output expanded in `ai.py` to include fields needed by existing card/modal UI.
+- Added server tests for semantic endpoint key-required and happy path.
+
+Files touched:
+- `src/inspirations/server.py`
+- `src/inspirations/ai.py`
+- `app/app.js`
+- `app/index.html`
+- `tests/test_server_api.py`
+- `tests/test_ai_semantic.py`
+- `README.md`
+- `docs/STATUS.md`, `docs/next_steps.md`, `docs/pr_summary.md`
+
+Validation commands:
+```bash
+/tmp/inspirations-lint-venv/bin/ruff check src tests
+PYTHONPATH=src python3 -m unittest discover -s tests -v
+python3 -m py_compile src/inspirations/ai.py src/inspirations/server.py src/inspirations/cli.py src/inspirations/db.py
+```
+
+Result:
+- Lint clean.
+- `38` tests passing.

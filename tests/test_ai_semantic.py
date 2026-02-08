@@ -203,7 +203,7 @@ class TestAiSemantic(unittest.TestCase):
                         limit=2,
                     )
             self.assertEqual(report["compared_assets"], 2)
-            self.assertEqual(report["results"][0]["asset_id"], "a1")
+            self.assertEqual(report["results"][0]["id"], "a1")
 
 
 if __name__ == "__main__":

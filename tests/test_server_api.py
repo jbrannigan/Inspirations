@@ -160,6 +160,35 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(remaining_collection_rows, 0)
         self.assertEqual(remaining_annotations, 0)
 
+    def test_semantic_search_requires_api_key(self):
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": ""}, clear=False):
+            status, body = self._request("/api/search/similar?q=oak")
+        self.assertEqual(status, 503)
+        self.assertIn("GEMINI_API_KEY", body.get("error", ""))
+
+    def test_semantic_search_endpoint(self):
+        fake_report = {
+            "query": "oak kitchen",
+            "provider": "gemini",
+            "model": "gemini-embedding-001",
+            "compared_assets": 1,
+            "skipped_dimension_mismatch": 0,
+            "results": [
+                {
+                    "id": "a1",
+                    "source": "pinterest",
+                    "title": "Asset One",
+                    "score": 0.93,
+                }
+            ],
+        }
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "fake"}, clear=False):
+            with mock.patch("inspirations.server.run_similarity_search", return_value=fake_report) as mocked:
+                status, body = self._request("/api/search/similar?q=oak%20kitchen&source=pinterest&limit=10")
+        self.assertEqual(status, 200)
+        self.assertEqual(body.get("results", [])[0].get("id"), "a1")
+        mocked.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,7 +22,7 @@
 - `docs/next_steps.md` — quick resume checklist after restart
 
 ## Next steps (suggested)
-1. Backfill embeddings for all Pinterest assets and validate quality of `ai similar` results.
-2. Add a lightweight API endpoint/UI affordance for semantic query search.
+1. Backfill embeddings for all Pinterest assets and validate quality of semantic results.
+2. Tune semantic relevance (input text composition, thresholds, query prompts) based on real usage.
 3. Review tagging quality in the compact/expand UI and capture correction needs.
 4. Keep handoff docs current (`docs/handoff.md`, `docs/pr_summary.md`) after each material change.

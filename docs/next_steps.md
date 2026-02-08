@@ -105,7 +105,7 @@ python3 -m inspirations ai embed --source pinterest --model gemini-embedding-001
 GEMINI_API_KEY="YOUR_KEY" PYTHONPATH=src \
 python3 -m inspirations ai similar --query "warm kitchen with white oak cabinets" --source pinterest --limit 20
 ```
-3. Add API/UI semantic-query entrypoint after embedding quality is acceptable.
+3. Tune semantic relevance and ranking quality after embedding backfill (prompt text, filters, and score cutoffs).
 
 ## Files to know
 - `docs/handoff.md` — detailed run history + commands

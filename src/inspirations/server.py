@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from .ai import DEFAULT_GEMINI_EMBEDDING_MODEL, run_similarity_search
 from .db import Db, ensure_schema
 from .store import (
     add_items_to_collection,
@@ -88,6 +89,32 @@ class ApiHandler(BaseHTTPRequestHandler):
                 offset=int(q.get("offset", ["0"])[0]),
             )
             return _send(self, 200, {"assets": assets})
+
+        if parsed.path == "/api/search/similar":
+            q = parse_qs(parsed.query)
+            query_text = (q.get("q", [""])[0] or "").strip()
+            if not query_text:
+                return _send(self, 400, {"error": "q is required"})
+            api_key = (os.environ.get("GEMINI_API_KEY") or "").strip()
+            if not api_key:
+                return _send(self, 503, {"error": "GEMINI_API_KEY is required for semantic search"})
+            source = (q.get("source", [""])[0] or "").strip()
+            model = (q.get("model", [""])[0] or "").strip() or DEFAULT_GEMINI_EMBEDDING_MODEL
+            limit_raw = (q.get("limit", ["25"])[0] or "25").strip()
+            try:
+                limit = max(1, min(500, int(limit_raw)))
+            except ValueError:
+                return _send(self, 400, {"error": "limit must be integer"})
+
+            report = self._with_db(
+                run_similarity_search,
+                api_key=api_key,
+                query=query_text,
+                model=model,
+                source=source,
+                limit=limit,
+            )
+            return _send(self, 200, report)
 
         if parsed.path == "/api/collections":
             cols = self._with_db(list_collections)
