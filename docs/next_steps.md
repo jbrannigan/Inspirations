@@ -63,14 +63,14 @@ sqlite3 /Users/minime/Projects/Inspirations/data/inspirations.sqlite \
   "select count(*) from assets where source='pinterest' and id not in (select asset_id from asset_ai where provider='gemini' and model='gemini-2.5-flash');"
 ```
 
-Expected as of Feb 5, 2026 (latest):
+Expected as of February 8, 2026:
 - `asset_ai(gemini-2.5-flash)=3654`
 - `remaining(pinterest, gemini-2.5-flash)=7` (RECITATION-blocked)
 - `remaining(pinterest, gemini any-model)=0`
 
-## 3) Retry remaining assets (optional)
-Pipeline now uses provider-level candidate selection and will no-op when provider coverage is complete.
-Only retry if you want to force a model-specific replacement workflow for the 7 recitation-fallback rows:
+## 3) Retry remaining assets (optional, model-specific only)
+Pipeline uses provider-level candidate selection and will no-op when provider coverage is complete.
+Do not run this unless you explicitly want to replace the 7 recitation-fallback rows with a different model outcome:
 ```bash
 GEMINI_API_KEY="YOUR_KEY" PYTHONPATH=src \
 python3 tools/tagging_pipeline.py --mode auto --limit 0
@@ -86,6 +86,10 @@ python3 tools/tagging_pipeline.py --mode auto --limit 0
 sqlite3 /Users/minime/Projects/Inspirations/data/inspirations.sqlite \
   "select error, count(*) from asset_ai_errors group by error order by count(*) desc;"
 ```
+
+## 6) Current product priorities
+1. Triage `asset_ai_errors` into actionable vs historical failures.
+2. Define and implement first embeddings/similarity search slice (`docs/SEARCH_STRATEGY.md`).
 
 ## Files to know
 - `docs/handoff.md` — detailed run history + commands
