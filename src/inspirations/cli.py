@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from .db import Db, ensure_schema
@@ -10,7 +11,13 @@ from .importers.pinterest_crawler import import_pinterest_crawler_zip
 from .importers.scans import import_scans_inbox
 from .storage import download_and_attach_originals
 from .thumbnails import generate_thumbnails
-from .ai import run_ai_labeler
+from .ai import (
+    DEFAULT_GEMINI_EMBEDDING_MODEL,
+    run_ai_error_triage,
+    run_ai_labeler,
+    run_gemini_text_embedder,
+    run_similarity_search,
+)
 from .server import run_server
 
 
@@ -147,6 +154,64 @@ def cmd_ai_tag(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ai_errors(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = run_ai_error_triage(
+            db,
+            source=args.source,
+            provider=args.provider,
+            model=args.model,
+            days=args.days,
+            limit=args.limit,
+            examples_per_action=args.examples_per_action,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_ai_embed(args: argparse.Namespace) -> int:
+    provider = (args.provider or "gemini").strip().lower()
+    if provider != "gemini":
+        raise ValueError("Unsupported provider for embeddings. Use provider=gemini.")
+    api_key = args.api_key or os.environ.get("GEMINI_API_KEY") or ""
+    if not api_key:
+        raise ValueError("Gemini API key required (set --api-key or GEMINI_API_KEY)")
+    db_path = _p(args.db)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = run_gemini_text_embedder(
+            db,
+            api_key=api_key,
+            model=args.model or DEFAULT_GEMINI_EMBEDDING_MODEL,
+            source=args.source,
+            limit=args.limit,
+            force=args.force,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_ai_similar(args: argparse.Namespace) -> int:
+    api_key = args.api_key or os.environ.get("GEMINI_API_KEY") or ""
+    if not api_key:
+        raise ValueError("Gemini API key required (set --api-key or GEMINI_API_KEY)")
+    db_path = _p(args.db)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = run_similarity_search(
+            db,
+            api_key=api_key,
+            query=args.query,
+            model=args.model or DEFAULT_GEMINI_EMBEDDING_MODEL,
+            source=args.source,
+            limit=args.limit,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     db_path = _p(args.db)
     app_dir = _p(args.app)
@@ -239,6 +304,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="Preflight checks (download missing originals + generate thumbs)",
     )
     tag.set_defaults(func=cmd_ai_tag)
+
+    errors = ai_sub.add_parser("errors", help="Triage AI error rows")
+    errors.add_argument("--source", default="", help="Only include one source (pinterest/facebook/scan)")
+    errors.add_argument("--provider", default="gemini", help="Filter provider (default gemini)")
+    errors.add_argument("--model", default="", help="Optional exact model filter")
+    errors.add_argument("--days", type=int, default=0, help="Only include errors from last N days (0 = all)")
+    errors.add_argument("--limit", type=int, default=0, help="Limit rows processed (0 = all)")
+    errors.add_argument(
+        "--examples-per-action",
+        type=int,
+        default=3,
+        help="Number of example rows to include per triage action",
+    )
+    errors.set_defaults(func=cmd_ai_errors)
+
+    embed = ai_sub.add_parser("embed", help="Generate Gemini text embeddings for assets")
+    embed.add_argument("--provider", default="gemini", help="Provider: gemini")
+    embed.add_argument("--model", default=DEFAULT_GEMINI_EMBEDDING_MODEL, help="Embedding model")
+    embed.add_argument("--source", default="", help="Only embed one source (pinterest/facebook/scan)")
+    embed.add_argument("--limit", type=int, default=0, help="Limit assets (0 = no limit)")
+    embed.add_argument("--force", action="store_true", help="Re-embed even if embedding already exists")
+    embed.add_argument("--api-key", default="", help="Gemini API key (or set GEMINI_API_KEY)")
+    embed.set_defaults(func=cmd_ai_embed)
+
+    similar = ai_sub.add_parser("similar", help="Run similarity search against stored embeddings")
+    similar.add_argument("--query", required=True, help="Natural-language query text")
+    similar.add_argument("--source", default="", help="Optional source filter")
+    similar.add_argument("--limit", type=int, default=25, help="Top results to return")
+    similar.add_argument("--model", default=DEFAULT_GEMINI_EMBEDDING_MODEL, help="Embedding model")
+    similar.add_argument("--api-key", default="", help="Gemini API key (or set GEMINI_API_KEY)")
+    similar.set_defaults(func=cmd_ai_similar)
 
     serve = sub.add_parser("serve", help="Run local web app")
     serve.add_argument("--host", default="127.0.0.1", help="Bind host (default 127.0.0.1)")

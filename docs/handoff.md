@@ -457,3 +457,39 @@ PYTHONPATH=src python3 -m unittest discover -s tests -p 'test_*.py' -q
 
 Result:
 - All tests passed (`30` total).
+
+## Update: Error Triage + Embeddings Similarity Slice (2026-02-08 05:02Z)
+Implemented the next two roadmap items:
+
+1) **AI error triage**
+- Added CLI: `inspirations ai errors`
+- Classifies rows (`network_dns`, `no_json_recitation`, `no_json_other`, etc.)
+- Distinguishes actionable vs historical by checking whether each error was followed by successful provider-level tagging
+
+2) **Embeddings + similarity (first slice)**
+- Added new DB table: `asset_embeddings`
+- Added CLI: `inspirations ai embed` (Gemini text embeddings; stores vectors per asset)
+- Added CLI: `inspirations ai similar --query ...` (cosine similarity over stored vectors)
+- `tools/session_sync.py` now reports `asset_ai_errors actionable rows`
+
+Current triage snapshot (pinterest/gemini/gemini-2.5-flash):
+- `total_errors=359`
+- `actionable_errors=0`
+- all current rows triage as historical resolved
+
+Docs updated:
+- `README.md`
+- `docs/STATUS.md`
+- `docs/next_steps.md`
+- `docs/pr_summary.md`
+
+Validation commands run:
+```bash
+/tmp/inspirations-lint-venv/bin/ruff check src tests
+PYTHONPATH=src python3 -m unittest discover -s tests -v
+PYTHONPATH=src python3 -m inspirations ai errors --source pinterest --provider gemini --model gemini-2.5-flash --examples-per-action 2
+PYTHONPATH=src python3 tools/session_sync.py
+```
+
+Test result:
+- `36` tests passing.

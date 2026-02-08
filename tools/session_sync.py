@@ -126,6 +126,23 @@ def snapshot(*, repo: Path, db_path: Path, source: str, provider: str, model: st
             """,
             (source, provider, model),
         )
+        actionable_error_rows = _query_one(
+            conn,
+            """
+            select count(*)
+            from asset_ai_errors e
+            join assets a on a.id = e.asset_id
+            where a.source = ? and e.provider = ? and coalesce(e.model, '') = ?
+              and not exists (
+                select 1
+                from asset_ai ai
+                where ai.asset_id = e.asset_id
+                  and ai.provider = e.provider
+                  and ai.created_at >= e.created_at
+              )
+            """,
+            (source, provider, model),
+        )
         recitation_blocked_assets = _query_one(
             conn,
             """
@@ -177,6 +194,7 @@ def snapshot(*, repo: Path, db_path: Path, source: str, provider: str, model: st
         "remaining_missing_stored": remaining_missing_stored,
         "remaining_missing_thumb": remaining_missing_thumb,
         "error_rows": error_rows,
+        "actionable_error_rows": actionable_error_rows,
         "recitation_blocked_assets": recitation_blocked_assets,
         "model_breakdown": [{"model": r[0], "assets": int(r[1])} for r in model_rows],
         "latest_run": {
@@ -203,6 +221,7 @@ def print_text(s: dict[str, Any]) -> None:
     print(f"Remaining missing stored_path: {s['remaining_missing_stored']}")
     print(f"Remaining missing thumb_path: {s['remaining_missing_thumb']}")
     print(f"asset_ai_errors rows: {s['error_rows']}")
+    print(f"asset_ai_errors actionable rows: {s['actionable_error_rows']}")
     print(f"RECITATION-blocked assets (model={s['model']}): {s['recitation_blocked_assets']}")
     breakdown = s.get("model_breakdown") or []
     if breakdown:

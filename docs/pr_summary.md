@@ -7,6 +7,7 @@
 - Added a dedicated fast path checklist to speed up restarts and coordination.
 - Added a one-command session sync tool for restart baselines.
 - Completed remaining Pinterest tagging with an explicit recitation fallback path.
+- Added AI error triage and first semantic-search slice (Gemini embeddings + similarity CLI).
 
 ## Key Changes
 - UI: `app/app.js`, `app/styles.css` now render AI summaries + tag buckets; expand-on-click; annotate button opens modal.
@@ -24,6 +25,12 @@
   - `tools/tagging_runner.py` and `tools/tagging_pipeline.py` now pass and use that fallback by default.
   - Candidate selection in pipeline/runner/batch tools now skips assets already tagged by Gemini provider (any model) to prevent duplicate retries.
 - Final coverage status: `gemini-2.5-flash=3654`, `gemini-2.0-flash=7` (recitation fallback), `3661/3661` tagged at provider level.
+- Semantic search slice:
+  - New `asset_embeddings` table for per-asset vectors.
+  - New CLI triage command: `inspirations ai errors` (actionable vs historical).
+  - New CLI embedding command: `inspirations ai embed`.
+  - New CLI similarity command: `inspirations ai similar`.
+  - `tools/session_sync.py` now reports actionable error row count.
 
 ## Testing
 - Unit tests:

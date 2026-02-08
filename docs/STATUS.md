@@ -9,6 +9,10 @@
   - CI matrix (`3.11`, `3.12`, `3.13`) + `ruff` lint gate.
   - `LICENSE`, `CONTRIBUTING.md`, PR template, Dependabot config.
 - App includes admin delete workflow and collection bulk-remove workflow.
+- First semantic-search slice is shipped:
+  - `inspirations ai errors` triages `asset_ai_errors` into actionable vs historical.
+  - `inspirations ai embed` stores Gemini text embeddings in `asset_embeddings`.
+  - `inspirations ai similar` performs cosine similarity search over stored vectors.
 
 ## Where to look
 - `docs/AI_TAGGING_PLAN.md` — Gemini tagging workflow and CLI usage
@@ -18,7 +22,7 @@
 - `docs/next_steps.md` — quick resume checklist after restart
 
 ## Next steps (suggested)
-1. Triage `asset_ai_errors` into actionable vs historical/network noise.
-2. Review tagging quality in the compact/expand UI and capture correction needs.
-3. Start embeddings + similarity search first implementation slice (`docs/SEARCH_STRATEGY.md`).
+1. Backfill embeddings for all Pinterest assets and validate quality of `ai similar` results.
+2. Add a lightweight API endpoint/UI affordance for semantic query search.
+3. Review tagging quality in the compact/expand UI and capture correction needs.
 4. Keep handoff docs current (`docs/handoff.md`, `docs/pr_summary.md`) after each material change.

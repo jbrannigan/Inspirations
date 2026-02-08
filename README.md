@@ -165,6 +165,38 @@ Pipeline features:
 - Auto-select batch vs interactive
 - RECITATION-aware fallback in interactive mode
 
+### AI error triage (actionable vs historical)
+
+```sh
+PYTHONPATH=src python3 -m inspirations ai errors --source pinterest --provider gemini --model gemini-2.5-flash
+```
+
+Useful flags:
+
+```sh
+# last N days only
+PYTHONPATH=src python3 -m inspirations ai errors --days 7
+
+# include fewer rows for quick sampling
+PYTHONPATH=src python3 -m inspirations ai errors --limit 200 --examples-per-action 2
+```
+
+### Embeddings + similarity search (first slice)
+
+Generate Gemini text embeddings for assets:
+
+```sh
+GEMINI_API_KEY="YOUR_KEY" PYTHONPATH=src \
+python3 -m inspirations ai embed --source pinterest --model gemini-embedding-001
+```
+
+Run similarity search against stored embeddings:
+
+```sh
+GEMINI_API_KEY="YOUR_KEY" PYTHONPATH=src \
+python3 -m inspirations ai similar --query "warm kitchen with white oak cabinets" --source pinterest --limit 20
+```
+
 ### Batch tools
 
 - `tools/tagging_batch.py` - submit/watch/fetch/ingest batch jobs

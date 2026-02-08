@@ -196,3 +196,26 @@ def ensure_schema(db: Db) -> None:
         """
     )
     db.exec("create index if not exists ix_asset_ai_errors_asset on asset_ai_errors(asset_id);")
+    db.exec(
+        """
+        create table if not exists asset_embeddings (
+          id text primary key,
+          asset_id text not null,
+          provider text not null,
+          model text not null,
+          input_text text,
+          vector_json text not null,
+          dimensions integer not null,
+          created_at text not null,
+          foreign key(asset_id) references assets(id) on delete cascade
+        );
+        """
+    )
+    db.exec("create index if not exists ix_asset_embeddings_asset on asset_embeddings(asset_id);")
+    db.exec("create index if not exists ix_asset_embeddings_provider_model on asset_embeddings(provider, model);")
+    db.exec(
+        """
+        create unique index if not exists ux_asset_embeddings_asset_provider_model
+        on asset_embeddings(asset_id, provider, model);
+        """
+    )
