@@ -9,6 +9,8 @@
 - Completed remaining Pinterest tagging with an explicit recitation fallback path.
 - Added AI error triage and first semantic-search slice (Gemini embeddings + similarity CLI).
 - Added hybrid ranking controls for semantic search (semantic + lexical blend with score threshold).
+- Added zero-touch local post-merge maintenance (stale branch cleanup + checkpoint snapshot).
+- Fixed frontend UX regressions: responsive mobile layout and graceful semantic-search error handling.
 
 ## Key Changes
 - UI: `app/app.js`, `app/styles.css` now render AI summaries + tag buckets; expand-on-click; annotate button opens modal.
@@ -36,6 +38,14 @@
   - Similar endpoint now accepts `semantic_weight`, `lexical_weight`, and `min_score`.
   - App search supports semantic mode via `sem:` prefix (press Enter to run).
   - `tools/session_sync.py` now reports actionable error row count.
+- Post-merge continuity automation:
+  - New hook file: `.githooks/post-merge`.
+  - New script: `tools/post_merge_maintenance.py`.
+  - Hook behavior on `main`: prune stale tracking refs, delete merged local branches with gone upstreams, and write local checkpoint snapshots to `data/session_checkpoints/`.
+- UX hardening:
+  - `app/styles.css`: responsive layout rules for tablet/mobile so sidebars stack instead of overlaying card interactions.
+  - `app/app.js`: API error handling for `loadAssets()` and UI messaging for semantic search failures (e.g., missing `GEMINI_API_KEY`) without unhandled client errors.
+  - Empty-state rendering now shows a clear error or “no results” message instead of silently failing.
 
 ## Testing
 - Unit tests:
@@ -44,6 +54,9 @@
   - `python3 -m py_compile src/inspirations/ai.py src/inspirations/cli.py tools/tagging_runner.py tools/tagging_pipeline.py tools/tagging_batch.py tools/session_sync.py`
 - UI/API smoke checks:
   - `GET /api/assets?source=pinterest&limit=5` returned 5 assets with `ai_json` present.
+- Additional checks:
+  - `python3 -m py_compile tools/post_merge_maintenance.py tools/session_checkpoint.py`
+  - Browser UX smoke (Firefox headless, local): desktop + mobile flows passed for search, semantic mode, modal open/close, and tray actions.
 
 ## Notes / Follow-ups
 - Provider-level Pinterest tagging is complete.

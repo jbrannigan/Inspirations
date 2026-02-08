@@ -15,6 +15,15 @@ PYTHONPATH=src python3 tools/session_checkpoint.py \
   --next "second concrete next action"
 ```
 
+Automatic safety net is now in place:
+- Local Git `post-merge` hook runs maintenance + local checkpoint writes automatically.
+- Hook outputs:
+  - `data/session_checkpoints/last_checkpoint.json`
+  - `data/session_checkpoints/checkpoint_*.json`
+  - `data/session_checkpoints/post_merge_hook.log`
+- If hooks are disabled in a new clone/session, re-enable with:
+  - `git config core.hooksPath .githooks`
+
 ### Coordination checklist (for multiple Codex instances)
 1. **Declare intent** in chat: what you plan to change and why.
 2. **Read shared context**: `docs/handoff.md` + `docs/next_steps.md`.
