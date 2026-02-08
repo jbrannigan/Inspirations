@@ -14,6 +14,7 @@
 - Fixed card expansion visibility for sparse records by showing explicit expanded details on all cards.
 - Improved link-card handling for non-image Facebook items (no broken thumbnails) and prioritized media-rich cards in canvas ordering.
 - Added smart card preview fitting for extreme-aspect images to reduce over-zoom/cropping on text-heavy cards.
+- Improved link preview URL resolution to recover more thumbnails from Facebook saved links.
 
 ## Key Changes
 - UI: `app/app.js`, `app/styles.css` now render AI summaries + tag buckets; expand-on-click; annotate button opens modal.
@@ -52,6 +53,7 @@
   - Expanded card state now reveals a details panel (source link/import timestamps and no-AI hint) even when AI tags are absent.
   - Non-image/broken-image cards now show an explicit link-style placeholder instead of a broken image icon.
   - Extreme-aspect thumbnails now auto-switch to `contain` fitting in cards, while standard photos stay `cover`.
+  - Preview resolver now handles more metadata variants, upgrades `http` image metadata to `https`, skips tracking-pixel URLs, and falls back to first real page `<img>` when OG/Twitter tags are absent.
 - Asset ordering:
   - `src/inspirations/store.py` now prioritizes cards with usable preview media (`thumb_path` first, then image-like `stored_path`, then image-like `image_url`) before recency in `/api/assets`.
 
