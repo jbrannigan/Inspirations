@@ -110,6 +110,11 @@ def generate_thumbnails(
                         continue
                     except Exception:
                         pass
+                # When raster tools cannot convert SVG, use the original SVG as preview.
+                if stored.suffix.lower() == ".svg" and stored.exists():
+                    db.exec("update assets set thumb_path=? where id=?", (str(stored), asset_id))
+                    generated += 1
+                    continue
                 errors.append({"id": asset_id, "error": str(e)})
         except Exception as e:
             errors.append({"id": asset_id, "error": str(e)})

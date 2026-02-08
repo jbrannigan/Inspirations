@@ -13,6 +13,7 @@ Inspirations ingests Pinterest saves, Facebook saves, and scanned pages into a s
 - Downloads and stores originals locally with safe URL validation.
 - Resolves preview images from saved link pages (Open Graph/Twitter tags with `<img>` fallback) to backfill missing thumbnails.
 - Generates thumbnails for fast UI browsing.
+- Falls back to SVG originals for card previews when local raster thumbnail conversion is unavailable.
 - Runs AI image tagging with Gemini and stores:
   - Full JSON payloads
   - Searchable `ai_summary`
