@@ -695,11 +695,16 @@ def run_similarity_search(
     rows = db.query(
         f"""
         select e.asset_id, e.vector_json, e.dimensions, e.created_at,
-               a.source, a.title, a.board,
+               a.source, a.source_ref, a.title, a.description, a.board, a.notes,
+               a.image_url, a.stored_path, a.thumb_path, a.imported_at,
                coalesce(
                  (select ai.summary from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1),
                  a.ai_summary
-               ) as ai_summary
+               ) as ai_summary,
+               (select ai.json from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_json,
+               (select ai.model from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_model,
+               (select ai.provider from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_provider,
+               (select ai.created_at from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_created_at
         from asset_embeddings e
         join assets a on a.id = e.asset_id
         {where}
@@ -720,11 +725,22 @@ def run_similarity_search(
         score = _cosine_similarity(query_vec, vector)
         scored.append(
             {
-                "asset_id": r["asset_id"],
+                "id": r["asset_id"],
                 "source": r["source"],
+                "source_ref": r["source_ref"],
                 "title": r["title"],
+                "description": r["description"],
                 "board": r["board"],
+                "notes": r["notes"],
+                "image_url": r["image_url"],
+                "stored_path": r["stored_path"],
+                "thumb_path": r["thumb_path"],
+                "imported_at": r["imported_at"],
                 "ai_summary": r["ai_summary"],
+                "ai_json": r["ai_json"],
+                "ai_model": r["ai_model"],
+                "ai_provider": r["ai_provider"],
+                "ai_created_at": r["ai_created_at"],
                 "score": score,
                 "embedding_created_at": r["created_at"],
             }

@@ -30,6 +30,8 @@
   - New CLI triage command: `inspirations ai errors` (actionable vs historical).
   - New CLI embedding command: `inspirations ai embed`.
   - New CLI similarity command: `inspirations ai similar`.
+  - New API endpoint: `GET /api/search/similar`.
+  - App search supports semantic mode via `sem:` prefix (press Enter to run).
   - `tools/session_sync.py` now reports actionable error row count.
 
 ## Testing

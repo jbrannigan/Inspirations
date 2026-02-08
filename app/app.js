@@ -18,6 +18,7 @@ const state = {
   activeAnnotationId: null,
   noteTimers: {},
   assetsRequestSeq: 0,
+  semanticMode: false,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -160,11 +161,30 @@ function getViewCollection() {
 
 function activeFilterParts() {
   const parts = [];
-  if (state.q.trim()) parts.push(`search "${state.q.trim()}"`);
+  const semanticQuery = semanticQueryFromInput(state.q);
+  if (semanticQuery) parts.push(`semantic "${semanticQuery}"`);
+  else if (state.q.trim()) parts.push(`search "${state.q.trim()}"`);
   if (state.sources.size > 0) parts.push(`${state.sources.size} source filter${state.sources.size === 1 ? "" : "s"}`);
   if (state.boards.size > 0) parts.push(`${state.boards.size} source tag filter${state.boards.size === 1 ? "" : "s"}`);
   if (state.labels.size > 0) parts.push(`${state.labels.size} AI tag filter${state.labels.size === 1 ? "" : "s"}`);
   return parts;
+}
+
+function semanticQueryFromInput(value) {
+  const text = `${value || ""}`.trim();
+  if (!text) return "";
+  const prefixes = ["sem:", "similar:"];
+  for (const p of prefixes) {
+    if (text.toLowerCase().startsWith(p)) {
+      return text.slice(p.length).trim();
+    }
+  }
+  return "";
+}
+
+function semanticSourceFilter() {
+  if (state.sources.size === 0) return "";
+  return Array.from(state.sources)[0] || "";
 }
 
 async function selectCollection(collectionId) {
@@ -246,6 +266,9 @@ function renderGrid() {
     const labelCount = aiLabelCount(ai);
     const top = topTags(ai, 6);
     const metaParts = [];
+    if (typeof a.score === "number") {
+      metaParts.push(`Similarity: ${(a.score * 100).toFixed(1)}%`);
+    }
     if (a.board) metaParts.push(`Board: ${a.board}`);
     metaParts.push(`Source: ${a.source}`);
     if (imageType) metaParts.push(`Type: ${imageType}`);
@@ -316,6 +339,18 @@ async function loadTray() {
 
 async function loadAssets() {
   const requestSeq = ++state.assetsRequestSeq;
+  const semanticQuery = semanticQueryFromInput(state.q);
+  state.semanticMode = !!semanticQuery;
+  if (semanticQuery) {
+    const source = encodeURIComponent(semanticSourceFilter());
+    const q = encodeURIComponent(semanticQuery);
+    const data = await api(`/api/search/similar?q=${q}&source=${source}&limit=120`);
+    if (requestSeq !== state.assetsRequestSeq) return;
+    state.assets = (data.results || []).map((a) => ({ ...a, ai: parseAi(a) }));
+    renderGrid();
+    return;
+  }
+
   const q = encodeURIComponent(state.q || "");
   const source = encodeURIComponent(Array.from(state.sources).join(","));
   const board = encodeURIComponent(Array.from(state.boards).join(","));
@@ -497,6 +532,15 @@ $("#modal").onclick = (e) => {
 
 $("#search").addEventListener("input", (e) => {
   state.q = e.target.value || "";
+  if (semanticQueryFromInput(state.q)) {
+    setStats();
+    return;
+  }
+  loadAssets();
+});
+
+$("#search").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
   loadAssets();
 });
 // top source dropdown not used; filters panel handles sources

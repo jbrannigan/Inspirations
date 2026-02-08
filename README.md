@@ -197,6 +197,12 @@ GEMINI_API_KEY="YOUR_KEY" PYTHONPATH=src \
 python3 -m inspirations ai similar --query "warm kitchen with white oak cabinets" --source pinterest --limit 20
 ```
 
+In the web app, use semantic mode from the search box with the `sem:` prefix, then press `Enter`:
+
+```text
+sem: warm kitchen with white oak cabinets
+```
+
 ### Batch tools
 
 - `tools/tagging_batch.py` - submit/watch/fetch/ingest batch jobs
@@ -209,6 +215,7 @@ python3 -m inspirations ai similar --query "warm kitchen with white oak cabinets
 Core endpoints:
 
 - `GET /api/assets`
+- `GET /api/search/similar`
 - `GET /api/facets`
 - `GET /api/collections`
 - `POST /api/collections`
