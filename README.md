@@ -21,6 +21,7 @@ Inspirations ingests Pinterest saves, Facebook saves, and scanned pages into a s
   - Search, source/board/label filtering
   - Compact card grid + expand-on-click tag details
   - Preview-aware ordering (thumbs/originals/image URLs before link-only items)
+  - Smart preview fitting for extreme-aspect images to reduce over-cropping in cards
   - Link-style placeholders for non-image/broken-image cards (no broken thumbnail icon)
   - Notes and visual annotations
   - Collections and tray-to-collection workflows
