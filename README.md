@@ -197,6 +197,19 @@ GEMINI_API_KEY="YOUR_KEY" PYTHONPATH=src \
 python3 -m inspirations ai similar --query "warm kitchen with white oak cabinets" --source pinterest --limit 20
 ```
 
+Tune ranking blend (semantic cosine + lexical overlap) and minimum score threshold:
+
+```sh
+GEMINI_API_KEY="YOUR_KEY" PYTHONPATH=src \
+python3 -m inspirations ai similar \
+  --query "warm kitchen with white oak cabinets" \
+  --source pinterest \
+  --semantic-weight 0.7 \
+  --lexical-weight 0.3 \
+  --min-score 0.2 \
+  --limit 20
+```
+
 In the web app, use semantic mode from the search box with the `sem:` prefix, then press `Enter`:
 
 ```text
@@ -229,6 +242,12 @@ Core endpoints:
 - `PUT /api/annotations/{id}`
 - `DELETE /api/annotations/{id}`
 - `GET /media/{asset_id}?kind=thumb|original`
+
+`/api/search/similar` query params:
+
+- `q` (required)
+- `source`, `model`, `limit` (optional)
+- `semantic_weight`, `lexical_weight`, `min_score` (optional ranking controls)
 
 `/api/assets` includes AI fields used by the UI:
 

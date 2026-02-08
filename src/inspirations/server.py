@@ -101,10 +101,25 @@ class ApiHandler(BaseHTTPRequestHandler):
             source = (q.get("source", [""])[0] or "").strip()
             model = (q.get("model", [""])[0] or "").strip() or DEFAULT_GEMINI_EMBEDDING_MODEL
             limit_raw = (q.get("limit", ["25"])[0] or "25").strip()
+            semantic_weight_raw = (q.get("semantic_weight", ["0.85"])[0] or "0.85").strip()
+            lexical_weight_raw = (q.get("lexical_weight", ["0.15"])[0] or "0.15").strip()
+            min_score_raw = (q.get("min_score", ["0.0"])[0] or "0.0").strip()
             try:
                 limit = max(1, min(500, int(limit_raw)))
             except ValueError:
                 return _send(self, 400, {"error": "limit must be integer"})
+            try:
+                semantic_weight = float(semantic_weight_raw)
+            except ValueError:
+                return _send(self, 400, {"error": "semantic_weight must be number"})
+            try:
+                lexical_weight = float(lexical_weight_raw)
+            except ValueError:
+                return _send(self, 400, {"error": "lexical_weight must be number"})
+            try:
+                min_score = float(min_score_raw)
+            except ValueError:
+                return _send(self, 400, {"error": "min_score must be number"})
 
             report = self._with_db(
                 run_similarity_search,
@@ -113,6 +128,9 @@ class ApiHandler(BaseHTTPRequestHandler):
                 model=model,
                 source=source,
                 limit=limit,
+                semantic_weight=semantic_weight,
+                lexical_weight=lexical_weight,
+                min_score=min_score,
             )
             return _send(self, 200, report)
 

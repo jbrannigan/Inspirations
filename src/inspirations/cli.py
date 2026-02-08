@@ -207,6 +207,9 @@ def cmd_ai_similar(args: argparse.Namespace) -> int:
             model=args.model or DEFAULT_GEMINI_EMBEDDING_MODEL,
             source=args.source,
             limit=args.limit,
+            semantic_weight=args.semantic_weight,
+            lexical_weight=args.lexical_weight,
+            min_score=args.min_score,
         )
     print(json.dumps(report, indent=2))
     return 0
@@ -333,6 +336,9 @@ def build_parser() -> argparse.ArgumentParser:
     similar.add_argument("--source", default="", help="Optional source filter")
     similar.add_argument("--limit", type=int, default=25, help="Top results to return")
     similar.add_argument("--model", default=DEFAULT_GEMINI_EMBEDDING_MODEL, help="Embedding model")
+    similar.add_argument("--semantic-weight", type=float, default=0.85, help="Weight for cosine similarity")
+    similar.add_argument("--lexical-weight", type=float, default=0.15, help="Weight for lexical overlap")
+    similar.add_argument("--min-score", type=float, default=0.0, help="Discard results below this blended score")
     similar.add_argument("--api-key", default="", help="Gemini API key (or set GEMINI_API_KEY)")
     similar.set_defaults(func=cmd_ai_similar)
 

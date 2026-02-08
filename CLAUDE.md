@@ -27,7 +27,7 @@ PYTHONPATH=src python3 -m unittest tests.test_store -v
 ```bash
 PYTHONPATH=src python3 -m inspirations <subcommand>
 ```
-Subcommands: `init`, `list`, `import pinterest`, `import facebook`, `import scans`, `thumbs`, `ai tag`, `serve`
+Subcommands: `init`, `list`, `import pinterest`, `import facebook`, `import scans`, `thumbs`, `ai tag`, `ai errors`, `ai embed`, `ai similar`, `serve`
 
 ### Start the dev server with auto-reload
 ```bash
@@ -50,7 +50,7 @@ PYTHONPATH=src python3 -m inspirations ai tag --provider gemini --api-key "$GEMI
 - **`security.py`** — URL validation helpers used by the download pipeline.
 - **`thumbnails.py`** — Auto-detects system tools (`sips` on macOS, `magick` on Linux), Pillow fallback.
 - **`ai.py`** — AI tagging pipeline. Mock labeler (keyword heuristic) and Gemini integration. Primary model: `gemini-2.5-flash`, fallback to `gemini-2.0-flash` on `RECITATION` errors. Includes preflight checks and label flattening.
-- **`server.py`** — Standard library `HTTPServer`. REST API endpoints (`/api/assets`, `/api/facets`, `/api/collections`, `/api/tray`, `/api/annotations`) plus media serving and static files.
+- **`server.py`** — Standard library `HTTPServer`. REST API endpoints (`/api/assets`, `/api/search/similar`, `/api/facets`, `/api/collections`, `/api/tray`, `/api/annotations`) plus media serving and static files.
 - **`devserver.py`** — File-watching wrapper for auto-reload during development.
 - **`importers/`** — Adapter pattern: `pinterest_crawler.py`, `facebook_saved.py`, `scans.py`. Each normalizes source data into consistent `Asset` records. Imports are idempotent.
 

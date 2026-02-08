@@ -171,6 +171,9 @@ class TestServerApi(unittest.TestCase):
             "query": "oak kitchen",
             "provider": "gemini",
             "model": "gemini-embedding-001",
+            "semantic_weight": 0.7,
+            "lexical_weight": 0.3,
+            "min_score": 0.25,
             "compared_assets": 1,
             "skipped_dimension_mismatch": 0,
             "results": [
@@ -184,10 +187,21 @@ class TestServerApi(unittest.TestCase):
         }
         with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "fake"}, clear=False):
             with mock.patch("inspirations.server.run_similarity_search", return_value=fake_report) as mocked:
-                status, body = self._request("/api/search/similar?q=oak%20kitchen&source=pinterest&limit=10")
+                status, body = self._request(
+                    "/api/search/similar?q=oak%20kitchen&source=pinterest&limit=10&semantic_weight=0.7&lexical_weight=0.3&min_score=0.25"
+                )
         self.assertEqual(status, 200)
         self.assertEqual(body.get("results", [])[0].get("id"), "a1")
         mocked.assert_called_once()
+        self.assertEqual(mocked.call_args.kwargs["semantic_weight"], 0.7)
+        self.assertEqual(mocked.call_args.kwargs["lexical_weight"], 0.3)
+        self.assertEqual(mocked.call_args.kwargs["min_score"], 0.25)
+
+    def test_semantic_search_rejects_non_numeric_weights(self):
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "fake"}, clear=False):
+            status, body = self._request("/api/search/similar?q=oak&semantic_weight=fast")
+        self.assertEqual(status, 400)
+        self.assertEqual(body.get("error"), "semantic_weight must be number")
 
 
 if __name__ == "__main__":

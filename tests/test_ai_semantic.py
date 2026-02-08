@@ -205,6 +205,78 @@ class TestAiSemantic(unittest.TestCase):
             self.assertEqual(report["compared_assets"], 2)
             self.assertEqual(report["results"][0]["id"], "a1")
 
+    def test_run_similarity_search_blends_semantic_and_lexical(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at)
+                    values (?, ?, ?, ?, datetime('now'))
+                    """,
+                    ("a1", "pinterest", "pin://1", "Neutral living room"),
+                )
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at)
+                    values (?, ?, ?, ?, datetime('now'))
+                    """,
+                    ("a2", "pinterest", "pin://2", "Oak kitchen island"),
+                )
+                db.exec(
+                    """
+                    insert into asset_embeddings
+                      (id, asset_id, provider, model, input_text, vector_json, dimensions, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                    """,
+                    ("em1", "a1", "gemini", DEFAULT_GEMINI_EMBEDDING_MODEL, "doc one", json.dumps([0.0, 1.0]), 2),
+                )
+                db.exec(
+                    """
+                    insert into asset_embeddings
+                      (id, asset_id, provider, model, input_text, vector_json, dimensions, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                    """,
+                    ("em2", "a2", "gemini", DEFAULT_GEMINI_EMBEDDING_MODEL, "doc two", json.dumps([1.0, 0.0]), 2),
+                )
+                with mock.patch("inspirations.ai._gemini_embed_text", return_value=[0.0, 1.0]):
+                    semantic_only = run_similarity_search(
+                        db,
+                        api_key="fake",
+                        query="oak kitchen island",
+                        model=DEFAULT_GEMINI_EMBEDDING_MODEL,
+                        source="pinterest",
+                        limit=2,
+                        semantic_weight=1.0,
+                        lexical_weight=0.0,
+                    )
+                    blended = run_similarity_search(
+                        db,
+                        api_key="fake",
+                        query="oak kitchen island",
+                        model=DEFAULT_GEMINI_EMBEDDING_MODEL,
+                        source="pinterest",
+                        limit=2,
+                        semantic_weight=0.2,
+                        lexical_weight=0.8,
+                    )
+                    filtered = run_similarity_search(
+                        db,
+                        api_key="fake",
+                        query="oak kitchen island",
+                        model=DEFAULT_GEMINI_EMBEDDING_MODEL,
+                        source="pinterest",
+                        limit=2,
+                        semantic_weight=0.2,
+                        lexical_weight=0.8,
+                        min_score=0.5,
+                    )
+            self.assertEqual(semantic_only["results"][0]["id"], "a1")
+            self.assertEqual(blended["results"][0]["id"], "a2")
+            self.assertEqual(filtered["compared_assets"], 1)
+            self.assertEqual(filtered["results"][0]["id"], "a2")
+
 
 if __name__ == "__main__":
     unittest.main()
