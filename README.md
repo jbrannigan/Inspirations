@@ -10,6 +10,7 @@ Inspirations ingests Pinterest saves, Facebook saves, and scanned pages into a s
   - Pinterest crawler ZIP exports
   - Facebook saved-items ZIP exports
   - Local scan inbox (images and PDFs)
+- Preserves Facebook records even when media URLs are missing (reference-only rows with content/creator metadata).
 - Downloads and stores originals locally with safe URL validation.
 - Resolves preview images from saved link pages (Open Graph/Twitter tags with `<img>` fallback) to backfill missing thumbnails.
 - Generates thumbnails for fast UI browsing.
@@ -21,7 +22,20 @@ Inspirations ingests Pinterest saves, Facebook saves, and scanned pages into a s
   - Structured error rows for retry analysis
 - Serves a local web app with:
   - Search, source/board/label filtering
+  - Media-type/record-type/creator filtering (helpful for Facebook reference rows)
+  - Record Type facet now context-aware to selected Source + Media filters, with zero-result options visually de-emphasized
+  - Record Type gracefully falls back to global counts if contextual facet payload is unavailable (prevents all-zero display on stale server responses)
+  - `Show All` now acts as a true reset (search + filters + selection), returning canvas to a clean starting state
+  - AI tag matching now supports `Any` (OR) and `All` (AND) modes
+  - Primary add flow is now direct-to-active-collection; tray remains optional as a secondary holding area
+  - Annotate modal now includes `Hide` (moves to Hidden collection) and `Print` actions
+  - Hidden items are excluded from main canvas by default, but remain available when viewing the Hidden collection
+  - Accordion filters (only Source open by default) to keep high-cardinality filter sets manageable
+  - Plain-language canvas narrative text in the header describing what is currently shown
   - Compact card grid + expand-on-click tag details
+  - Incremental "load more" browsing for full-catalog navigation
+  - Search prompt simplified for non-technical users, with semantic `sem:` help moved to hover tooltip
+  - Facebook title cleanup in cards (drops boilerplate like `Leslie Brannigan saved a ...`)
   - Preview-aware ordering (thumbs/originals/image URLs before link-only items)
   - Smart preview fitting for extreme-aspect images to reduce over-cropping in cards
   - Link-style placeholders for non-image/broken-image cards (no broken thumbnail icon)
@@ -107,13 +121,24 @@ PYTHONPATH=src python3 -m inspirations import facebook --zip imports/raw/faceboo
 PYTHONPATH=src python3 -m inspirations thumbs --size 512
 ```
 
-5. Start the app:
+5. Start the app (local machine only):
 
 ```sh
 PYTHONPATH=src python3 -m inspirations serve --host 127.0.0.1 --port 8000 --app app --store store
 ```
 
 Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
+
+For iPhone/iPad/LAN testing, bind to all interfaces:
+
+```sh
+PYTHONPATH=src python3 -m inspirations serve --host 0.0.0.0 --port 8000 --app app --store store
+```
+
+Then open either:
+
+- `http://<your-local-hostname>.local:8000` (for example `http://minime.local:8000`)
+- `http://<your-lan-ip>:8000` (for example `http://192.168.0.136:8000`)
 
 ## Scan Import Workflow
 
@@ -124,6 +149,136 @@ python3 scripts/make_mock_scans.py
 PYTHONPATH=src python3 -m inspirations import scans --inbox imports/scans/inbox --format jpg
 PYTHONPATH=src python3 -m inspirations thumbs --size 512 --source scan
 ```
+
+Scan import now walks nested folders under `--inbox` (for example `imports/scans/inbox/recipes` and `imports/scans/inbox/inspirations`).
+
+You can also import scans directly from the main web app:
+
+1. Open the app top bar and click `Add Scan PDF`.
+2. Pick a PDF from your computer.
+3. Choose options in the import dialog:
+   - `Detect blank separator pages...` (default on): supports one-upload multipage splitting with blank-page delimiters.
+   - `Use Form Parser` (experimental): request structured extraction mode (currently a forward-compatible flag; OCR-first remains default behavior).
+4. The app uploads the PDF, runs scan ingestion, and generates thumbnails automatically.
+5. Refreshes happen in-place, so newly imported scan pages are immediately available in canvas/filtering.
+
+## Share Export Workflow
+
+Generate a shareable HTML gallery artifact:
+
+```sh
+PYTHONPATH=src python3 -m inspirations export html --out data/exports/gallery.html
+```
+
+Optional filters:
+
+```sh
+# one source only
+PYTHONPATH=src python3 -m inspirations export html --source pinterest --out data/exports/pinterest.html
+
+# one collection only
+PYTHONPATH=src python3 -m inspirations export html --collection-id <COLLECTION_ID> --out data/exports/collection.html
+```
+
+What the shared HTML includes now:
+
+- Review-focused cards (no AI tag buckets or AI summary text)
+- `Show Details` modal with larger preview and read-only annotations
+- Annotation count badge on cards when notes exist
+- `Open Source` links that open in a new tab
+- Plain-language "How to save this idea" guidance in the page header and modal
+
+Recommended sharing workflow:
+
+1. Curate in-app: shop into tray, then create/finalize a collection
+2. Export one collection per share file (`--collection-id`)
+3. If you need to share multiple collections, run export once per collection
+
+## Cluster Refinement Workflow
+
+Use the cluster explorer to quickly spot weak outliers and remove bad fits from collections.
+
+Current implementation status:
+- Implemented now:
+  - `tools/export_clusters.py` exports v2 cluster JSON (outlier metrics, collection scope, neighbor inclusion, local media path normalization).
+  - Collection-scoped exports now tag each node as `in_focus_collection` vs `is_nearby_context`, and include `collection_name`, `focus_count`, and `nearby_count` in `meta`.
+  - `tools/serve_explorer.py` serves explorer HTML + JSON + `store/` media with strict route allowlisting.
+  - `tools/cluster_explorer.html` supports Discover/Outliers modes, collection filtering, served auto-load, and detail-panel actions.
+  - Discover mode now uses the same card-review UX as Outliers/Duplicates: similar items are grouped into theme sections (grid cards), ordered strongest-to-weakest by dominance.
+  - Discover supports explicit `keeper`/`loser` picks per card (plus reset/download) for representative selection workflows.
+  - A global Grid/Graph view switch is available in Discover, Outliers, and Duplicates.
+  - Graph view shows pick state per node with visual badges (`K` keeper, `L` loser, `?` undecided) and matching border colors.
+  - Discover's similarity slider is now graph-only and fully interactive: it updates link prominence/visibility live in Graph view.
+  - Collection-by-collection review controls are built into the top bar (previous/next + selector), and the left legend/sidebar is removed from the active review workflow.
+  - In collection-scoped review, the current collection is the default focus and nearby neighbors are hidden by default behind `Show nearby (...)`.
+  - Outlier mode now supports card-based review with keeper marking, reset, and JSON export of outlier keep decisions.
+  - Duplicate mode uses stricter mutual-strong pair grouping, group cohesion scoring, and a cohesion threshold slider that hides weak duplicate groups by default.
+  - Duplicate mode is keeper-first and sorted strongest-to-weakest by dominance within the selected collection: large per-group image cards, keeper selection, optional all-groups view, and JSON keeper export.
+  - Collection-focused exports can remove single outliers directly from a collection when `meta.api_base` and `meta.collection_id` are set.
+- Not implemented yet:
+  - advanced curate mode (lasso/tray batch actions) in the explorer
+- Canonical implementation plan: `docs/CLUSTER_EXPLORER_SPEC-v2.md`
+
+1. Create and activate an isolated Python environment:
+
+```sh
+python3 -m venv /private/tmp/inspirations-cluster-venv
+source /private/tmp/inspirations-cluster-venv/bin/activate
+```
+
+2. Install clustering dependency in that venv:
+
+```sh
+python -m pip install scikit-learn
+```
+
+3. Export cluster graph data from the active project database:
+
+```sh
+python tools/export_clusters.py \
+  --db data/inspirations.sqlite \
+  --out tools/cluster_data.json \
+  --clusters auto \
+  --similarity-threshold 0.72 \
+  --max-neighbors 6
+```
+
+4. Serve and open the explorer (supported mode):
+
+```sh
+python3 tools/serve_explorer.py \
+  --port 8080 \
+  --data tools/cluster_data.json \
+  --project-root .
+```
+
+Open:
+- `http://127.0.0.1:8080`
+
+5. Optional: collection-focused export with in-explorer remove action:
+
+```sh
+python tools/export_clusters.py \
+  --db data/inspirations.sqlite \
+  --out tools/cluster_data.json \
+  --collection-id <COLLECTION_ID> \
+  --include-neighbors 15 \
+  --api-base http://127.0.0.1:8000
+```
+
+Then re-run `serve_explorer.py` and use **Remove from this collection** in the detail panel.
+
+6. Fallback mode (still supported, less ideal):
+
+- Open `tools/cluster_explorer.html` in a browser.
+- Load `tools/cluster_data.json`.
+- Use this if served mode is unavailable; local media loading is best in served mode.
+
+Notes:
+
+- Use `data/inspirations.sqlite` (not `data/inspirations.db`) in this repo.
+- If `scikit-learn` (and therefore `numpy`) is missing, full-catalog exports may fail fast with a guidance message. Use the cluster venv workflow above.
+- `file://` opening is supported only as manual fallback. Primary mode is HTTP via `serve_explorer.py`.
 
 ## AI Tagging Workflows
 
@@ -215,7 +370,7 @@ python3 -m inspirations ai similar \
   --limit 20
 ```
 
-In the web app, use semantic mode from the search box with the `sem:` prefix, then press `Enter`:
+In the web app, use semantic mode with the `sem:` prefix, then press `Enter` (the search box `?` hover shows this reminder):
 
 ```text
 sem: warm kitchen with white oak cabinets
@@ -233,8 +388,10 @@ sem: warm kitchen with white oak cabinets
 Core endpoints:
 
 - `GET /api/assets`
+- `POST /api/assets/{id}/hide`
 - `GET /api/search/similar`
 - `GET /api/facets`
+- `POST /api/import/scans` (`multipart/form-data`; supports `file`, optional `split_on_delimiters`, optional `use_form_parser`)
 - `GET /api/collections`
 - `POST /api/collections`
 - `GET /api/tray`
@@ -258,6 +415,19 @@ Core endpoints:
 
 - `ai_summary`
 - `ai_json`
+
+`/api/facets` filter params (optional):
+
+- `source` (comma-separated)
+- `media_status` (comma-separated)
+
+`/api/assets` filter params (optional):
+
+- `media_status` (`image|link_only|metadata_only`, comma-separated supported)
+- `content_kind` (comma-separated supported)
+- `creator` (comma-separated supported)
+- `label_mode` (`any|all`) for AI tag matching behavior
+- `include_hidden` (`false` by default)
 - `ai_model`
 - `ai_provider`
 - `ai_created_at`

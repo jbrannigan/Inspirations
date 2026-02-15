@@ -9,10 +9,14 @@ const state = {
   sources: new Set(),
   boards: new Set(),
   labels: new Set(),
+  labelMatchMode: "any",
+  mediaStatuses: new Set(),
+  contentKinds: new Set(),
+  creators: new Set(),
   modalAsset: null,
   annotations: [],
   selectMode: true,
-  facets: { sources: [], boards: [], labels: [] },
+  facets: { sources: [], boards: [], labels: [], media_statuses: [], content_kinds: [], creators: [] },
   tray: [],
   dragging: null,
   activeAnnotationId: null,
@@ -20,6 +24,13 @@ const state = {
   assetsRequestSeq: 0,
   semanticMode: false,
   error: "",
+  initComplete: false,
+  hasMore: false,
+  loadingAssets: false,
+  scanImportBusy: false,
+  mediaDefaultsSeeded: false,
+  canvasMode: "main",
+  filterOpen: { sources: true },
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -27,15 +38,16 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 const IMAGE_SUFFIX_RE = /\.(jpg|jpeg|png|webp|gif|bmp|svg)(\?.*)?$/i;
 const EXTREME_ASPECT_RATIO_MAX = 1.8;
 const EXTREME_ASPECT_RATIO_MIN = 0.8;
+const ASSETS_PAGE_SIZE = 240;
 
 function escapeHtml(value) {
   return (value || "")
     .toString()
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function asList(value) {
@@ -144,6 +156,18 @@ async function api(path, opts = {}) {
   return res.json();
 }
 
+async function apiUpload(path, formData) {
+  const res = await fetch(path, {
+    method: "POST",
+    body: formData,
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(t || res.statusText);
+  }
+  return res.json();
+}
+
 function formatApiError(err) {
   const msg = `${(err && err.message) || err || "Request failed"}`.trim();
   if (!msg) return "Request failed";
@@ -152,6 +176,22 @@ function formatApiError(err) {
     if (parsed && typeof parsed.error === "string" && parsed.error.trim()) return parsed.error.trim();
   } catch {}
   return msg;
+}
+
+function showFatalUiError(err) {
+  const message = formatApiError(err);
+  state.error = message;
+  const narrative = $("#canvasNarrative");
+  if (narrative) narrative.textContent = `The canvas could not be loaded. ${message}`;
+  const stats = $("#stats");
+  if (stats) stats.textContent = "Unable to load items";
+  const filters = $("#filters");
+  if (filters) filters.innerHTML = `<div class="muted">Unable to load filters: ${escapeHtml(message)}</div>`;
+  const grid = $("#grid");
+  if (grid && state.assets.length === 0) {
+    grid.innerHTML = `<div class="muted">Unable to load items: ${escapeHtml(message)}</div>`;
+  }
+  updateLoadMoreButton();
 }
 
 function looksLikeImageRef(value) {
@@ -202,15 +242,165 @@ function getViewCollection() {
   return getCollectionById(state.viewCollectionId);
 }
 
-function activeFilterParts() {
+function updateLoadMoreButton() {
+  const btn = $("#loadMore");
+  if (!btn) return;
+  const visible = !state.semanticMode && !state.error && state.hasMore;
+  btn.hidden = !visible;
+  btn.disabled = !visible || state.loadingAssets;
+  btn.textContent = state.loadingAssets ? "Loading…" : "Load More";
+}
+
+function englishJoin(values) {
+  const items = values.filter((x) => `${x || ""}`.trim() !== "");
+  if (!items.length) return "";
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+function summarizeValues(values, max = 4) {
+  const items = values.filter((x) => `${x || ""}`.trim() !== "");
+  if (items.length <= max) return englishJoin(items);
+  return `${englishJoin(items.slice(0, max))} and ${items.length - max} more`;
+}
+
+function sourceLabel(value) {
+  const map = { pinterest: "Pinterest", facebook: "Facebook", scan: "Scan" };
+  return map[value] || value;
+}
+
+function effectiveSelection(setValues, facetItems, facetKey) {
+  const selected = Array.from(setValues).map((x) => `${x || ""}`.trim()).filter(Boolean);
+  if (!selected.length) return [];
+  const all = (facetItems || []).map((it) => `${it[facetKey] || ""}`.trim()).filter(Boolean);
+  const allUnique = Array.from(new Set(all));
+  if (allUnique.length > 0 && selected.length >= allUnique.length) return [];
+  return selected;
+}
+
+function updateLabelModeButton() {
+  const btn = $("#toggleLabelMode");
+  if (!btn) return;
+  btn.textContent = state.labelMatchMode === "all" ? "AI Tags: All" : "AI Tags: Any";
+}
+
+function filtersNarrativeParts() {
   const parts = [];
-  const semanticQuery = semanticQueryFromInput(state.q);
-  if (semanticQuery) parts.push(`semantic "${semanticQuery}"`);
-  else if (state.q.trim()) parts.push(`search "${state.q.trim()}"`);
-  if (state.sources.size > 0) parts.push(`${state.sources.size} source filter${state.sources.size === 1 ? "" : "s"}`);
-  if (state.boards.size > 0) parts.push(`${state.boards.size} source tag filter${state.boards.size === 1 ? "" : "s"}`);
-  if (state.labels.size > 0) parts.push(`${state.labels.size} AI tag filter${state.labels.size === 1 ? "" : "s"}`);
+  const selectedSources = effectiveSelection(state.sources, state.facets.sources, "source").map(sourceLabel);
+  const selectedBoards = effectiveSelection(state.boards, state.facets.boards, "board");
+  const selectedLabels = effectiveSelection(state.labels, state.facets.labels, "label");
+  const selectedMedia = effectiveSelection(state.mediaStatuses, state.facets.media_statuses, "media_status").map((v) =>
+    prettyFacetValue("media_statuses", v)
+  );
+  const selectedKinds = effectiveSelection(state.contentKinds, state.facets.content_kinds, "content_kind").map((v) =>
+    prettyFacetValue("content_kinds", v)
+  );
+  const selectedCreators = effectiveSelection(state.creators, state.facets.creators, "creator_name");
+
+  if (selectedSources.length) parts.push(`Source: ${summarizeValues(selectedSources)}`);
+  if (selectedBoards.length) parts.push(`Source tags: ${summarizeValues(selectedBoards)}`);
+  if (selectedLabels.length) {
+    const labelModeText = state.labelMatchMode === "all" ? "all selected tags" : "any selected tag";
+    parts.push(`AI tags (${labelModeText}): ${summarizeValues(selectedLabels)}`);
+  }
+  if (selectedMedia.length) parts.push(`Media type: ${summarizeValues(selectedMedia)}`);
+  if (selectedKinds.length) parts.push(`Record type: ${summarizeValues(selectedKinds)}`);
+  if (selectedCreators.length) parts.push(`Creator/page: ${summarizeValues(selectedCreators)}`);
   return parts;
+}
+
+function mediaNarrativeClause(selectedMediaStatuses) {
+  const unique = Array.from(new Set(selectedMediaStatuses));
+  if (unique.length === 2 && unique.includes("image") && unique.includes("link_only")) {
+    return "have an image or a link";
+  }
+  const parts = selectedMediaStatuses.map((value) => {
+    if (value === "image") return "have an image";
+    if (value === "link_only") return "have a link";
+    if (value === "metadata_only") return "are metadata only";
+    return `match "${value.replace(/_/g, " ")}"`;
+  });
+  if (!parts.length) return "";
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]} or ${parts[1]}`;
+  return `${parts.slice(0, -1).join(", ")}, or ${parts[parts.length - 1]}`;
+}
+
+function trayAssetIdsSet() {
+  return new Set(state.tray.map((item) => item.id));
+}
+
+function buildCanvasNarrative() {
+  if (state.error) {
+    return "The canvas could not be loaded right now. Please try again.";
+  }
+
+  if (state.canvasMode === "tray") {
+    const textQuery = `${state.q || ""}`.trim();
+    if (state.tray.length === 0) {
+      return "The tray canvas is empty. Add items from the main canvas to start curating what you want to share.";
+    }
+    if (state.assets.length === 0 && textQuery) {
+      return `The tray canvas has no items that match "${textQuery}".`;
+    }
+    if (textQuery) {
+      return `The tray canvas is showing items from your share cart that match "${textQuery}".`;
+    }
+    return "The tray canvas is showing items from your share cart.";
+  }
+
+  const viewCollection = getViewCollection();
+  const semanticQuery = semanticQueryFromInput(state.q);
+  const textQuery = semanticQuery ? "" : `${state.q || ""}`.trim();
+  const selectedSources = effectiveSelection(state.sources, state.facets.sources, "source");
+  const selectedBoards = effectiveSelection(state.boards, state.facets.boards, "board");
+  const selectedLabels = effectiveSelection(state.labels, state.facets.labels, "label");
+  const selectedMedia = effectiveSelection(state.mediaStatuses, state.facets.media_statuses, "media_status");
+  const selectedKinds = effectiveSelection(state.contentKinds, state.facets.content_kinds, "content_kind");
+  const selectedCreators = effectiveSelection(state.creators, state.facets.creators, "creator_name");
+  const hasFilters =
+    selectedSources.length > 0 ||
+    selectedBoards.length > 0 ||
+    selectedLabels.length > 0 ||
+    selectedMedia.length > 0 ||
+    selectedKinds.length > 0 ||
+    selectedCreators.length > 0;
+  let base = viewCollection
+    ? `The canvas is showing items from the "${viewCollection.name}" collection`
+    : "The canvas is showing all items";
+
+  if (semanticQuery) {
+    base = viewCollection
+      ? `The canvas is showing items from the "${viewCollection.name}" collection similar to "${semanticQuery}"`
+      : `The canvas is showing items similar to "${semanticQuery}"`;
+  } else if (textQuery) {
+    base = viewCollection
+      ? `The canvas is showing items from the "${viewCollection.name}" collection that match "${textQuery}"`
+      : `The canvas is showing items that match "${textQuery}"`;
+  }
+
+  if (state.assets.length === 0) {
+    base = base.replace("is showing", "currently has no");
+    if (!base.endsWith(".")) base += ".";
+    return `${base} Try changing the search term or clearing one or more filters.`;
+  }
+
+  const mediaOnlyFilter =
+    hasFilters &&
+    selectedMedia.length > 0 &&
+    selectedSources.length === 0 &&
+    selectedBoards.length === 0 &&
+    selectedLabels.length === 0 &&
+    selectedKinds.length === 0 &&
+    selectedCreators.length === 0;
+  if (!viewCollection && !semanticQuery && !textQuery && mediaOnlyFilter) {
+    return `The canvas is showing all items filtered by those that ${mediaNarrativeClause(selectedMedia)}.`;
+  }
+
+  const filterParts = filtersNarrativeParts();
+  if (!filterParts.length) return `${base}.`;
+  return `${base}. Filters applied: ${filterParts.join("; ")}.`;
 }
 
 function semanticQueryFromInput(value) {
@@ -227,7 +417,7 @@ function semanticQueryFromInput(value) {
 
 function semanticSourceFilter() {
   if (state.sources.size === 0) return "";
-  return Array.from(state.sources)[0] || "";
+  return Array.from(state.sources).join(",");
 }
 
 function shortRef(value, max = 64) {
@@ -237,50 +427,108 @@ function shortRef(value, max = 64) {
   return `${text.slice(0, max - 1)}…`;
 }
 
+function displayTitle(assetLike) {
+  const source = `${(assetLike && assetLike.source) || ""}`.trim().toLowerCase();
+  let title = `${(assetLike && assetLike.title) || ""}`.trim();
+  if (!title) return "(untitled)";
+  if (source === "facebook") {
+    title = title
+      .replace(/^leslie brannigan saved a (?:link|product|video)(?: from)?\s+/i, "")
+      .replace(/^leslie brannigan saved a (?:link|product|video)\.?$/i, "")
+      .trim();
+    if (!title) {
+      const host = sourceHost(
+        `${(assetLike && assetLike.source_ref) || (assetLike && assetLike.image_url) || ""}`
+      );
+      return host ? `Saved from ${host}` : "(untitled)";
+    }
+  }
+  return title || "(untitled)";
+}
+
+function isMobilePanelMode() {
+  return window.matchMedia("(max-width: 1100px)").matches;
+}
+
+function closeMobilePanels() {
+  document.body.classList.remove("mobile-left-open", "mobile-right-open");
+}
+
+function openMobilePanel(side) {
+  if (!isMobilePanelMode()) return;
+  closeMobilePanels();
+  if (side === "right") {
+    document.body.classList.add("mobile-right-open");
+    return;
+  }
+  document.body.classList.add("mobile-left-open");
+}
+
 async function selectCollection(collectionId) {
   state.activeCollectionId = collectionId || "";
   state.viewCollectionId = collectionId || "";
   renderCollections();
   setStats();
+  closeMobilePanels();
   await loadAssets();
 }
 
 function setStats() {
   const activeCollection = getActiveCollection();
   const viewCollection = getViewCollection();
-  const filters = activeFilterParts();
-  const scope = viewCollection ? `Collection "${viewCollection.name}"` : "All items";
-  const filterState = filters.length ? "Filtered" : "Unfiltered";
+  const trayIds = trayAssetIdsSet();
+  const traySelectedCount = Array.from(state.selected).filter((id) => trayIds.has(id)).length;
+  const trayMode = state.canvasMode === "tray";
   const destination = activeCollection ? ` • Add-to "${activeCollection.name}"` : "";
-  $("#canvasContext").textContent = `Canvas: ${scope} • ${filterState}${destination}`;
-  const statsBase = `${state.assets.length} items shown${filters.length ? ` • ${filters.join(" • ")}` : ""}`;
-  $("#stats").textContent = state.error ? `${statsBase} • Error: ${state.error}` : statsBase;
-  $("#addSelected").disabled = state.selected.size === 0;
-  $("#addSelectedToCollection").textContent = activeCollection ? `Add Selected to "${activeCollection.name}"` : "Add Selected to Collection";
-  $("#addSelectedToCollection").disabled = state.selected.size === 0 || !activeCollection;
+  const narrative = buildCanvasNarrative();
+  $("#canvasNarrative").textContent = narrative;
+  $("#stats").textContent = trayMode
+    ? `${state.assets.length} tray item${state.assets.length === 1 ? "" : "s"} shown`
+    : `${state.assets.length} items shown${destination}`;
+  $("#addSelectedToCollection").textContent = activeCollection
+    ? `Add Selected to "${activeCollection.name}"`
+    : "Select Collection to Add";
+  $("#addSelectedToCollection").disabled = state.selected.size === 0 || !activeCollection || trayMode;
+  $("#addSelected").textContent = activeCollection ? "Add Selected to Tray (Optional)" : "Add Selected to Tray";
+  $("#addSelected").disabled = state.selected.size === 0 || trayMode;
   $("#removeSelectedFromCollection").textContent = viewCollection
     ? `Remove Selected from "${viewCollection.name}"`
     : "Remove Selected from Collection";
-  $("#removeSelectedFromCollection").disabled = state.selected.size === 0 || !viewCollection;
-  $("#addFiltered").disabled = state.assets.length === 0;
+  $("#removeSelectedFromCollection").disabled = state.selected.size === 0 || !viewCollection || trayMode;
+  $("#removeSelectedFromTray").disabled = traySelectedCount === 0;
+  $("#addFiltered").textContent = activeCollection ? `Add Filtered to "${activeCollection.name}"` : "Add Filtered to Tray";
+  $("#addFiltered").disabled = state.assets.length === 0 || trayMode;
   $("#clearSelection").disabled = state.selected.size === 0;
-  if (!activeCollection) {
+  $("#showTrayCanvas").textContent = trayMode ? "Tray Canvas On" : "Show Tray Canvas";
+  $("#showTrayCanvas").disabled = !trayMode && state.tray.length === 0;
+  $("#showAll").textContent = trayMode ? "Back to Main Canvas" : "Show All";
+  if (trayMode) {
+    $("#collectionHint").textContent = `Tray canvas is active. Collections are separate; use "Add Tray to Collection" when your tray is ready.`;
+  } else if (!activeCollection) {
     $("#collectionHint").textContent =
       state.selected.size > 0
-        ? 'Pick a collection to enable "Add Selected to Collection".'
-        : "No collection selected. Pick one to enable direct add and tray add.";
+        ? 'Pick a collection for primary add, or use tray as a temporary holding area.'
+        : "No collection selected. Select one to enable direct add; tray remains optional.";
   } else if (!viewCollection) {
     $("#collectionHint").textContent = `Selected collection: "${activeCollection.name}". Canvas is showing all items.`;
   } else if (state.tray.length > 0) {
-    $("#collectionHint").textContent = `Selected collection: "${activeCollection.name}". Ready to add ${state.tray.length} tray item${state.tray.length === 1 ? "" : "s"}.`;
+    $("#collectionHint").textContent = `Selected collection: "${activeCollection.name}". Direct add is primary; tray has ${state.tray.length} optional item${state.tray.length === 1 ? "" : "s"}.`;
   } else {
-    $("#collectionHint").textContent = `Selected collection: "${activeCollection.name}". Add selected items, remove selected items, or use tray for batch curation.`;
+    $("#collectionHint").textContent = `Selected collection: "${activeCollection.name}". Add selected items directly; tray is optional.`;
   }
   $("#trayCount").textContent = `${state.tray.length} items`;
-  $("#createFromTray").disabled = state.tray.length === 0;
-  $("#addTrayToCollection").textContent = activeCollection ? `Add Tray to "${activeCollection.name}"` : "Add Tray to Collection";
-  $("#addTrayToCollection").disabled = state.tray.length === 0 || !activeCollection;
-  $("#clearTray").disabled = state.tray.length === 0;
+  const addTrayLabel = activeCollection ? `Add Tray to "${activeCollection.name}"` : "Add Tray to Collection";
+  const disableTrayActions = state.tray.length === 0;
+  const disableAddTrayToCollection = disableTrayActions || !activeCollection;
+  $("#createFromTray").disabled = disableTrayActions;
+  $("#createFromTrayTop").disabled = disableTrayActions;
+  $("#addTrayToCollection").textContent = addTrayLabel;
+  $("#addTrayToCollectionTop").textContent = addTrayLabel;
+  $("#addTrayToCollection").disabled = disableAddTrayToCollection;
+  $("#addTrayToCollectionTop").disabled = disableAddTrayToCollection;
+  $("#clearTray").disabled = disableTrayActions;
+  $("#clearTrayTop").disabled = disableTrayActions;
+  updateLoadMoreButton();
 }
 
 function renderCollections() {
@@ -319,8 +567,8 @@ function renderGrid() {
     const preview = previewForAsset(a);
     const img = preview.url;
     const ai = a.ai;
-    const summary = ai?.summary || a.ai_summary || a.description || "";
-    const imageType = ai?.image_type ? `${ai.image_type}` : "";
+    const summary = (ai && ai.summary) || a.ai_summary || a.description || "";
+    const imageType = ai && ai.image_type ? `${ai.image_type}` : "";
     const labelCount = aiLabelCount(ai);
     const top = topTags(ai, 6);
     const host = sourceHost(a.source_ref || a.image_url || "");
@@ -331,7 +579,10 @@ function renderGrid() {
     }
     if (a.board) metaParts.push(`Board: ${a.board}`);
     metaParts.push(`Source: ${a.source}`);
-    if (imageType) metaParts.push(`Type: ${imageType}`);
+    if (a.creator_name) metaParts.push(`Creator: ${a.creator_name}`);
+    if (a.content_kind) metaParts.push(`Type: ${a.content_kind}`);
+    if (a.media_status) metaParts.push(`Media: ${a.media_status}`);
+    if (imageType) metaParts.push(`Image: ${imageType}`);
     const meta = metaParts.join(" • ");
     const sourceRef = `${a.source_ref || ""}`.trim();
     const sourceRefDisplay = shortRef(sourceRef);
@@ -348,7 +599,7 @@ function renderGrid() {
         <label class="selectBox"><input type="checkbox" ${state.selected.has(a.id) ? "checked" : ""} /></label>
       </div>
       <div class="cardBody">
-        <div class="cardTitle">${escapeHtml(a.title || "(untitled)")}</div>
+        <div class="cardTitle">${escapeHtml(displayTitle(a))}</div>
         ${summary ? `<div class="cardSummary">${escapeHtml(summary)}</div>` : `<div class="cardSummary">Not tagged yet.</div>`}
         <div class="cardMeta">${escapeHtml(meta)}</div>
         ${ai ? `<div class="compactTags">${renderChips(top)}</div>` : ""}
@@ -415,6 +666,15 @@ function renderGrid() {
       e.stopPropagation();
       openModal(a);
     });
+    const sourceLinkEl = el.querySelector(".sourceRefInline");
+    if (sourceLinkEl) {
+      sourceLinkEl.addEventListener("click", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const href = sourceLinkEl.getAttribute("href");
+        if (href) window.open(href, "_blank", "noopener,noreferrer");
+      });
+    }
     el.onclick = () => {
       if (state.expanded.has(a.id)) state.expanded.delete(a.id);
       else state.expanded.add(a.id);
@@ -449,20 +709,60 @@ async function loadTray() {
   state.tray = data.items;
   renderTray();
   setStats();
+  if (state.canvasMode === "tray") {
+    await loadAssets();
+  }
 }
 
-async function loadAssets() {
-  const requestSeq = ++state.assetsRequestSeq;
-  const semanticQuery = semanticQueryFromInput(state.q);
-  state.semanticMode = !!semanticQuery;
+function assetMatchesClientFilters(asset) {
+  if (state.mediaStatuses.size > 0 && !state.mediaStatuses.has(`${asset.media_status || ""}`)) return false;
+  if (state.contentKinds.size > 0 && !state.contentKinds.has(`${asset.content_kind || ""}`)) return false;
+  if (state.creators.size > 0 && !state.creators.has(`${asset.creator_name || ""}`)) return false;
+  return true;
+}
+
+async function loadAssets(append = false) {
+  if (append && (state.loadingAssets || !state.hasMore || state.semanticMode || state.canvasMode === "tray")) return;
+  const requestSeq = append ? state.assetsRequestSeq : ++state.assetsRequestSeq;
+  const semanticQuery = state.canvasMode === "tray" ? "" : semanticQueryFromInput(state.q);
+  state.semanticMode = state.canvasMode === "tray" ? false : !!semanticQuery;
+  state.loadingAssets = true;
+  updateLoadMoreButton();
   try {
+    if (state.canvasMode === "tray") {
+      const query = `${state.q || ""}`.trim().toLowerCase();
+      const rows = state.tray
+        .map((item) => ({ ...item, ai: parseAi(item) }))
+        .filter((item) => {
+          if (!query) return true;
+          const haystack = [
+            displayTitle(item),
+            item.description || "",
+            item.source_ref || "",
+            item.source || "",
+            item.board || "",
+          ]
+            .join(" ")
+            .toLowerCase();
+          return haystack.includes(query);
+        });
+      if (requestSeq !== state.assetsRequestSeq) return;
+      state.error = "";
+      state.assets = rows;
+      state.hasMore = false;
+      renderGrid();
+      return;
+    }
+
     if (semanticQuery) {
       const source = encodeURIComponent(semanticSourceFilter());
       const q = encodeURIComponent(semanticQuery);
-      const data = await api(`/api/search/similar?q=${q}&source=${source}&limit=120`);
+      const data = await api(`/api/search/similar?q=${q}&source=${source}&limit=${ASSETS_PAGE_SIZE}`);
       if (requestSeq !== state.assetsRequestSeq) return;
       state.error = "";
-      state.assets = (data.results || []).map((a) => ({ ...a, ai: parseAi(a) }));
+      const rows = (data.results || []).map((a) => ({ ...a, ai: parseAi(a) })).filter(assetMatchesClientFilters);
+      state.assets = rows;
+      state.hasMore = false;
       renderGrid();
       return;
     }
@@ -471,29 +771,96 @@ async function loadAssets() {
     const source = encodeURIComponent(Array.from(state.sources).join(","));
     const board = encodeURIComponent(Array.from(state.boards).join(","));
     const label = encodeURIComponent(Array.from(state.labels).join(","));
+    const labelMode = encodeURIComponent(state.labelMatchMode || "any");
+    const mediaStatus = encodeURIComponent(Array.from(state.mediaStatuses).join(","));
+    const contentKind = encodeURIComponent(Array.from(state.contentKinds).join(","));
+    const creator = encodeURIComponent(Array.from(state.creators).join(","));
     const col = encodeURIComponent(state.viewCollectionId || "");
-    const data = await api(`/api/assets?q=${q}&source=${source}&board=${board}&label=${label}&collection_id=${col}`);
+    const offset = append ? state.assets.length : 0;
+    const data = await api(
+      `/api/assets?q=${q}&source=${source}&board=${board}&label=${label}&label_mode=${labelMode}&media_status=${mediaStatus}&content_kind=${contentKind}&creator=${creator}&collection_id=${col}&limit=${ASSETS_PAGE_SIZE}&offset=${offset}`
+    );
     if (requestSeq !== state.assetsRequestSeq) return;
     state.error = "";
-    state.assets = data.assets.map((a) => ({ ...a, ai: parseAi(a) }));
+    const rows = (data.assets || []).map((a) => ({ ...a, ai: parseAi(a) }));
+    state.assets = append ? [...state.assets, ...rows] : rows;
+    state.hasMore = rows.length === ASSETS_PAGE_SIZE;
     renderGrid();
   } catch (err) {
     if (requestSeq !== state.assetsRequestSeq) return;
-    state.assets = [];
+    if (!append) {
+      state.assets = [];
+      state.hasMore = false;
+    }
     state.error = formatApiError(err);
     renderGrid();
+  } finally {
+    if (requestSeq === state.assetsRequestSeq) {
+      state.loadingAssets = false;
+      updateLoadMoreButton();
+    }
   }
+}
+
+function printModalAsset(asset) {
+  if (!asset) return;
+  const title = escapeHtml(displayTitle(asset));
+  const metaParts = [];
+  if (asset.source) metaParts.push(`Source: ${asset.source}`);
+  if (asset.creator_name) metaParts.push(`Creator: ${asset.creator_name}`);
+  if (asset.content_kind) metaParts.push(`Record type: ${asset.content_kind}`);
+  const meta = escapeHtml(metaParts.join(" • "));
+  const src = thumbFor(asset) || (asset.image_url ? escapeHtml(asset.image_url) : "");
+  const notes = escapeHtml(asset.notes || "");
+  const sourceRef = escapeHtml(asset.source_ref || "");
+  const win = window.open("", "_blank", "noopener,noreferrer,width=980,height=760");
+  if (!win) return;
+  win.document.write(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>${title}</title>
+  <style>
+    body { font-family: -apple-system, Segoe UI, Arial, sans-serif; margin: 22px; color: #1f2937; }
+    h1 { margin: 0 0 6px 0; font-size: 20px; }
+    .meta { margin-bottom: 14px; color: #4b5563; font-size: 13px; }
+    .card { border: 1px solid #d1d5db; border-radius: 12px; padding: 16px; }
+    img { max-width: 100%; border-radius: 8px; display: block; margin-bottom: 12px; }
+    .notes { margin-top: 12px; white-space: pre-wrap; font-size: 14px; line-height: 1.4; }
+    a { color: #1d4ed8; text-decoration: none; }
+    @media print { body { margin: 0.35in; } .card { border: none; padding: 0; } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>${title}</h1>
+    <div class="meta">${meta}</div>
+    ${src ? `<img src="${src}" alt="" />` : ""}
+    ${sourceRef ? `<div><a href="${sourceRef}" target="_blank" rel="noopener">Open source</a></div>` : ""}
+    ${notes ? `<div class="notes"><strong>Notes:</strong><br/>${notes}</div>` : ""}
+  </div>
+</body>
+</html>`);
+  win.document.close();
+  setTimeout(() => {
+    win.focus();
+    win.print();
+  }, 120);
 }
 
 async function openModal(asset) {
   state.modalAsset = asset;
-  $("#modalTitle").textContent = asset.title || "(untitled)";
+  $("#modalTitle").textContent = displayTitle(asset);
   $("#modalMeta").textContent = `${asset.source} • ${asset.source_ref || ""}`;
   const modalImage = $("#modalImage");
   const previewUrl = thumbFor(asset);
   if (previewUrl) {
     modalImage.src = previewUrl;
     modalImage.style.display = "block";
+    modalImage.onload = () => {
+      renderMarkers();
+      renderFloatingNote();
+    };
   } else {
     modalImage.removeAttribute("src");
     modalImage.style.display = "none";
@@ -518,6 +885,21 @@ function closeModal() {
   state.modalAsset = null;
   state.annotations = [];
   $("#modalImage").style.display = "block";
+}
+
+async function hideModalAsset() {
+  const asset = state.modalAsset;
+  if (!asset) return;
+  const ok = confirm(`Hide "${displayTitle(asset)}" from the main canvas?`);
+  if (!ok) return;
+  try {
+    await api(`/api/assets/${encodeURIComponent(asset.id)}/hide`, { method: "POST", body: JSON.stringify({}) });
+    closeModal();
+    await loadCollections();
+    await loadAssets();
+  } catch (e) {
+    alert(`Hide failed: ${formatApiError(e)}`);
+  }
 }
 
 async function loadAnnotations(assetId) {
@@ -557,15 +939,55 @@ function renderAnnotations() {
   });
 }
 
+function modalImageGeometry() {
+  const stage = $("#imageStage");
+  const img = $("#modalImage");
+  const stageRect = stage.getBoundingClientRect();
+  const stageWidth = stageRect.width;
+  const stageHeight = stageRect.height;
+  if (!img || img.style.display === "none" || !img.naturalWidth || !img.naturalHeight || stageWidth <= 0 || stageHeight <= 0) {
+    return { stageRect, left: 0, top: 0, width: stageWidth, height: stageHeight };
+  }
+  const scale = Math.min(stageWidth / img.naturalWidth, stageHeight / img.naturalHeight);
+  const width = img.naturalWidth * scale;
+  const height = img.naturalHeight * scale;
+  const left = (stageWidth - width) / 2;
+  const top = (stageHeight - height) / 2;
+  return { stageRect, left, top, width, height };
+}
+
+function stagePointToNormalized(clientX, clientY, clamp = false) {
+  const geo = modalImageGeometry();
+  if (geo.width <= 0 || geo.height <= 0) return null;
+  let x = (clientX - geo.stageRect.left - geo.left) / geo.width;
+  let y = (clientY - geo.stageRect.top - geo.top) / geo.height;
+  if (clamp) {
+    x = Math.max(0, Math.min(1, x));
+    y = Math.max(0, Math.min(1, y));
+    return { x, y, geo };
+  }
+  if (x < 0 || x > 1 || y < 0 || y > 1) return null;
+  return { x, y, geo };
+}
+
+function normalizedToStagePoint(x, y) {
+  const geo = modalImageGeometry();
+  return {
+    left: geo.left + x * geo.width,
+    top: geo.top + y * geo.height,
+    geo,
+  };
+}
+
 function renderMarkers() {
   $$(".marker").forEach((m) => m.remove());
   const stage = $("#imageStage");
   state.annotations.forEach((ann, idx) => {
     const m = document.createElement("div");
     m.className = "marker";
-    m.textContent = idx + 1;
-    m.style.left = `${ann.x * 100}%`;
-    m.style.top = `${ann.y * 100}%`;
+    const pt = normalizedToStagePoint(ann.x, ann.y);
+    m.style.left = `${pt.left}px`;
+    m.style.top = `${pt.top}px`;
     m.dataset.id = ann.id;
     m.style.background = markerColor(idx);
     m.innerHTML = `
@@ -617,12 +1039,11 @@ function renderMarkers() {
 $("#imageStage").addEventListener("click", async (e) => {
   if (!state.modalAsset) return;
   if (e.target.closest(".marker") || e.target.closest(".floatingNote")) return;
-  const r = $("#imageStage").getBoundingClientRect();
-  const x = (e.clientX - r.left) / r.width;
-  const y = (e.clientY - r.top) / r.height;
+  const point = stagePointToNormalized(e.clientX, e.clientY);
+  if (!point) return;
   const res = await api("/api/annotations", {
     method: "POST",
-    body: JSON.stringify({ asset_id: state.modalAsset.id, x, y, text: "" }),
+    body: JSON.stringify({ asset_id: state.modalAsset.id, x: point.x, y: point.y, text: "" }),
   });
   state.annotations.push(res.annotation);
   state.activeAnnotationId = res.annotation.id;
@@ -633,13 +1054,12 @@ $("#imageStage").addEventListener("click", async (e) => {
 
 $("#imageStage").addEventListener("pointermove", async (e) => {
   if (!state.dragging) return;
-  const r = $("#imageStage").getBoundingClientRect();
-  const x = (e.clientX - r.left) / r.width;
-  const y = (e.clientY - r.top) / r.height;
+  const point = stagePointToNormalized(e.clientX, e.clientY, true);
+  if (!point) return;
   const ann = state.annotations.find((a) => a.id === state.dragging.id);
   if (!ann) return;
-  ann.x = Math.max(0, Math.min(1, x));
-  ann.y = Math.max(0, Math.min(1, y));
+  ann.x = point.x;
+  ann.y = point.y;
   state.dragging.moved = true;
   renderMarkers();
   renderFloatingNote();
@@ -661,10 +1081,23 @@ $("#closeModal").onclick = () => closeModal();
 $("#modal").onclick = (e) => {
   if (e.target.id === "modal") closeModal();
 };
+const hideAssetBtn = $("#hideAssetBtn");
+if (hideAssetBtn) {
+  hideAssetBtn.onclick = async () => {
+    await hideModalAsset();
+  };
+}
+const printAssetBtn = $("#printAssetBtn");
+if (printAssetBtn) {
+  printAssetBtn.onclick = () => {
+    if (!state.modalAsset) return;
+    printModalAsset(state.modalAsset);
+  };
+}
 
 $("#search").addEventListener("input", (e) => {
   state.q = e.target.value || "";
-  if (semanticQueryFromInput(state.q)) {
+  if (state.canvasMode !== "tray" && semanticQueryFromInput(state.q)) {
     setStats();
     return;
   }
@@ -676,12 +1109,59 @@ $("#search").addEventListener("keydown", (e) => {
   loadAssets();
 });
 // top source dropdown not used; filters panel handles sources
+function resetFiltersAndSearch() {
+  state.q = "";
+  $("#search").value = "";
+  state.sources.clear();
+  state.boards.clear();
+  state.labels.clear();
+  state.mediaStatuses.clear();
+  state.contentKinds.clear();
+  state.creators.clear();
+  state.selected.clear();
+  state.expanded.clear();
+  state.labelMatchMode = "any";
+  updateLabelModeButton();
+}
+
 $("#showAll").onclick = async () => {
+  resetFiltersAndSearch();
+  state.canvasMode = "main";
   state.viewCollectionId = "";
   renderCollections();
   setStats();
+  closeMobilePanels();
+  await loadFacets({ seedDefaultMedia: false });
   await loadAssets();
 };
+
+$("#showTrayCanvas").onclick = async () => {
+  state.canvasMode = "tray";
+  state.viewCollectionId = "";
+  renderCollections();
+  setStats();
+  closeMobilePanels();
+  await loadAssets();
+};
+
+$("#loadMore").onclick = async () => {
+  await loadAssets(true);
+};
+
+$(".content").addEventListener("scroll", () => {
+  const content = $(".content");
+  if (!content || state.semanticMode || state.loadingAssets || !state.hasMore) return;
+  if (content.scrollTop + content.clientHeight >= content.scrollHeight - 220) {
+    loadAssets(true);
+  }
+});
+
+window.addEventListener("resize", () => {
+  if (!isMobilePanelMode()) closeMobilePanels();
+  if (!state.modalAsset) return;
+  renderMarkers();
+  renderFloatingNote();
+});
 
 $("#selectAll").onclick = () => {
   for (const a of state.assets) state.selected.add(a.id);
@@ -772,14 +1252,36 @@ $("#removeSelectedFromCollection").onclick = async () => {
   }
 };
 
-$("#addFiltered").onclick = async () => {
-  const ids = state.assets.map((a) => a.id);
-  await api(`/api/tray/add`, {
+$("#removeSelectedFromTray").onclick = async () => {
+  const trayIds = trayAssetIdsSet();
+  const ids = Array.from(state.selected).filter((id) => trayIds.has(id));
+  if (!ids.length) return;
+  await api("/api/tray/remove", {
     method: "POST",
     body: JSON.stringify({ asset_ids: ids }),
   });
-  state.selected.clear();
+  ids.forEach((id) => state.selected.delete(id));
   await loadTray();
+  await loadAssets();
+};
+
+$("#addFiltered").onclick = async () => {
+  const ids = state.assets.map((a) => a.id);
+  if (!ids.length) return;
+  if (state.activeCollectionId) {
+    await api(`/api/collections/${state.activeCollectionId}/items`, {
+      method: "POST",
+      body: JSON.stringify({ asset_ids: ids }),
+    });
+    await loadCollections();
+  } else {
+    await api(`/api/tray/add`, {
+      method: "POST",
+      body: JSON.stringify({ asset_ids: ids }),
+    });
+    await loadTray();
+  }
+  state.selected.clear();
   await loadAssets();
 };
 
@@ -823,12 +1325,9 @@ function renderFloatingNote() {
   }
   box.classList.remove("hidden");
   ta.value = ann.text || "";
-  const stage = $("#imageStage");
-  const r = stage.getBoundingClientRect();
-  const x = ann.x * r.width;
-  const y = ann.y * r.height;
-  const left = Math.min(r.width - 240, Math.max(10, x + 12));
-  const top = Math.min(r.height - 140, Math.max(10, y + 12));
+  const pt = normalizedToStagePoint(ann.x, ann.y);
+  const left = Math.min(pt.geo.left + pt.geo.width - 240, Math.max(10, pt.left + 12));
+  const top = Math.min(pt.geo.top + pt.geo.height - 140, Math.max(10, pt.top + 12));
   box.style.left = `${left}px`;
   box.style.top = `${top}px`;
   setTimeout(() => ta.focus(), 0);
@@ -872,48 +1371,154 @@ $("#floatingText").addEventListener("keydown", (e) => {
 // refresh button removed
 
 async function init() {
-  await loadCollections();
-  await loadFacets();
-  await loadTray();
-  await loadAssets();
+  try {
+    await loadCollections();
+    await loadFacets();
+    await loadTray();
+    await loadAssets();
+    state.initComplete = true;
+  } catch (err) {
+    console.error("App initialization failed", err);
+    showFatalUiError(err);
+  }
 }
 
 init();
 
-async function loadFacets() {
-  const data = await api("/api/facets");
+function facetContextQueryString() {
+  const source = encodeURIComponent(Array.from(state.sources).join(","));
+  const mediaStatus = encodeURIComponent(Array.from(state.mediaStatuses).join(","));
+  return `source=${source}&media_status=${mediaStatus}`;
+}
+
+async function loadFacets(options = {}) {
+  const seedDefaultMedia = options.seedDefaultMedia !== false;
+  const data = await api(`/api/facets?${facetContextQueryString()}`);
   state.facets = data.facets;
+  const mediaItems = state.facets.media_statuses || [];
+  let seededDefaultMedia = false;
+  if (seedDefaultMedia && !state.mediaDefaultsSeeded && state.mediaStatuses.size === 0 && mediaItems.length) {
+    mediaItems.forEach((it) => {
+      const value = `${it.media_status || ""}`.trim();
+      if (!value || value === "metadata_only") return;
+      state.mediaStatuses.add(value);
+    });
+    if (state.mediaStatuses.size === 0) {
+      mediaItems.forEach((it) => {
+        const value = `${it.media_status || ""}`.trim();
+        if (value) state.mediaStatuses.add(value);
+      });
+    }
+    seededDefaultMedia = state.mediaStatuses.size > 0;
+    if (seededDefaultMedia) state.mediaDefaultsSeeded = true;
+  }
+  if (seededDefaultMedia) {
+    // Recompute context-sensitive content kinds with the default media filter now applied.
+    const data2 = await api(`/api/facets?${facetContextQueryString()}`);
+    state.facets = data2.facets;
+  }
   renderFilters();
+}
+
+function prettyFacetValue(groupKey, value) {
+  if (groupKey === "media_statuses") {
+    if (value === "image") return "Image";
+    if (value === "link_only") return "Link only";
+    if (value === "metadata_only") return "Metadata only";
+  }
+  if (groupKey === "content_kinds") {
+    return value.replace(/_/g, " ");
+  }
+  return value;
+}
+
+window.addEventListener("error", (event) => {
+  if (!event || !event.error) return;
+  if (event.target && event.target !== window) return;
+  if (state.initComplete) {
+    console.error("Unhandled runtime error", event.error);
+    return;
+  }
+  showFatalUiError(event.error || event.message || "Unexpected error");
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  if (state.initComplete) {
+    console.error("Unhandled promise rejection", event && event.reason);
+    return;
+  }
+  showFatalUiError((event && event.reason) || "Unexpected async error");
+});
+
+function isFilterGroupOpen(key) {
+  if (Object.prototype.hasOwnProperty.call(state.filterOpen, key)) {
+    return !!state.filterOpen[key];
+  }
+  return key === "sources";
 }
 
 function renderFilters() {
   const wrap = $("#filters");
   wrap.innerHTML = "";
   const groups = [
-    { key: "sources", label: "Source", set: state.sources },
-    { key: "boards", label: "Source Tags", set: state.boards },
-    { key: "labels", label: "AI Tags", set: state.labels },
+    { key: "sources", label: "Source", set: state.sources, valueKey: "source" },
+    { key: "boards", label: "Source Tags", set: state.boards, valueKey: "board" },
+    { key: "labels", label: "AI Tags", set: state.labels, valueKey: "label" },
+    { key: "media_statuses", label: "Media Type", set: state.mediaStatuses, valueKey: "media_status" },
+    { key: "content_kinds", label: "Record Type", set: state.contentKinds, valueKey: "content_kind" },
+    { key: "creators", label: "Creator / Page", set: state.creators, valueKey: "creator_name" },
   ];
 
   for (const g of groups) {
-    const items = state.facets[g.key] || [];
+    let items = state.facets[g.key] || [];
+    const hasContextCounts = Array.isArray(state.facets.content_kinds_context);
+    if (g.key === "content_kinds") {
+      const contextual = hasContextCounts ? state.facets.content_kinds_context : [];
+      const contextCounts = new Map(contextual.map((it) => [`${it.content_kind || ""}`.trim(), Number(it.n || 0)]));
+      items = (state.facets.content_kinds || []).map((it) => {
+        const value = `${it.content_kind || ""}`.trim();
+        return {
+          ...it,
+          n_context: hasContextCounts ? (value ? contextCounts.get(value) || 0 : 0) : Number(it.n || 0),
+        };
+      });
+    }
     if (!items.length) continue;
+    const isOpen = isFilterGroupOpen(g.key);
     const group = document.createElement("div");
     group.className = "filterGroup";
-    group.innerHTML = `<div class="filterTitle">${g.label}</div>`;
+    group.innerHTML = `
+      <button type="button" class="filterToggle" aria-expanded="${isOpen ? "true" : "false"}">
+        <span>${escapeHtml(g.label)}</span>
+        <span class="filterChevron">${isOpen ? "▾" : "▸"}</span>
+      </button>
+    `;
     const list = document.createElement("div");
-    list.className = "filterList";
-    items.slice(0, 15).forEach((it) => {
-      const value = it.source || it.board || it.label;
+    list.className = `filterList ${isOpen ? "" : "collapsed"}`;
+    items.forEach((it) => {
+      const raw = it[g.valueKey];
+      const value = `${raw || ""}`.trim();
+      if (!value) return;
+      const contextualCount = g.key === "content_kinds" ? Number(it.n_context || 0) : Number(it.n || 0);
+      const isSelected = g.set.has(value);
+      const isZeroOption = g.key === "content_kinds" && hasContextCounts && contextualCount === 0;
+      const disabled = isZeroOption && !isSelected;
       const row = document.createElement("label");
-      row.className = "filterItem";
-      row.innerHTML = `<input type="checkbox" ${g.set.has(value) ? "checked" : ""} /> ${value} <span class="muted">(${it.n})</span>`;
-      row.querySelector("input").addEventListener("change", (e) => {
+      row.className = `filterItem${isZeroOption ? " zeroOption" : ""}`;
+      row.innerHTML = `<input type="checkbox" ${isSelected ? "checked" : ""} ${disabled ? "disabled" : ""} /> ${escapeHtml(prettyFacetValue(g.key, value))} <span class="muted">(${contextualCount})</span>`;
+      row.querySelector("input").addEventListener("change", async (e) => {
         if (e.target.checked) g.set.add(value);
         else g.set.delete(value);
-        loadAssets();
+        if (g.key === "sources" || g.key === "media_statuses") {
+          await loadFacets();
+        }
+        await loadAssets();
       });
       list.appendChild(row);
+    });
+    group.querySelector(".filterToggle").addEventListener("click", () => {
+      state.filterOpen[g.key] = !isFilterGroupOpen(g.key);
+      renderFilters();
     });
     group.appendChild(list);
     wrap.appendChild(group);
@@ -925,25 +1530,136 @@ function renderTray() {
   wrap.innerHTML = "";
   for (const item of state.tray) {
     const el = document.createElement("div");
-    el.className = "listItem";
-    el.innerHTML = `<div><strong>${item.title || "(untitled)"}</strong></div><div class="muted">${item.source}</div>`;
-    el.onclick = async () => {
+    el.className = "listItem trayItem";
+    const preview = previewForAsset(item);
+    el.innerHTML = `
+      <div class="trayItemRow">
+        ${
+          preview.url
+            ? `<img class="trayThumb" src="${escapeHtml(preview.url)}" loading="lazy" alt="" />`
+            : `<div class="trayThumb trayThumbEmpty">No image</div>`
+        }
+        <div class="trayText">
+          <div class="trayTitle">${escapeHtml(displayTitle(item))}</div>
+          <div class="muted">${escapeHtml(item.source || "")}</div>
+        </div>
+        <button class="miniBtn trayRemove">Remove</button>
+      </div>
+    `;
+    el.querySelector(".trayRemove").onclick = async (e) => {
+      e.stopPropagation();
       await api("/api/tray/remove", {
         method: "POST",
         body: JSON.stringify({ asset_ids: [item.id] }),
       });
       await loadTray();
     };
+    el.onclick = () => {
+      openModal(item);
+    };
     wrap.appendChild(el);
   }
 }
 
-$("#clearTray").onclick = async () => {
+function setScanImportButtonState() {
+  const button = $("#addScanPdf");
+  if (!button) return;
+  button.disabled = !!state.scanImportBusy;
+  button.textContent = state.scanImportBusy ? "Importing..." : "Add Scan PDF";
+  const runButton = $("#runScanImport");
+  if (runButton) runButton.disabled = !!state.scanImportBusy || !currentScanImportFile();
+}
+
+function currentScanImportFile() {
+  const input = $("#scanPdfInput");
+  return (input && input.files && input.files[0]) || null;
+}
+
+function openScanImportModal() {
+  const modal = $("#scanImportModal");
+  if (!modal) return;
+  modal.classList.remove("hidden");
+}
+
+function closeScanImportModal() {
+  const modal = $("#scanImportModal");
+  if (!modal) return;
+  modal.classList.add("hidden");
+}
+
+function resetScanImportModal() {
+  const input = $("#scanPdfInput");
+  if (input) input.value = "";
+  const parser = $("#scanUseFormParser");
+  if (parser) parser.checked = false;
+  const delimiters = $("#scanDetectDelimiters");
+  if (delimiters) delimiters.checked = true;
+  setScanImportButtonState();
+}
+
+async function importScanPdf(file, opts = {}) {
+  if (!file) return;
+  const name = `${file.name || ""}`.trim();
+  if (!name.toLowerCase().endsWith(".pdf")) {
+    alert("Please choose a PDF file.");
+    return;
+  }
+  const useFormParser = !!opts.useFormParser;
+  const detectDelimiters = opts.detectDelimiters !== false;
+
+  state.scanImportBusy = true;
+  setScanImportButtonState();
+  const narrative = $("#canvasNarrative");
+  const previousNarrative = narrative ? narrative.textContent : "";
+  if (narrative) {
+    narrative.textContent = `Importing "${name}" into scans...`;
+  }
+
+  try {
+    const formData = new FormData();
+    formData.append("file", file, name);
+    formData.append("use_form_parser", useFormParser ? "1" : "0");
+    formData.append("split_on_delimiters", detectDelimiters ? "1" : "0");
+    const payload = await apiUpload("/api/import/scans", formData);
+    const importReport = payload.import || {};
+    const created = Number(importReport.created_assets || 0);
+    const docs = Number(importReport.detected_documents || 0);
+    const delimiters = Number(importReport.delimiter_pages_skipped || 0);
+    const errors = Array.isArray(importReport.errors) ? importReport.errors.length : 0;
+
+    await loadFacets();
+    await loadAssets();
+
+    let msg = `Imported ${created} scan item${created === 1 ? "" : "s"} from "${name}".`;
+    if (docs > 0) msg += ` Detected ${docs} document${docs === 1 ? "" : "s"}.`;
+    if (detectDelimiters && delimiters > 0) {
+      msg += ` Skipped ${delimiters} blank delimiter page${delimiters === 1 ? "" : "s"}.`;
+    }
+    if (!detectDelimiters) msg += " Delimiter detection was turned off.";
+    if (errors > 0) msg += ` ${errors} import error${errors === 1 ? "" : "s"} were reported.`;
+    if (useFormParser) msg += " Form Parser option was requested.";
+    alert(msg);
+    closeScanImportModal();
+  } catch (e) {
+    alert(`Scan import failed: ${formatApiError(e)}`);
+  } finally {
+    state.scanImportBusy = false;
+    setScanImportButtonState();
+    const input = $("#scanPdfInput");
+    if (input) input.value = "";
+    if (narrative) narrative.textContent = previousNarrative;
+    setStats();
+  }
+}
+
+async function clearTray() {
+  if (!state.tray.length) return;
   await api("/api/tray/clear", { method: "POST" });
   await loadTray();
-};
+}
 
-$("#createFromTray").onclick = async () => {
+async function createCollectionFromTray() {
+  if (!state.tray.length) return;
   const name = prompt("Collection name:", "Curated — Round 1");
   if (!name) return;
   const res = await api("/api/tray/create-collection", {
@@ -953,9 +1669,9 @@ $("#createFromTray").onclick = async () => {
   await loadCollections();
   await loadTray();
   await selectCollection(res.collection.id);
-};
+}
 
-$("#addTrayToCollection").onclick = async () => {
+async function addTrayToActiveCollection() {
   if (!state.activeCollectionId || state.tray.length === 0) return;
   try {
     await api(`/api/collections/${state.activeCollectionId}/items`, {
@@ -969,4 +1685,110 @@ $("#addTrayToCollection").onclick = async () => {
   } catch (e) {
     alert(`Add to collection failed: ${e.message || e}`);
   }
-};
+}
+
+$("#clearTray").onclick = clearTray;
+$("#clearTrayTop").onclick = clearTray;
+$("#createFromTray").onclick = createCollectionFromTray;
+$("#createFromTrayTop").onclick = createCollectionFromTray;
+$("#addTrayToCollection").onclick = addTrayToActiveCollection;
+$("#addTrayToCollectionTop").onclick = addTrayToActiveCollection;
+const toggleLabelModeBtn = $("#toggleLabelMode");
+if (toggleLabelModeBtn) {
+  toggleLabelModeBtn.onclick = async () => {
+    state.labelMatchMode = state.labelMatchMode === "all" ? "any" : "all";
+    updateLabelModeButton();
+    await loadAssets();
+  };
+  updateLabelModeButton();
+}
+
+const addScanPdfBtn = $("#addScanPdf");
+const scanPdfInput = $("#scanPdfInput");
+const runScanImportBtn = $("#runScanImport");
+const cancelScanImportBtn = $("#cancelScanImport");
+const closeScanImportBtn = $("#closeScanImport");
+if (addScanPdfBtn && scanPdfInput && runScanImportBtn) {
+  addScanPdfBtn.onclick = () => {
+    if (state.scanImportBusy) return;
+    openScanImportModal();
+    resetScanImportModal();
+  };
+  scanPdfInput.addEventListener("change", () => {
+    setScanImportButtonState();
+  });
+  runScanImportBtn.addEventListener("click", async () => {
+    if (state.scanImportBusy) return;
+    const file = currentScanImportFile();
+    const useFormParser = !!($("#scanUseFormParser") && $("#scanUseFormParser").checked);
+    const detectDelimiters = !!($("#scanDetectDelimiters") && $("#scanDetectDelimiters").checked);
+    await importScanPdf(file, { useFormParser, detectDelimiters });
+  });
+  if (cancelScanImportBtn) {
+    cancelScanImportBtn.onclick = () => {
+      if (state.scanImportBusy) return;
+      closeScanImportModal();
+      resetScanImportModal();
+    };
+  }
+  if (closeScanImportBtn) {
+    closeScanImportBtn.onclick = () => {
+      if (state.scanImportBusy) return;
+      closeScanImportModal();
+      resetScanImportModal();
+    };
+  }
+  setScanImportButtonState();
+}
+
+const openLeftSidebarBtn = $("#openLeftSidebar");
+if (openLeftSidebarBtn) {
+  openLeftSidebarBtn.onclick = () => openMobilePanel("left");
+}
+const openRightSidebarBtn = $("#openRightSidebar");
+if (openRightSidebarBtn) {
+  openRightSidebarBtn.onclick = () => openMobilePanel("right");
+}
+const closeLeftSidebarBtn = $("#closeLeftSidebar");
+if (closeLeftSidebarBtn) {
+  closeLeftSidebarBtn.onclick = () => closeMobilePanels();
+}
+const closeRightSidebarBtn = $("#closeRightSidebar");
+if (closeRightSidebarBtn) {
+  closeRightSidebarBtn.onclick = () => closeMobilePanels();
+}
+const mobileOverlay = $("#mobileOverlay");
+if (mobileOverlay) {
+  mobileOverlay.onclick = () => closeMobilePanels();
+}
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    closeMobilePanels();
+    closeSearchHelp();
+    if (!state.scanImportBusy) closeScanImportModal();
+  }
+});
+
+const searchHelpWrap = $(".searchHelpWrap");
+const searchHelpBtn = $("#searchHelp");
+function closeSearchHelp() {
+  if (!searchHelpWrap || !searchHelpBtn) return;
+  searchHelpWrap.classList.remove("open");
+  searchHelpBtn.setAttribute("aria-expanded", "false");
+}
+
+if (searchHelpWrap && searchHelpBtn) {
+  searchHelpBtn.onclick = (e) => {
+    e.stopPropagation();
+    const willOpen = !searchHelpWrap.classList.contains("open");
+    if (willOpen) searchHelpWrap.classList.add("open");
+    else searchHelpWrap.classList.remove("open");
+    searchHelpBtn.setAttribute("aria-expanded", willOpen ? "true" : "false");
+  };
+}
+
+document.addEventListener("click", (e) => {
+  if (!searchHelpWrap || !searchHelpWrap.classList.contains("open")) return;
+  if (searchHelpWrap.contains(e.target)) return;
+  closeSearchHelp();
+});

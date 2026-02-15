@@ -10,6 +10,7 @@ from inspirations.store import (
     delete_assets,
     list_annotations,
     list_assets,
+    list_facets,
     list_collection_items,
     list_collections,
     remove_items_from_collection,
@@ -84,6 +85,158 @@ class TestStore(unittest.TestCase):
             self.assertEqual(len(res_label), 1)
             self.assertEqual(len(res_summary), 1)
 
+    def test_list_assets_label_mode_all_requires_all_selected_labels(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    "insert into assets (id, source, source_ref, title, imported_at) values (?, ?, ?, ?, datetime('now'))",
+                    ("a1", "pinterest", "pin://1", "Kitchen"),
+                )
+                db.exec(
+                    "insert into assets (id, source, source_ref, title, imported_at) values (?, ?, ?, ?, datetime('now'))",
+                    ("a2", "pinterest", "pin://2", "Bath"),
+                )
+                db.exec(
+                    """
+                    insert into asset_labels (id, asset_id, label, confidence, source, model, run_id, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                    """,
+                    ("l1", "a1", "oak", 0.9, "ai", "test", "r1"),
+                )
+                db.exec(
+                    """
+                    insert into asset_labels (id, asset_id, label, confidence, source, model, run_id, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                    """,
+                    ("l2", "a1", "white", 0.8, "ai", "test", "r1"),
+                )
+                db.exec(
+                    """
+                    insert into asset_labels (id, asset_id, label, confidence, source, model, run_id, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                    """,
+                    ("l3", "a2", "oak", 0.7, "ai", "test", "r1"),
+                )
+                any_match = list_assets(db, label="oak,white")
+                all_match = list_assets(db, label="oak,white", label_mode="all")
+
+            self.assertEqual({r["id"] for r in any_match}, {"a1", "a2"})
+            self.assertEqual([r["id"] for r in all_match], ["a1"])
+
+    def test_list_assets_filters_media_status_content_kind_and_creator(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    """
+                    insert into assets
+                      (id, source, source_ref, title, imported_at, media_status, content_kind, creator_name)
+                    values (?, ?, ?, ?, datetime('now'), ?, ?, ?)
+                    """,
+                    ("a1", "facebook", "facebook://saved/a1", "Saved reel", "metadata_only", "reel", "Example"),
+                )
+                db.exec(
+                    """
+                    insert into assets
+                      (id, source, source_ref, title, imported_at, media_status, content_kind, creator_name)
+                    values (?, ?, ?, ?, datetime('now'), ?, ?, ?)
+                    """,
+                    ("a2", "facebook", "https://example.com/post", "Saved link", "link_only", "link", "Example"),
+                )
+                by_media = list_assets(db, media_status="metadata_only")
+                by_kind = list_assets(db, content_kind="link")
+                by_creator = list_assets(db, creator="Example")
+            self.assertEqual([r["id"] for r in by_media], ["a1"])
+            self.assertEqual([r["id"] for r in by_kind], ["a2"])
+            self.assertEqual(len(by_creator), 2)
+
+    def test_list_facets_includes_media_and_creator_dimensions(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    """
+                    insert into assets
+                      (id, source, source_ref, title, imported_at, media_status, content_kind, creator_name)
+                    values (?, ?, ?, ?, datetime('now'), ?, ?, ?)
+                    """,
+                    ("a1", "facebook", "facebook://saved/a1", "Saved reel", "metadata_only", "reel", "Creator A"),
+                )
+                db.exec(
+                    """
+                    insert into assets
+                      (id, source, source_ref, title, imported_at, media_status, content_kind, creator_name)
+                    values (?, ?, ?, ?, datetime('now'), ?, ?, ?)
+                    """,
+                    ("a2", "facebook", "https://example.com/a.jpg", "Saved image", "image", "link", "Creator B"),
+                )
+                facets = list_facets(db)
+            self.assertIn("media_statuses", facets)
+            self.assertIn("content_kinds", facets)
+            self.assertIn("creators", facets)
+            media_values = {r["media_status"] for r in facets["media_statuses"]}
+            self.assertIn("metadata_only", media_values)
+            self.assertIn("image", media_values)
+
+    def test_list_facets_content_kind_context_for_source_and_media(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    """
+                    insert into assets
+                      (id, source, source_ref, title, imported_at, media_status, content_kind)
+                    values (?, ?, ?, ?, datetime('now'), ?, ?)
+                    """,
+                    ("p1", "pinterest", "pin://1", "Pin", "image", "pin"),
+                )
+                db.exec(
+                    """
+                    insert into assets
+                      (id, source, source_ref, title, imported_at, media_status, content_kind)
+                    values (?, ?, ?, ?, datetime('now'), ?, ?)
+                    """,
+                    ("f1", "facebook", "facebook://saved/f1", "FB post", "metadata_only", "post"),
+                )
+                db.exec(
+                    """
+                    insert into assets
+                      (id, source, source_ref, title, imported_at, media_status, content_kind)
+                    values (?, ?, ?, ?, datetime('now'), ?, ?)
+                    """,
+                    ("s1", "scan", "scan://s1", "Scan", "image", "scan"),
+                )
+                facets = list_facets(db, source="pinterest", media_status="image")
+
+            all_values = {r["content_kind"] for r in facets["content_kinds"]}
+            contextual = {r["content_kind"] for r in facets["content_kinds_context"]}
+            self.assertIn("pin", all_values)
+            self.assertIn("post", all_values)
+            self.assertIn("scan", all_values)
+            self.assertEqual(contextual, {"pin"})
+
+    def test_ensure_schema_backfills_pinterest_content_kind_pin(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    """
+                    insert into assets
+                      (id, source, source_ref, title, imported_at, media_status, content_kind)
+                    values (?, ?, ?, ?, datetime('now'), ?, ?)
+                    """,
+                    ("p1", "pinterest", "pin://legacy", "Legacy pin", "image", None),
+                )
+                ensure_schema(db)
+                kind = db.query_value("select content_kind from assets where id='p1'")
+            self.assertEqual(kind, "pin")
+
     def test_list_assets_prioritizes_records_with_preview_media(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "t.sqlite"
@@ -147,6 +300,30 @@ class TestStore(unittest.TestCase):
                 )
                 res = list_assets(db, source="facebook", limit=10)
             self.assertEqual([r["id"] for r in res[:4]], ["a4", "a3", "a2", "a1"])
+
+    def test_list_assets_excludes_hidden_collection_by_default(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    "insert into assets (id, source, source_ref, title, imported_at) values (?, ?, ?, ?, datetime('now'))",
+                    ("a1", "pinterest", "pin://1", "Visible"),
+                )
+                db.exec(
+                    "insert into assets (id, source, source_ref, title, imported_at) values (?, ?, ?, ?, datetime('now'))",
+                    ("a2", "pinterest", "pin://2", "Hidden"),
+                )
+                hidden = create_collection(db, name="Hidden", description="Hidden assets")
+                add_items_to_collection(db, collection_id=hidden["id"], asset_ids=["a2"])
+
+                main = list_assets(db)
+                show_hidden = list_assets(db, include_hidden=True)
+                hidden_only = list_assets(db, collection_id=hidden["id"])
+
+            self.assertEqual([r["id"] for r in main], ["a1"])
+            self.assertEqual({r["id"] for r in show_hidden}, {"a1", "a2"})
+            self.assertEqual([r["id"] for r in hidden_only], ["a2"])
 
     def test_remove_items_from_collection(self):
         with tempfile.TemporaryDirectory() as td:
