@@ -29,6 +29,8 @@ const state = {
   loadingAssets: false,
   scanImportBusy: false,
   photoImportBusy: false,
+  scanImportFile: null,
+  photoImportFile: null,
   mediaDefaultsSeeded: false,
   canvasMode: "main",
   filterOpen: { sources: true },
@@ -37,6 +39,8 @@ const state = {
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 const IMAGE_SUFFIX_RE = /\.(jpg|jpeg|png|webp|gif|bmp|svg)(\?.*)?$/i;
+const PDF_FILE_EXT_RE = /\.pdf$/i;
+const IMAGE_FILE_EXT_RE = /\.(jpg|jpeg|png|webp|gif|bmp|heic|heif|tif|tiff)$/i;
 const EXTREME_ASPECT_RATIO_MAX = 1.8;
 const EXTREME_ASPECT_RATIO_MIN = 0.8;
 const ASSETS_PAGE_SIZE = 240;
@@ -239,6 +243,71 @@ function isHttpUrl(value) {
   } catch {
     return false;
   }
+}
+
+function isPdfFile(file) {
+  if (!file) return false;
+  const name = `${file.name || ""}`.trim();
+  const mime = `${file.type || ""}`.trim().toLowerCase();
+  return PDF_FILE_EXT_RE.test(name) || mime === "application/pdf";
+}
+
+function isImageFile(file) {
+  if (!file) return false;
+  const name = `${file.name || ""}`.trim();
+  const mime = `${file.type || ""}`.trim().toLowerCase();
+  if (mime.startsWith("image/")) return true;
+  return IMAGE_FILE_EXT_RE.test(name);
+}
+
+function setSingleFileSelection(input, file, stateKey) {
+  state[stateKey] = file || null;
+  if (!input) return;
+  if (!file) {
+    input.value = "";
+    return;
+  }
+  try {
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    input.files = dt.files;
+  } catch {
+    // Some browsers block synthetic FileList assignment; state fallback still works.
+  }
+}
+
+function wireSingleFileDropZone(options) {
+  const zone = options.zone;
+  const input = options.input;
+  if (!zone || !input) return;
+  const prevent = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  const busy = () => (typeof options.isBusy === "function" ? !!options.isBusy() : false);
+  const activate = (event) => {
+    prevent(event);
+    if (busy()) return;
+    zone.classList.add("dragActive");
+  };
+  const clear = (event) => {
+    prevent(event);
+    zone.classList.remove("dragActive");
+  };
+  ["dragenter", "dragover"].forEach((evt) => zone.addEventListener(evt, activate));
+  ["dragleave", "dragend"].forEach((evt) => zone.addEventListener(evt, clear));
+  zone.addEventListener("drop", (event) => {
+    clear(event);
+    if (busy()) return;
+    const file = (event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0]) || null;
+    if (!file) return;
+    if (!options.accept(file)) {
+      if (options.invalidMessage) alert(options.invalidMessage);
+      return;
+    }
+    setSingleFileSelection(input, file, options.stateKey);
+    if (typeof options.onSelected === "function") options.onSelected(file);
+  });
 }
 
 function getCollectionById(collectionId) {
@@ -563,9 +632,9 @@ function setStats() {
   } else if (!viewCollection) {
     $("#collectionHint").textContent = `Selected collection: "${activeCollection.name}". Canvas is showing all items.`;
   } else if (state.tray.length > 0) {
-    $("#collectionHint").textContent = `Viewing "${viewCollection.name}". Use Review to inspect similarity groups. Direct add is primary; tray has ${state.tray.length} optional item${state.tray.length === 1 ? "" : "s"}.`;
+    $("#collectionHint").textContent = `Viewing "${viewCollection.name}". Use Review (opens a new tab) to inspect similarity groups. Direct add is primary; tray has ${state.tray.length} optional item${state.tray.length === 1 ? "" : "s"}.`;
   } else {
-    $("#collectionHint").textContent = `Viewing "${viewCollection.name}". Use Review to inspect similarity groups, then keep adding selected items directly.`;
+    $("#collectionHint").textContent = `Viewing "${viewCollection.name}". Use Review (opens a new tab) to inspect similarity groups, then keep adding selected items directly.`;
   }
   $("#trayCount").textContent = `${state.tray.length} items`;
   const addTrayLabel = activeCollection ? `Add Tray to "${activeCollection.name}"` : "Add Tray to Collection";
@@ -1735,7 +1804,7 @@ function setScanImportButtonState() {
 
 function currentScanImportFile() {
   const input = $("#scanPdfInput");
-  return (input && input.files && input.files[0]) || null;
+  return state.scanImportFile || (input && input.files && input.files[0]) || null;
 }
 
 function openScanImportModal() {
@@ -1752,18 +1821,20 @@ function closeScanImportModal() {
 
 function resetScanImportModal() {
   const input = $("#scanPdfInput");
-  if (input) input.value = "";
+  setSingleFileSelection(input, null, "scanImportFile");
   const parser = $("#scanUseFormParser");
   if (parser) parser.checked = false;
   const delimiters = $("#scanDetectDelimiters");
   if (delimiters) delimiters.checked = true;
+  const dropZone = $("#scanDropZone");
+  if (dropZone) dropZone.classList.remove("dragActive");
   setScanImportButtonState();
 }
 
 async function importScanPdf(file, opts = {}) {
   if (!file) return;
   const name = `${file.name || ""}`.trim();
-  if (!name.toLowerCase().endsWith(".pdf")) {
+  if (!isPdfFile(file)) {
     alert("Please choose a PDF file.");
     return;
   }
@@ -1794,8 +1865,12 @@ async function importScanPdf(file, opts = {}) {
     await loadFacets();
     await loadAssets();
 
-    let msg = `Imported ${created} scan item${created === 1 ? "" : "s"} from "${name}".`;
-    if (docs > 0) msg += ` Detected ${docs} document${docs === 1 ? "" : "s"}.`;
+    let msg = `Imported ${created} scan page${created === 1 ? "" : "s"} from "${name}".`;
+    if (docs > 0) {
+      msg += ` These are grouped into ${docs} scan document card${docs === 1 ? "" : "s"} in the canvas.`;
+    } else {
+      msg += " This appears as one scan document card in the canvas.";
+    }
     if (detectDelimiters && delimiters > 0) {
       msg += ` Skipped ${delimiters} blank delimiter page${delimiters === 1 ? "" : "s"}.`;
     }
@@ -1811,7 +1886,7 @@ async function importScanPdf(file, opts = {}) {
     setScanImportButtonState();
     setPhotoImportButtonState();
     const input = $("#scanPdfInput");
-    if (input) input.value = "";
+    setSingleFileSelection(input, null, "scanImportFile");
     if (narrative) narrative.textContent = previousNarrative;
     setStats();
   }
@@ -1828,7 +1903,7 @@ function setPhotoImportButtonState() {
 
 function currentPhotoImportFile() {
   const input = $("#photoInput");
-  return (input && input.files && input.files[0]) || null;
+  return state.photoImportFile || (input && input.files && input.files[0]) || null;
 }
 
 function openPhotoImportModal() {
@@ -1845,7 +1920,9 @@ function closePhotoImportModal() {
 
 function resetPhotoImportModal() {
   const input = $("#photoInput");
-  if (input) input.value = "";
+  setSingleFileSelection(input, null, "photoImportFile");
+  const dropZone = $("#photoDropZone");
+  if (dropZone) dropZone.classList.remove("dragActive");
   setPhotoImportButtonState();
 }
 
@@ -1853,6 +1930,10 @@ async function importPhoto(file) {
   if (!file) return;
   const name = `${file.name || ""}`.trim();
   if (!name) return;
+  if (!isImageFile(file)) {
+    alert("Please choose an image file.");
+    return;
+  }
   state.photoImportBusy = true;
   setPhotoImportButtonState();
   setScanImportButtonState();
@@ -1880,7 +1961,7 @@ async function importPhoto(file) {
     setPhotoImportButtonState();
     setScanImportButtonState();
     const input = $("#photoInput");
-    if (input) input.value = "";
+    setSingleFileSelection(input, null, "photoImportFile");
     if (narrative) narrative.textContent = previousNarrative;
     setStats();
   }
@@ -1941,6 +2022,7 @@ if (toggleLabelModeBtn) {
 
 const addScanPdfBtn = $("#addScanPdf");
 const scanPdfInput = $("#scanPdfInput");
+const scanDropZone = $("#scanDropZone");
 const runScanImportBtn = $("#runScanImport");
 const cancelScanImportBtn = $("#cancelScanImport");
 const closeScanImportBtn = $("#closeScanImport");
@@ -1951,7 +2033,24 @@ if (addScanPdfBtn && scanPdfInput && runScanImportBtn) {
     resetScanImportModal();
   };
   scanPdfInput.addEventListener("change", () => {
+    const file = (scanPdfInput.files && scanPdfInput.files[0]) || null;
+    if (file && !isPdfFile(file)) {
+      alert("Please choose a PDF file.");
+      setSingleFileSelection(scanPdfInput, null, "scanImportFile");
+      setScanImportButtonState();
+      return;
+    }
+    state.scanImportFile = file || null;
     setScanImportButtonState();
+  });
+  wireSingleFileDropZone({
+    zone: scanDropZone,
+    input: scanPdfInput,
+    stateKey: "scanImportFile",
+    accept: isPdfFile,
+    invalidMessage: "Please drop a PDF file.",
+    isBusy: () => state.scanImportBusy || state.photoImportBusy,
+    onSelected: () => setScanImportButtonState(),
   });
   runScanImportBtn.addEventListener("click", async () => {
     if (state.scanImportBusy) return;
@@ -1978,6 +2077,7 @@ if (addScanPdfBtn && scanPdfInput && runScanImportBtn) {
 }
 const addPhotosBtn = $("#addPhotos");
 const photoInput = $("#photoInput");
+const photoDropZone = $("#photoDropZone");
 const runPhotoImportBtn = $("#runPhotoImport");
 const cancelPhotoImportBtn = $("#cancelPhotoImport");
 const closePhotoImportBtn = $("#closePhotoImport");
@@ -1988,7 +2088,24 @@ if (addPhotosBtn && photoInput && runPhotoImportBtn) {
     resetPhotoImportModal();
   };
   photoInput.addEventListener("change", () => {
+    const file = (photoInput.files && photoInput.files[0]) || null;
+    if (file && !isImageFile(file)) {
+      alert("Please choose an image file.");
+      setSingleFileSelection(photoInput, null, "photoImportFile");
+      setPhotoImportButtonState();
+      return;
+    }
+    state.photoImportFile = file || null;
     setPhotoImportButtonState();
+  });
+  wireSingleFileDropZone({
+    zone: photoDropZone,
+    input: photoInput,
+    stateKey: "photoImportFile",
+    accept: isImageFile,
+    invalidMessage: "Please drop an image file.",
+    isBusy: () => state.photoImportBusy || state.scanImportBusy,
+    onSelected: () => setPhotoImportButtonState(),
   });
   runPhotoImportBtn.addEventListener("click", async () => {
     if (state.photoImportBusy || state.scanImportBusy) return;

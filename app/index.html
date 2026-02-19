@@ -136,11 +136,16 @@
           <button id="closeScanImport" type="button">Close</button>
         </div>
         <div class="scanImportBody">
-          <input id="scanPdfInput" type="file" accept=".pdf,application/pdf" />
+          <label id="scanDropZone" class="fileDropZone" for="scanPdfInput">
+            <span class="fileDropTitle">Drop a scan PDF here, or click to choose a file</span>
+            <span class="fileDropHint">Single-file import (PDF only).</span>
+            <input id="scanPdfInput" type="file" accept=".pdf,application/pdf" />
+          </label>
           <label class="scanOptionRow">
             <input id="scanDetectDelimiters" type="checkbox" checked />
-            <span>Detect blank separator pages for multi-page document splitting</span>
+            <span>Split into separate scan documents when blank separator pages are detected</span>
           </label>
+          <div class="muted">Default is on. Turn off only when the PDF should stay as one continuous document.</div>
           <label class="scanOptionRow">
             <input id="scanUseFormParser" type="checkbox" />
             <span>Use Form Parser (experimental structured extraction)</span>
@@ -164,7 +169,11 @@
           <button id="closePhotoImport" type="button">Close</button>
         </div>
         <div class="scanImportBody">
-          <input id="photoInput" type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.heif,.tif,.tiff" />
+          <label id="photoDropZone" class="fileDropZone" for="photoInput">
+            <span class="fileDropTitle">Drop a photo here, or click to choose a file</span>
+            <span class="fileDropHint">Single-file import (image formats).</span>
+            <input id="photoInput" type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.heif,.tif,.tiff" />
+          </label>
           <div class="muted">Photo imports are tagged as source: photo and record type: photo.</div>
           <div class="scanImportActions">
             <button id="cancelPhotoImport" type="button">Cancel</button>
