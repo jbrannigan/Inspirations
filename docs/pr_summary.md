@@ -1,5 +1,37 @@
 # PR Summary
 
+## Update (February 18, 2026)
+
+### UX Round 1 — Light Theme, Unified Groups, Grid Zoom (PR #26)
+
+**Phase 1 — Light creative theme (`app/styles.css`):**
+- Replaced dark glass-panel CSS (`:root` with `--bg: #0b0f14`) with a warm light system: `--bg: #faf8f5`, `--panel: #ffffff`, `--accent: #b8860b` (antique gold), plus `--accent-sage`, `--accent-rose`, `--panel-hover`, `--surface-subtle`, and three shadow vars.
+- Added DM Sans (Google Fonts, 300/400/600) via `@import` at top of `styles.css`; updated `font-family` stack.
+- Replaced ~50 hardcoded dark `rgba(15,22,32,…)` and `rgba(16,24,36,…)` values with CSS variable references or warm equivalents throughout the file.
+- Cards: white panel (`var(--panel)`), `var(--shadow-sm)` resting shadow, hover lifts to `var(--shadow-md)` with warmer border.
+- Topbar: white/cream background + `var(--shadow-sm)`; logo gradient updated to gold-to-sage.
+- Modals: white background with `var(--shadow-lg)`; backdrop is warm frosted (`rgba(250,248,245,0.85)` + `backdrop-filter: blur(8px)`).
+- `primaryAction` buttons now solid gold (`var(--accent)`) with white text.
+- Toast/skeleton/marker/annotation UI all updated to light equivalents.
+
+**Phase 2 — Unified Groups sidebar (`app/app.js`, `app/index.html`, `app/styles.css`):**
+- Left sidebar redesigned: single "Groups" section replaces separate "Filters" + "Collections" panels.
+- `renderGroups()` added; `renderCollections()` retained as an alias. Shows boards (from `state.facets.boards`) under a "Boards" header and user collections under "My Collections", each with item counts.
+- Group search input (`#groupSearch`) filters both sections live.
+- Clicking a board toggles it in `state.boards` and reloads the grid.
+- Filters section moved to a collapsed accordion at the bottom of the sidebar; `#filtersBadge` shows active filter count.
+- Boards removed from the filter accordion (they are now in the groups section).
+- `renderFilters()` now guards for null wrap; `updateFiltersBadge()` helper added.
+- Cards: `compactTags` and `cardSummary` hidden by default on non-expanded cards (image + title only).
+
+**Phase 3 — Grid zoom levels + modal improvements (`app/app.js`, `app/index.html`, `app/styles.css`):**
+- Zoom toolbar (S / M / L / XL buttons) added to `#canvasControls`; active level highlighted in gold.
+- `state.gridZoom` persisted to `localStorage`; `applyZoom()` sets `.grid.zoom-{s,m,l,xl}` class.
+- CSS grid `minmax()` values: S=140px, M=200px (default), L=340px, XL=480px.
+- `cardSummary` shown at L/XL zoom on non-expanded cards; XL images get `aspect-ratio: 3/2`.
+- Modal progressive loading: `openModal()` shows thumbnail (`kind=thumb`) immediately, then background-loads `kind=original` and swaps when ready (only if the asset has a stored thumb+original pair).
+- "View Source" button added to modal header; opens `source_ref` (external URL) or `/media/<id>?kind=original` (stored file) in a new tab. Hidden when no source is available.
+
 ## Update (February 19, 2026)
 
 ### Annotation Delete with Undo (PR #24)
