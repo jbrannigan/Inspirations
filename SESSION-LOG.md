@@ -7,6 +7,18 @@ Dated entries for every work session. Read this first when resuming.
 
 ---
 
+## 2026-02-19 — Promote boards migration (PR #34)
+
+- Implemented `docs/PROMOTE_BOARDS_MIGRATION.md` in full
+- **cli.py**: Added `promote-boards` subcommand — iterates distinct `board` values, creates `pins: <board>` collection per board (idempotent), links all matching assets via `add_items_to_collection`
+- **app.js `renderGroups()`**: Removed boards section (boards variable, "Boards" header, single-select click handler); removed "My Collections" header
+- **app.js `renderFilters()`**: Added Board as a filter facet (checkbox multi-select); added `state.boards.size` to the filters badge count
+- **app.js cleanup**: Removed dead `state.viewBoardName` from state object, `selectCollection`, `setStats` review-button logic, and review-button onclick handler
+- Migration ran against `data/inspirations.db` — 0 boards in current dataset (correct no-op)
+- Validation: 104 tests passing, CI green on py3.11/3.12/3.13, lint clean
+
+---
+
 ## 2026-02-19 — Round 1 bug fixes (PR #32)
 
 - **Fix 1 — Modal close ×**: Moved `#closeModal` out of `.modalActions` row; now a standalone 36×36 × button positioned absolute top-right of `.modalContent`
