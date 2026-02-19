@@ -259,6 +259,31 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .modalActions { flex-wrap: wrap; justify-content: flex-end; }
 .scanImportContent { width: min(560px, 92vw); }
 .scanImportBody { margin-top: 10px; display: grid; gap: 10px; }
+.fileDropZone {
+  display: grid;
+  gap: 6px;
+  border: 1px dashed rgba(141, 213, 255, 0.45);
+  border-radius: 12px;
+  padding: 10px;
+  background: rgba(15, 22, 32, 0.55);
+  cursor: pointer;
+}
+.fileDropZone input[type="file"] {
+  cursor: pointer;
+}
+.fileDropZone.dragActive {
+  border-color: rgba(141, 213, 255, 0.95);
+  box-shadow: 0 0 0 2px rgba(141, 213, 255, 0.2);
+  background: rgba(22, 36, 54, 0.86);
+}
+.fileDropTitle {
+  font-size: 13px;
+  font-weight: 600;
+}
+.fileDropHint {
+  color: var(--muted);
+  font-size: 12px;
+}
 .scanOptionRow { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .scanImportActions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .imageStage { position: relative; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: rgba(15,23,34,0.6); aspect-ratio: 4/3; }
