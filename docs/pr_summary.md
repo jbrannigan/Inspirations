@@ -2,6 +2,38 @@
 
 ## Update (February 19, 2026)
 
+### Full UX Refactor — Audit Sweep (PR #22)
+- Created `app/shared.js`: extracted `escapeHtml`, `api`, `formatApiError`, `showToast`, and `_removeToast` into a shared module loaded by both `index.html` and `admin.html`. Removed duplicated copies from `app.js` and `admin.js`.
+- CSS foundation overhaul:
+  - Added type scale custom properties (`--fs-xs` through `--fs-xl`) and applied them to `.title`, `.sectionTitle`, `.cardTitle`, `.modalTitle`.
+  - Added spacing utility classes (`.mt-1/2/3/4`, `.flex-wrap`); replaced 8 inline `style` attributes in `index.html` with utility classes.
+  - Standardized gap values to 4px grid (`.searchInputRow`, `.chips`, `.compactTags`, `.filterList`), grid gap 10→12px.
+  - Widened `.layout.three` sidebars from 260px to 280px.
+  - Added `.adminShell` centered-content rule.
+- Contextual toolbar redesign:
+  - `#selectionBar` is hidden when nothing is selected and appears with a live count when items are selected; buttons reorganized into semantic sections (`canvasControls`, `selectionBar`, `trayToolbar`).
+  - Button labels shortened for the selection bar context.
+- Grid performance:
+  - Added `data-id` attribute to each card element.
+  - New `updateCardState(id)` function does targeted DOM updates on checkbox/expand instead of full `renderGrid()` re-render on every click.
+- Mobile scroll affordance: CSS gradient fade on `.toolbar .row` with `scrolled-end` class toggled via scroll listener.
+- Toast notification system:
+  - `Shared.showToast(message, { type, duration, actionLabel, onAction })` added to `shared.js`.
+  - Toast container added to `index.html`; toast CSS added to `styles.css`.
+  - All `alert()` calls in `app.js` replaced with `Shared.showToast()`.
+  - Execute-then-undo toast pattern implemented for: hide/unhide asset, remove from collection, clear tray.
+  - `confirm()` retained only for destructive delete collection (no API undo path).
+  - `.filterItem.zeroOption` contrast fixed: `opacity: 0.55` → `color: rgba(255,255,255,0.52)`. `.badge` background opacity increased.
+- Loading skeletons: `renderSkeletons()` shows shimmer cards on fresh `loadAssets()` calls before data arrives.
+- `displayTitle()` Facebook name pattern generalized: hardcoded `leslie brannigan` replaced with a generic `{1,40}-char name` pattern.
+- Empty state: designed component with "Clear all filters" button when filters are active, or an import hint when the library is empty.
+- Card footer simplified: shows `N tags` or `Not tagged` only; model/provider info moved to the expanded details section.
+- Admin link on mobile: changed from `display: none` to a smaller font/padding so it remains accessible at ≤700px.
+- Mobile grid: `repeat(auto-fill, minmax(150px, 1fr))` replacing fixed 2-column layout at ≤700px.
+- Modal image stage: replaced fixed `aspect-ratio: 4/3` with `min-height: 200px; max-height: 70vh` flex container so portrait images display correctly.
+
+## Update (February 19, 2026)
+
 ### Scan Document-First UX + Resume Checkpoint
 - Finalized scan presentation model in main app:
   - multipage scan PDFs are treated as one logical document in canvas/tray
