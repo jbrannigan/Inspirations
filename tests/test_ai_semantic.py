@@ -277,6 +277,43 @@ class TestAiSemantic(unittest.TestCase):
             self.assertEqual(filtered["compared_assets"], 1)
             self.assertEqual(filtered["results"][0]["id"], "a2")
 
+    def test_run_similarity_search_supports_multi_source_filter(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    "insert into assets (id, source, source_ref, title, imported_at) values (?, ?, ?, ?, datetime('now'))",
+                    ("a1", "pinterest", "pin://1", "Asset One"),
+                )
+                db.exec(
+                    "insert into assets (id, source, source_ref, title, imported_at) values (?, ?, ?, ?, datetime('now'))",
+                    ("a2", "facebook", "fb://2", "Asset Two"),
+                )
+                db.exec(
+                    "insert into assets (id, source, source_ref, title, imported_at) values (?, ?, ?, ?, datetime('now'))",
+                    ("a3", "scan", "scan://3", "Asset Three"),
+                )
+                for idx, aid in enumerate(("a1", "a2", "a3"), start=1):
+                    db.exec(
+                        """
+                        insert into asset_embeddings
+                          (id, asset_id, provider, model, input_text, vector_json, dimensions, created_at)
+                        values (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                        """,
+                        (f"em{idx}", aid, "gemini", DEFAULT_GEMINI_EMBEDDING_MODEL, "doc", json.dumps([1.0, 0.0]), 2),
+                    )
+                with mock.patch("inspirations.ai._gemini_embed_text", return_value=[1.0, 0.0]):
+                    report = run_similarity_search(
+                        db,
+                        api_key="fake",
+                        query="kitchen",
+                        model=DEFAULT_GEMINI_EMBEDDING_MODEL,
+                        source="pinterest,facebook",
+                        limit=10,
+                    )
+            self.assertEqual({r["source"] for r in report["results"]}, {"pinterest", "facebook"})
+
 
 if __name__ == "__main__":
     unittest.main()

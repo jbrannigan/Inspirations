@@ -269,6 +269,65 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual([a["id"] for a in body["assets"]], ["a2"])
 
+    def test_cluster_review_endpoint_exports_collection_payload(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into assets (id, source, source_ref, title, imported_at, media_status, content_kind, stored_path)
+                values (?, ?, ?, ?, datetime('now'), ?, ?, ?)
+                """,
+                ("i1", "pinterest", "pin://i1", "Image 1", "image", "pin", str(self.original)),
+            )
+            db.exec(
+                """
+                insert into assets (id, source, source_ref, title, imported_at, media_status, content_kind, stored_path)
+                values (?, ?, ?, ?, datetime('now'), ?, ?, ?)
+                """,
+                ("i2", "pinterest", "pin://i2", "Image 2", "image", "pin", str(self.original)),
+            )
+            db.exec(
+                """
+                insert or ignore into collection_items (collection_id, asset_id, position)
+                values (?, ?, ?)
+                """,
+                ("c1", "i1", 3),
+            )
+            db.exec(
+                """
+                insert or ignore into collection_items (collection_id, asset_id, position)
+                values (?, ?, ?)
+                """,
+                ("c1", "i2", 4),
+            )
+            db.exec(
+                """
+                insert into asset_embeddings (id, asset_id, provider, model, input_text, vector_json, dimensions, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                """,
+                ("e1", "i1", "gemini", "gemini-embedding-001", "img1", "[0.1,0.2,0.3]", 3),
+            )
+            db.exec(
+                """
+                insert into asset_embeddings (id, asset_id, provider, model, input_text, vector_json, dimensions, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                """,
+                ("e2", "i2", "gemini", "gemini-embedding-001", "img2", "[0.11,0.21,0.31]", 3),
+            )
+
+        status, body = self._request("/api/cluster/review?collection_id=c1&include_neighbors=0")
+        self.assertEqual(status, 200)
+        self.assertIn("nodes", body)
+        self.assertIn("meta", body)
+        self.assertEqual(body.get("meta", {}).get("collection_id"), "c1")
+
+    def test_tools_cluster_explorer_route_serves_html(self):
+        req = urllib.request.Request(f"{self.base_url}/tools/cluster_explorer.html", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            body = resp.read().decode("utf-8")
+            self.assertEqual(resp.status, 200)
+            self.assertIn("Cluster Explorer", body)
+
     def test_facets_endpoint_contextualizes_content_kinds(self):
         with Db(self.db_path) as db:
             ensure_schema(db)
@@ -308,6 +367,13 @@ class TestServerApi(unittest.TestCase):
         with urllib.request.urlopen(req, timeout=5) as resp:
             self.assertEqual(resp.status, 200)
             self.assertEqual(resp.headers.get("Cache-Control"), "no-store")
+
+    def test_store_files_route_serves_media(self):
+        req = urllib.request.Request(f"{self.base_url}/store/originals/pinterest/a1.jpg", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = resp.read()
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(data, b"img")
 
     def test_scan_pdf_upload_runs_import_and_thumbs(self):
         boundary = "----insp-test-boundary"
@@ -365,6 +431,52 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(import_kwargs.get("renderer"), "auto")
         self.assertEqual(import_kwargs.get("max_pages"), 0)
         self.assertFalse(import_kwargs.get("split_on_delimiters"))
+
+    def test_photo_upload_runs_import_and_thumbs(self):
+        boundary = "----insp-photo-boundary"
+        jpg_data = b"\xff\xd8\xff\xe0" + b"mockjpegdata" + b"\xff\xd9"
+        body = (
+            (
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="file"; filename="kitchen.jpg"\r\n'
+                "Content-Type: image/jpeg\r\n\r\n"
+            ).encode("utf-8")
+            + jpg_data
+            + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        )
+        fake_import = {
+            "source": "photo",
+            "created_assets": 1,
+            "errors": [],
+        }
+        fake_thumbs = {"tool": "sips", "attempted": 1, "generated": 1, "errors": []}
+        with (
+            mock.patch("inspirations.server.import_photos_inbox", return_value=fake_import) as mocked_import,
+            mock.patch("inspirations.server.generate_thumbnails", return_value=fake_thumbs) as mocked_thumbs,
+        ):
+            status, payload = self._request(
+                "/api/import/photos",
+                method="POST",
+                raw_data=body,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload.get("ok"))
+        self.assertEqual(payload.get("upload_size_bytes"), len(jpg_data))
+        self.assertEqual(payload.get("import", {}).get("created_assets"), 1)
+        self.assertEqual(payload.get("thumbs", {}).get("generated"), 1)
+
+        uploaded_file = Path(payload.get("uploaded_file", ""))
+        self.assertTrue(uploaded_file.exists())
+        self.assertIn("/imports/photos/inbox/uploads/", str(uploaded_file).replace("\\", "/"))
+
+        self.assertTrue(mocked_import.called)
+        self.assertTrue(mocked_thumbs.called)
+        import_kwargs = mocked_import.call_args.kwargs
+        self.assertEqual(import_kwargs.get("limit"), 0)
+        thumbs_kwargs = mocked_thumbs.call_args.kwargs
+        self.assertEqual(thumbs_kwargs.get("source"), "photo")
 
 
 if __name__ == "__main__":

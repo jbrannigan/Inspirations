@@ -131,6 +131,9 @@ class TestExportClusters(unittest.TestCase):
             self.assertEqual(payload["meta"]["source_db"], str(db_path))
             self.assertEqual(payload["meta"]["api_base"], "http://minime.local:8000")
             self.assertEqual(payload["meta"]["total_assets"], 4)
+            self.assertEqual(payload["meta"]["collection_name"], "")
+            self.assertEqual(payload["meta"]["focus_count"], 0)
+            self.assertEqual(payload["meta"]["nearby_count"], 0)
 
             nodes = {node["id"]: node for node in payload["nodes"]}
             self.assertEqual(nodes["a1"]["source_url"], "https://www.pinterest.com/pin/123")
@@ -143,6 +146,8 @@ class TestExportClusters(unittest.TestCase):
             self.assertIn("isolation_score", nodes["a1"])
             self.assertIn("bridge_score", nodes["a1"])
             self.assertIn("is_outlier", nodes["a1"])
+            self.assertFalse(nodes["a1"]["in_focus_collection"])
+            self.assertFalse(nodes["a1"]["is_nearby_context"])
             self.assertTrue(any(node["is_outlier"] for node in payload["nodes"]))
 
     def test_export_clusters_collection_scope_includes_neighbors(self):
@@ -191,7 +196,16 @@ class TestExportClusters(unittest.TestCase):
             ids = {node["id"] for node in payload["nodes"]}
             self.assertEqual(ids, {"a1", "a2"})
             self.assertEqual(payload["meta"]["collection_id"], "focus")
+            self.assertEqual(payload["meta"]["collection_name"], "Focus")
             self.assertEqual(payload["meta"]["include_neighbors"], 1)
+            self.assertEqual(payload["meta"]["focus_count"], 1)
+            self.assertEqual(payload["meta"]["nearby_count"], 1)
+
+            nodes = {node["id"]: node for node in payload["nodes"]}
+            self.assertTrue(nodes["a1"]["in_focus_collection"])
+            self.assertFalse(nodes["a1"]["is_nearby_context"])
+            self.assertFalse(nodes["a2"]["in_focus_collection"])
+            self.assertTrue(nodes["a2"]["is_nearby_context"])
 
 
 if __name__ == "__main__":

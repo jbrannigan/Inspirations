@@ -76,7 +76,13 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
   display: block;
 }
 .mobileTools { display: none; gap: 8px; }
-.mobileTools button { flex: 1 1 auto; white-space: nowrap; }
+.mobileTools button {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  border-color: rgba(141, 213, 255, 0.45);
+  background: rgba(22, 36, 54, 0.9);
+  font-weight: 600;
+}
 .mobileDrawerHeader { display: none; }
 .mobileOverlay { display: none; }
 .topActionBtn,
@@ -172,6 +178,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .toolbarMeta { display: grid; gap: 6px; min-width: 0; }
 .trayQuickActions { flex-wrap: wrap; }
 .row { display: flex; gap: 8px; align-items: center; }
+.toolbar > .row {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
 .card { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: rgba(15,23,34,0.55); cursor: pointer; }
 .thumb { width: 100%; aspect-ratio: 4/3; background: rgba(255,255,255,0.05); position: relative; }
@@ -216,6 +226,21 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .cardFooter { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); border-top: 1px solid var(--border); padding-top: 6px; }
 .compactTags { display: flex; flex-wrap: wrap; gap: 6px; }
 .miniBtn { border: 1px solid var(--border); background: rgba(15,22,32,0.7); color: var(--text); padding: 4px 8px; border-radius: 999px; font-size: 11px; cursor: pointer; }
+.miniBtn.annotateBtn {
+  border-color: rgba(141, 213, 255, 0.88);
+  background: linear-gradient(180deg, rgba(141, 213, 255, 0.42), rgba(141, 213, 255, 0.2));
+  color: #f4fbff;
+  font-weight: 600;
+}
+.miniBtn.annotateBtn:hover {
+  border-color: rgba(141, 213, 255, 0.95);
+  background: linear-gradient(180deg, rgba(141, 213, 255, 0.5), rgba(141, 213, 255, 0.28));
+}
+#reviewCollection.primaryAction {
+  border-color: rgba(141, 213, 255, 0.95);
+  box-shadow: 0 0 0 2px rgba(141, 213, 255, 0.2);
+  font-weight: 600;
+}
 .expandedInfo { display: grid; gap: 4px; font-size: 11px; color: var(--muted); border-top: 1px dashed var(--border); padding-top: 6px; }
 .expandedRow { line-height: 1.35; }
 .sourceRefInline { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; word-break: break-word; }
