@@ -529,3 +529,267 @@ python3 -m py_compile src/inspirations/ai.py src/inspirations/server.py src/insp
 Result:
 - Lint clean.
 - `38` tests passing.
+
+## Update: Cluster Explorer Spec v2 + Documentation Tidy (2026-02-13 21:43 CST)
+This checkpoint consolidates the cluster-explorer workstream so resume does not depend on chat history.
+
+What changed:
+- Added and refined a new canonical planning spec:
+  - `docs/CLUSTER_EXPLORER_SPEC-v2.md`
+- Kept prior spec variants for reference:
+  - `docs/CLUSTER_EXPLORER_SPEC.md`
+  - `docs/CLUSTER_EXPLORER_SPEC-old.md`
+- Updated resume docs to reflect current implementation vs planned scope:
+  - `docs/next_steps.md` now includes a current checkpoint with a validated cluster snapshot and restart sequence.
+  - `docs/pr_summary.md` now records the v2 spec hardening and implementation boundary.
+
+Validated local artifact state:
+```bash
+ls -lh tools/cluster_data.json tools/cluster_explorer.html tools/export_clusters.py
+```
+Observed:
+- `tools/cluster_data.json` exists (~5.3MB)
+- `tools/cluster_explorer.html` exists
+- `tools/export_clusters.py` exists
+
+Validated cluster snapshot metadata:
+```bash
+python3 - <<'PY'
+import json
+with open('tools/cluster_data.json') as f:
+    d=json.load(f)
+print('nodes',len(d.get('nodes',[])))
+print('links',len(d.get('links',[])))
+print('clusters',d.get('meta',{}).get('clusters'))
+print('source_db',d.get('meta',{}).get('source_db'))
+print('sim_threshold',d.get('meta',{}).get('similarity_threshold'))
+PY
+```
+Observed:
+- `nodes=3661`
+- `links=10924`
+- `clusters=14`
+- `source_db=data/inspirations.sqlite`
+- `sim_threshold=0.72`
+
+Current implementation boundary (important for next session):
+- Implemented now:
+  - `tools/export_clusters.py`
+  - `tools/cluster_explorer.html` with JSON file load
+- Not implemented yet (spec-only in v2):
+  - `tools/serve_explorer.py`
+  - in-explorer collection mutation workflow
+  - curation mode (tray/lasso)
+
+Recommended first action on resume:
+1. Rebuild/re-activate the clustering venv and reinstall `scikit-learn`.
+2. Re-run `tools/export_clusters.py` against `data/inspirations.sqlite`.
+3. Load the fresh JSON in `tools/cluster_explorer.html`.
+4. Apply collection edits in the main Inspirations app.
+
+## Update: Docs Consistency Pass Completed (2026-02-13 21:48 CST)
+Final resume-hardening pass completed to remove ambiguity across top-level docs.
+
+Updated:
+- `README.md`
+  - Cluster workflow now explicitly states:
+    - implemented now (`export_clusters.py` + `cluster_explorer.html`)
+    - not-yet-implemented explorer pieces (`serve_explorer.py`, in-explorer mutation)
+    - canonical target spec (`docs/CLUSTER_EXPLORER_SPEC-v2.md`)
+  - Clarified that current explorer usage is manual JSON load and collection edits happen in the main app.
+- `docs/STATUS.md`
+  - Updated status date/time and refreshed current-state summary (UI quality updates, share workflow state, cluster explorer implementation boundary).
+  - Added direct pointers to `docs/handoff.md` and `docs/CLUSTER_EXPLORER_SPEC-v2.md`.
+- `docs/CLUSTER_EXPLORER_SPEC.md`
+  - Added superseded note pointing to v2 as the active implementation spec.
+- `docs/CLUSTER_EXPLORER_SPEC-old.md`
+  - Added archived/superseded note pointing to v2.
+
+Result:
+- Resume path now has a single clear implementation reference (`docs/CLUSTER_EXPLORER_SPEC-v2.md`) and explicit current-state boundaries in README/STATUS.
+
+## Update: Cluster Explorer Phase 1 Implemented (2026-02-13 22:22 CST)
+Completed the first executable Cluster Explorer slice from `docs/CLUSTER_EXPLORER_SPEC-v2.md`.
+
+Implemented:
+- `tools/export_clusters.py` (rewritten to v2 contract)
+  - defaults now align to repo paths (`data/inspirations.sqlite`, `tools/cluster_data.json`)
+  - new flags: `--collection-id`, `--include-neighbors`, `--api-base`, `--serve`
+  - outputs new node fields:
+    - `source_url`, `collection_ids`
+    - `thumb_url_local`, `image_url_local`, `image_url_remote`
+    - `isolation_score`, `bridge_score`, `is_outlier`
+  - normalizes absolute local media paths to project-relative `store/...`
+  - supports collection-focused export + optional nearest-neighbor expansion
+- `tools/serve_explorer.py` (new)
+  - allowlisted routes:
+    - `/` -> explorer HTML
+    - `/cluster_data.json`
+    - `/store/...` (under project root only)
+  - denies path traversal and non-allowlisted paths
+  - cache policy:
+    - HTML/JSON => `no-store`
+    - store media => `max-age=3600`
+  - supports both GET and HEAD
+- `tools/cluster_explorer.html` (rewritten Phase 1 UI)
+  - served-mode auto-load (`/cluster_data.json`)
+  - Discover and Outliers modes with threshold slider
+  - search + collection legend filtering
+  - detail panel with metrics + nearest neighbors + source link
+  - collection remove action when `collection_id` + `api_base` are present
+  - fallback `remove_candidates.json` download in collection mode without API write-back
+
+Tests added:
+- `tests/test_export_clusters.py`
+- `tests/test_serve_explorer.py`
+
+Commands run:
+```bash
+PYTHONPATH=src python3 -m unittest -v tests/test_export_clusters.py tests/test_serve_explorer.py
+```
+Result: all passed.
+
+Real-data export validation:
+```bash
+/private/tmp/inspirations-cluster-venv/bin/python tools/export_clusters.py \
+  --db data/inspirations.sqlite \
+  --out tools/cluster_data.json \
+  --similarity-threshold 0.72 \
+  --max-neighbors 6 \
+  --clusters auto
+```
+Observed:
+- `Loaded 3725 image assets.`
+- `Loaded embeddings for 3661 assets; skipped 64 without embeddings.`
+- `Selected k=7 (silhouette=0.080)`
+- `Exported cluster data: nodes=3661 links=10117 clusters=7`
+
+Served-mode smoke validation:
+```bash
+python3 tools/serve_explorer.py --port 8081 --data tools/cluster_data.json --project-root .
+```
+Checked:
+- `/` => `200`, `Cache-Control: no-store`
+- `/cluster_data.json` => `200`, `Cache-Control: no-store`
+- `/store/...` sample file => `200`, `Cache-Control: max-age=3600`
+
+## Update: Duplicate Review UX Iteration (2026-02-14 00:02 CST)
+Implemented requested duplicate-review workflow improvements in `tools/cluster_explorer.html`.
+
+What changed:
+- Visual readability upgrades:
+  - graph nodes now render as thumbnails (not dots)
+  - connection lines increased contrast/weight
+  - cluster-separation forces increased for clearer cluster islands
+  - weak bridge-link declutter toggle added
+- Duplicate-review mode was expanded from filter-only to workflow:
+  - Duplicate mode now supports grouped duplicate sets
+  - left/right group navigation arrows
+  - per-group keeper selection (`Mark as keeper`)
+  - loser marking (`Mark loser` / `Unmark loser`) with gray/red visual state
+  - `Queue losers`, `Delete this group`, `Delete queued` actions
+  - in session-only mode (no `api_base`) these actions hide items without DB writes
+  - with `api_base + collection_id`, delete actions call collection remove endpoint
+
+Current `cluster_data.json` for next restart:
+- `total_assets=95`
+- `total_links=265`
+- `clusters=8`
+- `collection_id=55205463-0101-4cbf-8880-b38fa68c24bc` (`CB: Kitchen`)
+- `include_neighbors=15`
+- `api_base=''` (session-only delete mode)
+- `exported_at=2026-02-14T05:01:57Z`
+
+Operational closeout:
+- stopped running explorer server process (`tools/serve_explorer.py`) to leave a clean workspace at end of day.
+
+## Session Checkpoint (2026-02-14T06:03:11.906561+00:00)
+- Branch: `main`
+- Commit: `a64a893`
+- Upstream: `origin/main`
+- Dirty files: `35`
+- Tagging: source=pinterest provider=gemini model=gemini-2.5-flash
+- Coverage: total=3661 tagged_model=3654 remaining_model=7 tagged_provider_any_model=3661 remaining_provider_any_model=0
+- Asset integrity: missing_stored=0 missing_thumb=0
+- Errors: rows=359 actionable=0 recitation_blocked=7
+- Model coverage breakdown: gemini-2.5-flash=3654, gemini-2.0-flash=7
+- Embeddings: total=3661 by_model=gemini-embedding-001=3661
+- Latest run: `35a803ed-8f75-48cc-9c85-1e9239518940` (2026-02-06T03:44:22.859684+00:00)
+- Latest batch meta: `/Users/minime/Projects/Inspirations/data/batch_jobs/batch_20260205_013427/meta_001.json` name=`batches/6moh82ogzaks688e0wqi2xwzu9opios54h2v` state=``
+- Notes: Cluster Explorer Phase 1 completed and duplicate-review workflow added (thumbnail nodes, grouped dup navigation, keeper/loser queue/apply flow).
+- Next actions:
+  1. Re-open Cluster Explorer on 8080 and run a focused duplicates walkthrough on CB: Kitchen.
+  2. Tune duplicate grouping quality (reduce weak chain effects / tighten cohesion).
+  3. Decide when to switch from session-only delete preview to API-backed real collection removal.
+
+## Session Checkpoint (2026-02-15T06:50:07.022607+00:00)
+- Branch: `codex/ux-simplification-pass`
+- Commit: `8f583b0`
+- Upstream: `(none)`
+- Dirty files: `23`
+- Tagging: source=pinterest provider=gemini model=gemini-2.5-flash
+- Coverage: total=3661 tagged_model=3654 remaining_model=7 tagged_provider_any_model=3661 remaining_provider_any_model=0
+- Asset integrity: missing_stored=0 missing_thumb=0
+- Errors: rows=359 actionable=0 recitation_blocked=7
+- Model coverage breakdown: gemini-2.5-flash=3654, gemini-2.0-flash=7
+- Embeddings: total=3661 by_model=gemini-embedding-001=3661
+- Latest run: `35a803ed-8f75-48cc-9c85-1e9239518940` (2026-02-06T03:44:22.859684+00:00)
+- Latest batch meta: `/Users/minime/Projects/Inspirations/data/batch_jobs/batch_20260205_013427/meta_001.json` name=`batches/6moh82ogzaks688e0wqi2xwzu9opios54h2v` state=``
+- Notes: Implemented UX simplification pass: Show All reset, AI tag Any/All, primary add-to-active-collection, inspect modal Hide/Print, hidden collection exclusion.
+- Next actions:
+  1. Morning review on desktop/iPad for Show All reset + tag matching toggle behavior.
+  2. Validate hide/print actions and decide whether to expose Hidden collection controls in main UI.
+
+## Session Checkpoint (2026-02-15T07:59:16.448667+00:00)
+- Branch: `codex/ux-simplification-pass`
+- Commit: `8f583b0`
+- Upstream: `(none)`
+- Dirty files: `30`
+- Tagging: source=pinterest provider=gemini model=gemini-2.5-flash
+- Coverage: total=3661 tagged_model=3654 remaining_model=7 tagged_provider_any_model=3661 remaining_provider_any_model=0
+- Asset integrity: missing_stored=0 missing_thumb=0
+- Errors: rows=359 actionable=0 recitation_blocked=7
+- Model coverage breakdown: gemini-2.5-flash=3654, gemini-2.0-flash=7
+- Embeddings: total=3661 by_model=gemini-embedding-001=3661
+- Latest run: `35a803ed-8f75-48cc-9c85-1e9239518940` (2026-02-06T03:44:22.859684+00:00)
+- Latest batch meta: `/Users/minime/Projects/Inspirations/data/batch_jobs/batch_20260205_013427/meta_001.json` name=`batches/6moh82ogzaks688e0wqi2xwzu9opios54h2v` state=``
+- Notes: UX reliability patch: print fallback, hide safety wording, review collection CTA + faster cluster review launch, toolbar wrap/mobile affordance tweaks.
+- Next actions:
+  1. Validate iPad sidebar drawer discoverability and search-help tooltip behavior in Safari.
+  2. Continue curation UX pass (keepers/losers workflow) after review.
+
+## Session Checkpoint (2026-02-15T20:54:51.366652+00:00)
+- Branch: `codex/ux-simplification-pass`
+- Commit: `8f583b0`
+- Upstream: `(none)`
+- Dirty files: `30`
+- Tagging: source=pinterest provider=gemini model=gemini-2.5-flash
+- Coverage: total=3661 tagged_model=3654 remaining_model=7 tagged_provider_any_model=3661 remaining_provider_any_model=0
+- Asset integrity: missing_stored=0 missing_thumb=0
+- Errors: rows=359 actionable=0 recitation_blocked=7
+- Model coverage breakdown: gemini-2.5-flash=3654, gemini-2.0-flash=7
+- Embeddings: total=3661 by_model=gemini-embedding-001=3661
+- Latest run: `35a803ed-8f75-48cc-9c85-1e9239518940` (2026-02-06T03:44:22.859684+00:00)
+- Latest batch meta: `/Users/minime/Projects/Inspirations/data/batch_jobs/batch_20260205_013427/meta_001.json` name=`batches/6moh82ogzaks688e0wqi2xwzu9opios54h2v` state=``
+- Notes: Cluster Explorer duplicate-review UX + graph image fallback; added photo upload path in app/server/importer; added safe /store route for local media fallbacks.
+- Next actions:
+  1. User visual QA: graph thumbnails on duplicates/discover and 3-lane keeper/candidate/loser flow.
+  2. If needed, extend Add Photos to multi-file drag/drop ingestion (nice to have).
+
+## Session Checkpoint (2026-02-19T01:55:35.556223+00:00)
+- Branch: `codex/ux-simplification-pass`
+- Commit: `8f583b0`
+- Upstream: `(none)`
+- Dirty files: `43`
+- Tagging: source=pinterest provider=gemini model=gemini-2.5-flash
+- Coverage: total=3661 tagged_model=3654 remaining_model=7 tagged_provider_any_model=3661 remaining_provider_any_model=0
+- Asset integrity: missing_stored=0 missing_thumb=0
+- Errors: rows=359 actionable=0 recitation_blocked=7
+- Model coverage breakdown: gemini-2.5-flash=3654, gemini-2.0-flash=7
+- Embeddings: total=3661 by_model=gemini-embedding-001=3661
+- Latest run: `c0c9a48f-5bb3-41f3-a612-79d9370721f0` (2026-02-19T01:26:10.991748+00:00)
+- Latest batch meta: `/Users/minime/Projects/Inspirations/data/batch_jobs/batch_20260205_013427/meta_001.json` name=`batches/6moh82ogzaks688e0wqi2xwzu9opios54h2v` state=``
+- Notes: Finalized scan UX decision: multipage scans are treated as one logical document in main canvas/tray, with doc-level collection/tray/hide operations and content-first visible titles.
+- Next actions:
+  1. Review scan PDF ingestion UX for separator-page handling and drag/drop nice-to-have.
+  2. Continue cluster-review UX integration into main app once scan pipeline is stable.

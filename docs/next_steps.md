@@ -1,5 +1,85 @@
 # Next Steps (Resume After Restart)
 
+## Current checkpoint (February 19, 2026, 01:55 UTC)
+- Main app scan behavior is now explicitly document-first:
+  - multipage scans are shown as one card in canvas/tray
+  - doc actions (add/remove/hide/unhide) apply to all pages in the document
+  - visible card title is content-first (no visible `- doc X` / `pY` suffix)
+- Scan page-level rows are still retained internally for ingestion fidelity and metadata.
+- Upload flow in app is active for `Add Scan PDF` (single-file workflow now); delimiter splitting and richer drag/drop remain optional follow-up work.
+- Cluster Explorer workstream is still active and should resume after scan-ingest UX stabilization.
+- Most recent checkpoint entry is in `docs/handoff.md`:
+  - `Session Checkpoint (2026-02-19T01:55:35.556223+00:00)`
+  - next actions recorded there:
+    1. review separator-page handling + drag/drop nice-to-have
+    2. continue cluster-review UX integration into main app
+
+## Previous checkpoint (February 14, 2026, 00:02 CST)
+- Cluster Explorer planning has a new canonical spec: `docs/CLUSTER_EXPLORER_SPEC-v2.md`.
+- Prior spec file was retained as historical reference: `docs/CLUSTER_EXPLORER_SPEC-old.md`.
+- Current runnable tooling in this repo is:
+  - `tools/export_clusters.py`
+  - `tools/serve_explorer.py`
+  - `tools/cluster_explorer.html`
+  - `tools/cluster_data.json` (latest snapshot generated)
+- Verified snapshot from `tools/cluster_data.json`:
+  - `nodes=95`
+  - `links=265`
+  - `clusters=8`
+  - `source_db=data/inspirations.sqlite`
+  - `collection_id=55205463-0101-4cbf-8880-b38fa68c24bc` (`CB: Kitchen`)
+  - `include_neighbors=15`
+  - `focus_count=80`, `nearby_count=15` (when exported with current tooling)
+  - `api_base=''` (session-only delete mode)
+  - `similarity_threshold=0.72`
+
+### Cluster explorer status at resume
+- Implemented now:
+  - Export embeddings and graph links with `tools/export_clusters.py` (v2 schema fields and outlier metrics).
+  - Collection-scoped exports mark each node as `in_focus_collection` vs `is_nearby_context`.
+  - Serve the explorer with `tools/serve_explorer.py` (allowlisted routes + cache policy).
+  - Discover/Outliers visual modes in `tools/cluster_explorer.html`.
+  - In collection-scoped review, nearby context is hidden by default and can be toggled with `Show nearby (...)`.
+  - Duplicate review workflow:
+    - grouped duplicate sets with left/right navigation
+    - mark keeper/losers
+    - queue losers
+    - apply delete per-group or queued
+  - Detail-panel remove action for collection-focused runs when `meta.api_base` is present.
+- Not implemented yet (documented in v2 spec):
+  - Advanced curation mode (lasso/tray multi-action workflow).
+
+### Recommended restart path for clustering work
+1. Recreate isolated venv for clustering dependency:
+```bash
+python3 -m venv /private/tmp/inspirations-cluster-venv
+source /private/tmp/inspirations-cluster-venv/bin/activate
+python -m pip install scikit-learn
+```
+2. Re-export fresh cluster graph JSON:
+```bash
+python3 tools/export_clusters.py \
+  --db data/inspirations.sqlite \
+  --out tools/cluster_data.json \
+  --clusters auto \
+  --similarity-threshold 0.72 \
+  --max-neighbors 6
+```
+3. Serve explorer over HTTP (primary mode):
+```bash
+python3 tools/serve_explorer.py --port 8080 --data tools/cluster_data.json --project-root .
+```
+4. Open `http://127.0.0.1:8080` and review outliers.
+5. For collection-focused trimming with direct remove action:
+```bash
+python3 tools/export_clusters.py \
+  --db data/inspirations.sqlite \
+  --out tools/cluster_data.json \
+  --collection-id <COLLECTION_ID> \
+  --include-neighbors 15 \
+  --api-base http://127.0.0.1:8000
+```
+
 ## 0) Resume Codex collaboration
 When you restart, open a new Codex terminal in this repo and read:
 - `docs/handoff.md` — full history + key commands

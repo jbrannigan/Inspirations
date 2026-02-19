@@ -29,12 +29,19 @@ Inspirations ingests Pinterest saves, Facebook saves, and scanned pages into a s
   - AI tag matching now supports `Any` (OR) and `All` (AND) modes
   - Primary add flow is now direct-to-active-collection; tray remains optional as a secondary holding area
   - Annotate modal now includes `Hide` (moves to Hidden collection) and `Print` actions
+  - Hide flow is explicit and non-destructive (`Hide to Hidden` / `Unhide`)
+  - Print now falls back to an embedded print frame when popup windows are blocked
+  - Header actions now include both `Add Scan PDF` and `Add Photos` (single-file upload paths)
   - Hidden items are excluded from main canvas by default, but remain available when viewing the Hidden collection
   - Accordion filters (only Source open by default) to keep high-cardinality filter sets manageable
   - Plain-language canvas narrative text in the header describing what is currently shown
+  - `Review Collection` opens Cluster Explorer from the active canvas collection (collection-only by default; nearby context optional in explorer)
   - Compact card grid + expand-on-click tag details
   - Incremental "load more" browsing for full-catalog navigation
   - Search prompt simplified for non-technical users, with semantic `sem:` help moved to hover tooltip
+  - Source facet includes imported `photo` items alongside Pinterest/Facebook/Scan
+- Multipage scan PDFs are presented as one document card in canvas/tray (not one card per page), while still keeping per-page media under the hood
+  - Document cards now use content-only scan titles in the main app (no `- doc X` suffix in the visible title)
   - Facebook title cleanup in cards (drops boilerplate like `Leslie Brannigan saved a ...`)
   - Preview-aware ordering (thumbs/originals/image URLs before link-only items)
   - Smart preview fitting for extreme-aspect images to reduce over-cropping in cards
@@ -193,6 +200,57 @@ Recommended sharing workflow:
 1. Curate in-app: shop into tray, then create/finalize a collection
 2. Export one collection per share file (`--collection-id`)
 3. If you need to share multiple collections, run export once per collection
+
+### Protected Static Share (MVP, `sem:` disabled)
+
+Generate a friendlier browse-only static portal (single HTML file):
+
+```sh
+PYTHONPATH=src python3 -m inspirations export portal --out data/exports/portal.html
+```
+
+Optional scoping:
+
+```sh
+# restrict to one or more collections
+PYTHONPATH=src python3 -m inspirations export portal \
+  --collection-id <COLLECTION_ID_1> \
+  --collection-id <COLLECTION_ID_2> \
+  --out data/exports/portal_collections.html
+
+# restrict to one source
+PYTHONPATH=src python3 -m inspirations export portal --source pinterest --out data/exports/portal_pinterest.html
+```
+
+Portal behavior:
+
+- Browse-only: no editing, no tray, no curation actions
+- Search/filter by keyword, source, media type, and collection
+- Grid and Graph views are both available for exploration
+- Graph view now includes live sliders (similarity, max nodes, node size, height) and resizes with viewport/orientation changes
+- Graph nodes are draggable for manual inspection in graph view
+- Supports multiple collections in one share artifact
+- `sem:` is explicitly disabled in portal search (falls back to keyword search with notice)
+- Works without Gemini API key during browsing
+- Default export scope is collection-assigned items only (fits sharing workflow)
+- Large exports automatically write previews into a sibling folder named `<export-file-stem>_media/`; keep that folder next to the HTML when hosting/sharing
+- Scan items now include multipage context in cards/details (for example, "page 2 of 6")
+- Scan detail view uses higher-resolution page media when available and exposes an `Open Scan PDF` action when the source PDF exists
+- Detail modal now prefers higher-resolution stored media for all sources when available, so popup previews are not limited to thumbnail quality
+- Because detail media now prefers higher-resolution files, `<export-file-stem>_media/` may be substantially larger than before
+
+Include unassigned items when needed:
+
+```sh
+PYTHONPATH=src python3 -m inspirations export portal \
+  --include-unassigned \
+  --out data/exports/portal_with_unassigned.html
+```
+
+Two-phase build plan:
+
+1. **Phase 1 (implemented now):** static export + external access gate (for example Cloudflare Access / password-protected static hosting) with all selected collections visible to authenticated viewers.
+2. **Phase 2 (next):** invite-aware publishing rules (per-invitee collection visibility, invite/revoke workflow in Inspirations, and optional server-assisted auditing).
 
 ## Cluster Refinement Workflow
 
@@ -415,6 +473,12 @@ Core endpoints:
 
 - `ai_summary`
 - `ai_json`
+
+For scan records, `/api/assets` now returns document-collapsed rows (one row per scan document) with:
+
+- `scan_group_member_ids` (all backing asset IDs for that document)
+- `scan_doc_pages`
+- `scan_doc_index`
 
 `/api/facets` filter params (optional):
 

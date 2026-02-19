@@ -1,5 +1,93 @@
 # PR Summary
 
+## Update (February 19, 2026)
+
+### Scan Document-First UX + Resume Checkpoint
+- Finalized scan presentation model in main app:
+  - multipage scan PDFs are treated as one logical document in canvas/tray
+  - scan collection/tray mutations now apply at document scope (all member pages)
+  - hide/unhide in modal also applies across the document group
+  - visible scan card titles are content-first (document/page suffix is no longer shown in main-app card text)
+- Clarified data-model intent:
+  - page-level scan records remain in storage for ingestion traceability and metadata
+  - UI and curation workflows are document-first to match user intent
+- Documentation checkpoint refresh:
+  - appended latest session checkpoint to `docs/handoff.md`
+  - updated `docs/STATUS.md` and `docs/next_steps.md` so resume guidance starts from the finalized scan decision
+  - retained cluster-review continuation as the next active workstream
+
+## Update (February 15, 2026)
+
+### UX Reliability Follow-Up
+- Main app review flow integration is now discoverable and faster from collection view:
+  - `Review Collection` is emphasized when a collection is being viewed.
+  - The button opens Cluster Explorer with collection-only scope by default (`include_neighbors=0`) so launch is responsive.
+  - Collection hint text now explicitly points users to Review for similarity-group walkthrough.
+- Print action in Annotate modal is hardened:
+  - Primary path uses popup print window when available.
+  - Fallback path prints through an embedded iframe when popup windows are blocked.
+- Hide workflow clarity/safety improved:
+  - Modal action label is now `Hide to Hidden` (and `Unhide` inside Hidden).
+  - Confirmation copy explicitly states hide is non-destructive and reversible.
+- Selection UX hardened:
+  - `Clear Selection` now prevents event propagation before re-render, reducing accidental re-selection edge cases.
+- Toolbar and mobile affordance polish:
+  - Desktop toolbar actions now wrap instead of overflowing.
+  - Mobile Filters/Tray buttons are visually emphasized.
+  - Search help button now also has a native tooltip title for hover-capable browsers.
+- Server default for cluster review now uses `include_neighbors=0` when query param is omitted.
+- Cluster Explorer duplicate curation flow now uses explicit states:
+  - Three review lanes per duplicate group: Keepers, Candidates, Losers.
+  - `Mark loser` / `Unmark loser` decisions are explicit and visible; queue/delete now operates on marked losers.
+  - Graph badges now reflect explicit state (`K`, `L`, `?`) with keeper/loser colors while keeping image thumbnails primary.
+  - Graph node image fallback now cycles candidate URLs so previews load in integrated app mode.
+- Added photo ingest path in main app:
+  - New top action `Add Photos` with upload modal.
+  - New endpoint `POST /api/import/photos` and importer `import_photos_inbox`.
+  - Photo uploads are stored as source `photo` with record type `photo`, then thumbnailed via existing pipeline.
+
+## Update (February 16, 2026)
+
+### Protected Static Share Phase 1
+- Added new export command: `inspirations export portal`.
+  - Produces a friendlier, browse-only, single-file static share portal.
+  - Supports multi-collection browsing in one artifact.
+  - Supports source and optional collection-id scoping at export time.
+  - Default scope now targets collection-assigned items only (share-safe baseline), with `--include-unassigned` available when needed.
+- Semantic search is explicitly disabled in this shared portal UX.
+  - If a viewer types `sem:` or `similar:`, the portal shows a notice and falls back to keyword search.
+  - No Gemini API key is required for portal browsing.
+- Improved portal exploration controls:
+  - Added media-type filtering.
+  - Added explicit Source/Media filter labels for context.
+  - Added Grid/Graph view toggle in the shared portal.
+  - Improved large-export load performance: portal now auto-switches to linked preview files in an adjacent `<export-name>_media/` folder when item count exceeds the embed threshold, avoiding very large base64-heavy HTML payloads while keeping previews available from static hosting.
+  - Added progressive card rendering (`Show More`) so large result sets render quickly instead of drawing every card on first paint.
+  - Improved graph UX in the shared portal:
+    - Added interactive graph sliders (similarity, max nodes, node size, viewport height).
+    - Graph and grid views now better adapt to viewport size changes (including orientation/resize).
+    - Graph nodes are now draggable for manual layout inspection.
+  - Added scan-specific detail improvements:
+    - Multipage scan context is now visible in cards and detail metadata.
+    - Detail modal uses higher-resolution scan page media when available (instead of only thumbnail previews).
+    - Added `Open Scan PDF` action when the source PDF is available, exported via adjacent `<export-name>_docs/` assets.
+  - AI scan tagging now upgrades placeholder scan titles to content-based titles:
+    - Uses Gemini title/summary text to derive a readable title.
+    - Preserves existing `- doc X pY` suffixes so multipage scan grouping and page context still work.
+    - Title cleaner now strips generic lead-ins (for example, "This image showcases ...") and shortens long scan titles for easier browsing.
+  - Main app scan UX is now document-first for multipage PDFs:
+    - `/api/assets` and `/api/tray` collapse scan pages into one document card.
+    - Collection/tray add/remove operations on scan docs now apply to all member pages.
+    - Hide/Unhide from modal now applies to all pages in the scan document group.
+    - Visible scan titles in main app/tray are content-first (document suffixes removed from title text).
+  - Detail modal media quality is now improved across sources by preferring stored/original media for detail view while keeping cards on lightweight previews.
+  - Note: this increases exported media footprint because higher-resolution assets are copied into the export media folder for static hosting.
+- Added portal export regression tests covering:
+  - semantic-disabled output contract,
+  - hidden-collection exclusion by default,
+  - collection-scoped export filtering,
+  - optional unassigned inclusion (`--include-unassigned`).
+
 ## Update (February 12, 2026)
 
 ### Summary
