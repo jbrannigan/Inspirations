@@ -1163,12 +1163,17 @@ async function openModal(asset) {
     link.textContent = "No source";
   }
 
-  // View Source button: open external source or stored file
+  // View Source button: scan → original PDF, external source → source_ref, photo → stored file
   const viewSourceBtn = $("#viewSourceBtn");
   if (viewSourceBtn) {
-    const extUrl = isHttpUrl(asset.source_ref) ? asset.source_ref : null;
-    const storedUrl = asset.stored_path ? `/media/${asset.id}?kind=original` : null;
-    const targetUrl = extUrl || storedUrl;
+    let targetUrl = null;
+    if (asset.source === "scan") {
+      targetUrl = `/media/${asset.id}?kind=pdf`;
+    } else if (isHttpUrl(asset.source_ref)) {
+      targetUrl = asset.source_ref;
+    } else if (asset.stored_path) {
+      targetUrl = `/media/${asset.id}?kind=original`;
+    }
     if (targetUrl) {
       viewSourceBtn.style.display = "";
       viewSourceBtn.onclick = () => window.open(targetUrl, "_blank", "noopener");

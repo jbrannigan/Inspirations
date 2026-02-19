@@ -770,17 +770,26 @@ class ApiHandler(BaseHTTPRequestHandler):
                 pass
 
     def _serve_media(self, asset_id: str, kind: str) -> None:
-        kind = kind if kind in ("thumb", "original") else "thumb"
+        kind = kind if kind in ("thumb", "original", "pdf") else "thumb"
         with Db(self.server.db_path) as db:
             ensure_schema(db)
             row = db.query(
-                "select id, stored_path, thumb_path from assets where id=?",
+                "select id, source, source_ref, stored_path, thumb_path from assets where id=?",
                 (asset_id,),
             )
             if not row:
                 return self.send_error(404)
             r = row[0]
-            path = r["thumb_path"] if kind == "thumb" else r["stored_path"]
+            if kind == "pdf" and (r["source"] or "") == "scan":
+                m = re.match(r"scan://([a-f0-9]{64})", (r["source_ref"] or "").strip(), re.IGNORECASE)
+                if not m:
+                    return self.send_error(404)
+                sha = m.group(1).lower()
+                path = str(Path(self.server.store_dir) / "originals" / "scan" / f"{sha}.pdf")
+            elif kind == "thumb":
+                path = r["thumb_path"]
+            else:
+                path = r["stored_path"]
             if not path:
                 return self.send_error(404)
             base = Path(self.server.store_dir).resolve()
