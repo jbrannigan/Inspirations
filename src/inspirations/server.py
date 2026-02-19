@@ -43,6 +43,7 @@ from .store import (
     update_annotation,
     update_asset_notes,
 )
+from .explorer_layout import compute_layout
 from .thumbnails import generate_thumbnails
 
 
@@ -251,6 +252,25 @@ class ApiHandler(BaseHTTPRequestHandler):
                 )
             except Exception as e:
                 return _send(self, 500, {"error": f"cluster review export failed: {e}"})
+            return _send(self, 200, payload)
+
+        if parsed.path == "/api/explorer/layout":
+            q = parse_qs(parsed.query)
+            collection_id = (q.get("collection_id", [""])[0] or "").strip() or None
+            method = (q.get("method", ["umap"])[0] or "umap").strip()
+            refresh_raw = (q.get("refresh", ["false"])[0] or "false").strip().lower()
+            refresh = refresh_raw in {"1", "true", "yes"}
+            data_dir = Path(self.server.db_path).parent / "explorer_layouts"
+            try:
+                payload = self._with_db(
+                    compute_layout,
+                    data_dir=data_dir,
+                    collection_id=collection_id,
+                    method=method,
+                    refresh=refresh,
+                )
+            except Exception as e:
+                return _send(self, 500, {"error": f"explorer layout failed: {e}"})
             return _send(self, 200, payload)
 
         if parsed.path == "/api/tray":

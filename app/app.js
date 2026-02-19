@@ -33,6 +33,7 @@ const state = {
   photoImportFile: null,
   mediaDefaultsSeeded: false,
   canvasMode: "main",
+  view: "grid",
   filterOpen: { sources: true },
   filtersExpanded: false,
   gridZoom: localStorage.getItem("gridZoom") || "m",
@@ -2403,3 +2404,107 @@ document.addEventListener("click", (e) => {
   if (searchHelpWrap.contains(e.target)) return;
   closeSearchHelp();
 });
+
+// ─── Explorer view ────────────────────────────────────────────────────────────
+
+let _explorerInited = false;
+let _explorerLoading = false;
+
+async function switchToExplore() {
+  if (state.view === "explore") return;
+  state.view = "explore";
+
+  const grid = $("#grid");
+  const loadMore = $("#loadMore");
+  const explorerContainer = $("#explorerContainer");
+  const viewGrid = $("#viewGrid");
+  const viewExplore = $("#viewExplore");
+  const zoomControl = $("#zoomControl");
+
+  if (grid) grid.style.display = "none";
+  if (loadMore) loadMore.hidden = true;
+  if (explorerContainer) explorerContainer.style.display = "";
+  if (zoomControl) zoomControl.style.display = "none";
+  if (viewGrid) { viewGrid.classList.remove("active"); viewGrid.setAttribute("aria-pressed", "false"); }
+  if (viewExplore) { viewExplore.classList.add("active"); viewExplore.setAttribute("aria-pressed", "true"); }
+
+  const explorer = window.Explorer;
+  if (!explorer) return;
+
+  if (!_explorerInited) {
+    explorer.init("explorerContainer");
+    explorer.onClickNode((nodeId, node) => {
+      const asset = state.assets.find((a) => a.id === nodeId);
+      if (asset) openModal(asset);
+    });
+    explorer.onSelect((ids) => {
+      state.selected = new Set(ids);
+      ids.forEach((id) => updateCardState(id));
+      setStats();
+    });
+    _explorerInited = true;
+  }
+
+  explorer.resume();
+
+  if (!_explorerLoading) {
+    _explorerLoading = true;
+    try {
+      const params = new URLSearchParams();
+      if (state.activeCollectionId) params.set("collection_id", state.activeCollectionId);
+      const res = await fetch(`/api/explorer/layout?${params}`);
+      if (res.ok) {
+        const data = await res.json();
+        explorer.loadData(data);
+        // Apply current filter/search state
+        _syncExplorerFilter();
+      }
+    } catch (e) {
+      console.error("[Explorer] Failed to load layout:", e);
+    } finally {
+      _explorerLoading = false;
+    }
+  }
+}
+
+function switchToGrid() {
+  if (state.view === "grid") return;
+  state.view = "grid";
+
+  const grid = $("#grid");
+  const loadMore = $("#loadMore");
+  const explorerContainer = $("#explorerContainer");
+  const viewGrid = $("#viewGrid");
+  const viewExplore = $("#viewExplore");
+  const zoomControl = $("#zoomControl");
+
+  if (grid) grid.style.display = "";
+  if (explorerContainer) explorerContainer.style.display = "none";
+  if (zoomControl) zoomControl.style.display = "";
+  if (viewGrid) { viewGrid.classList.add("active"); viewGrid.setAttribute("aria-pressed", "true"); }
+  if (viewExplore) { viewExplore.classList.remove("active"); viewExplore.setAttribute("aria-pressed", "false"); }
+
+  if (window.Explorer) window.Explorer.pause();
+}
+
+function _syncExplorerFilter() {
+  if (state.view !== "explore" || !window.Explorer) return;
+  const q = (state.q || "").trim().toLowerCase();
+  if (q && !state.semanticMode) {
+    const matched = state.assets.filter((a) => (a.title || "").toLowerCase().includes(q)).map((a) => a.id);
+    window.Explorer.highlight(matched.length ? matched : null);
+  } else {
+    window.Explorer.highlight(null);
+  }
+  if (state.activeCollectionId) {
+    const ids = state.assets.map((a) => a.id);
+    window.Explorer.setFilter(ids);
+  } else {
+    window.Explorer.setFilter(null);
+  }
+}
+
+const viewGridBtn = $("#viewGrid");
+const viewExploreBtn = $("#viewExplore");
+if (viewGridBtn) viewGridBtn.addEventListener("click", switchToGrid);
+if (viewExploreBtn) viewExploreBtn.addEventListener("click", switchToExplore);

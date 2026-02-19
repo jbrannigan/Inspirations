@@ -600,3 +600,127 @@ textarea { width: 100%; min-height: 90px; border: 1px solid var(--border); borde
     grid-template-columns: 1fr;
   }
 }
+
+/* ── View toggle ──────────────────────────────────────────────────────────── */
+.viewToggle {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  gap: 0;
+}
+.viewToggle button {
+  background: var(--panel);
+  color: var(--text-secondary);
+  border: none;
+  border-radius: 0;
+  padding: 4px 12px;
+  font-size: var(--fs-sm);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.viewToggle button + button {
+  border-left: 1px solid var(--border);
+}
+.viewToggle button:hover {
+  background: var(--panel-hover);
+  color: var(--text);
+}
+.viewToggle button.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ── Explorer container ───────────────────────────────────────────────────── */
+.explorerContainer {
+  position: relative;
+  width: 100%;
+  height: calc(100vh - 120px);
+  overflow: hidden;
+}
+.explorerContainer canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* ── Explorer controls panel ─────────────────────────────────────────────── */
+.explorerControlsPanel {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md);
+  z-index: 10;
+  min-width: 180px;
+}
+.explorerPanelToggle {
+  background: none;
+  border: none;
+  padding: 8px 12px;
+  font-size: 16px;
+  cursor: pointer;
+  display: block;
+  width: 100%;
+  text-align: left;
+  color: var(--text-secondary);
+  border-radius: 8px;
+}
+.explorerPanelToggle:hover {
+  background: var(--panel-hover);
+  color: var(--text);
+}
+.explorerPanelBody {
+  padding: 8px 12px 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.explorerControl {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.explorerControl span:first-child {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+.explorerControl input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+.explorerCheckbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+.explorerCheckbox span {
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: var(--fs-sm);
+}
+.explorerBtn {
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 5px 10px;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  color: var(--text);
+  font-family: inherit;
+  transition: background 0.15s;
+}
+.explorerBtn:hover {
+  background: var(--panel-hover);
+}
