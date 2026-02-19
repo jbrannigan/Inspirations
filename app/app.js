@@ -1155,6 +1155,32 @@ async function hideModalAsset() {
   }
 }
 
+async function deleteAnnotationWithUndo(ann) {
+  const { id, x, y, text } = ann;
+  const assetId = state.modalAsset && state.modalAsset.id;
+  await api(`/api/annotations/${id}`, { method: "DELETE" });
+  state.annotations = state.annotations.filter((a) => a.id !== id);
+  if (state.activeAnnotationId === id) state.activeAnnotationId = null;
+  renderAnnotations();
+  renderMarkers();
+  renderFloatingNote();
+  Shared.showToast("Annotation deleted", {
+    type: "info",
+    actionLabel: "Undo",
+    onAction: async () => {
+      if (!assetId) return;
+      const res = await api("/api/annotations", {
+        method: "POST",
+        body: JSON.stringify({ asset_id: assetId, x, y, text: text || "" }),
+      });
+      state.annotations.push(res.annotation);
+      renderAnnotations();
+      renderMarkers();
+      renderFloatingNote();
+    },
+  });
+}
+
 async function loadAnnotations(assetId) {
   const data = await api(`/api/annotations?asset_id=${encodeURIComponent(assetId)}`);
   state.annotations = data.annotations;
@@ -1181,12 +1207,7 @@ function renderAnnotations() {
       scheduleAnnotationUpdate(ann.id, { text: ta.value });
     });
     el.querySelector("[data-del]").onclick = async () => {
-      await api(`/api/annotations/${ann.id}`, { method: "DELETE" });
-      state.annotations = state.annotations.filter((x) => x.id !== ann.id);
-      if (state.activeAnnotationId === ann.id) state.activeAnnotationId = null;
-      renderAnnotations();
-      renderMarkers();
-      renderFloatingNote();
+      await deleteAnnotationWithUndo(ann);
     };
     wrap.appendChild(el);
   });
@@ -1278,12 +1299,7 @@ function renderMarkers() {
     };
     m.querySelector("[data-del]").onclick = async (e) => {
       e.stopPropagation();
-      await api(`/api/annotations/${ann.id}`, { method: "DELETE" });
-      state.annotations = state.annotations.filter((x) => x.id !== ann.id);
-      if (state.activeAnnotationId === ann.id) state.activeAnnotationId = null;
-      renderAnnotations();
-      renderMarkers();
-      renderFloatingNote();
+      await deleteAnnotationWithUndo(ann);
     };
     stage.appendChild(m);
   });
