@@ -1,505 +1,394 @@
-# Inspirations UX Refactor — Full Audit Sweep
+# Inspirations UX Redesign Plan
 
 ## Context
 
-The UX audit (`docs/ux_audit_2026-02-16.md`) identified 28 findings across visual hierarchy, spacing, accessibility, and modern UI patterns. This plan addresses all findings. Per owner decision, accessibility tier is **C (Personal)** — so we skip pure a11y items and focus on visual/UX improvements.
+Inspirations has evolved from an ingestion/tagging tool into a **consumption and curation** app. The current UI exposes too much ingestion plumbing (raw AI model names, 6 filter groups, dark developer-tool aesthetic). The audit-driven technical fixes (shared.js, toasts, grid perf, skeletons, empty states) are being completed separately and are nearly done.
 
-**Findings skipped (Tier C):** A-1 (skip nav), A-3 (ARIA labels), A-4 (focus management), A-5 (focus trap), A-6 (keyboard cards), A-8 (focus indicators), A-9 (alt text), A-10 (tooltip), A-11 (keyboard collections) — 9 items
-
-**Findings addressed:** 19 items across 5 phases
-
-## Files Modified
-
-| File | Changes |
-|------|---------|
-| `app/shared.js` | **NEW** — extracted shared utilities (escapeHtml, api, formatApiError, showToast) |
-| `app/styles.css` | Type scale, spacing utilities, contrast fixes, toast styles, skeleton animations, toolbar layout, empty state, mobile fixes |
-| `app/index.html` | Remove inline styles, toolbar restructure, toast container, utility classes |
-| `app/app.js` | Grid perf fix, toolbar state logic, toast replacements, undo patterns, loading skeletons, displayTitle fix, empty state, card footer simplification |
-| `app/admin.html` | Add shared.js script tag, admin shell class |
-| `app/admin.js` | Replace duplicated functions with Shared.* calls |
-
-## Key Architecture Constraints
-
-- **Vanilla JS only** (D004) — no React/Vue/build step
-- **No external dependencies** (D001) — no npm packages
-- **Single app.js, single styles.css** — no module bundler
-- Grid renders 240 items per page (`ASSETS_PAGE_SIZE = 240` in app.js line 46)
-- Cards use `el.innerHTML = "..."` pattern throughout
-- The project has Python tests but no frontend tests
-- `app.js` has an `init()` function called on load (line 1618) — do NOT load app.js from admin.html
+This plan covers the **design and interaction redesign**:
+1. Light, feminine, creative visual theme
+2. Unified "Groups" model (boards + collections = groups)
+3. Consumption-first layout (de-emphasize filters, elevate images and search)
+4. Image zoom levels (S/M/L/XL grid + modal progressive loading)
+5. 3D semantic explorer designed for visual cluster discovery (not just the old graph in 3D)
+6. Simplified curation and sharing workflows
+7. Admin/ingestion panel (separate from the creative workspace)
 
 ---
 
-## Phase 1: Foundation — CSS System + Shared Utils
-**Findings: SP-1, SP-2, SP-3, SP-6, VH-1, UI-5**
+## Phase 1: Light Creative Theme
 
-### 1a. Create `app/shared.js` (UI-5)
-Extract from app.js and admin.js into a new shared file:
-- `escapeHtml(value)` — from app.js:48-56
-- `api(path, opts)` — from app.js:152-162
-- `formatApiError(err)` — from app.js:176-184
-- Expose as `window.Shared = { escapeHtml, api, formatApiError }`
+### The Problem
+The current dark theme (`--bg: #0b0f14`, navy/charcoal everywhere) feels like a developer tool, not an interior design inspiration board. The audience is someone curating home design images to share with their designer.
 
-Update index.html and admin.html to load `<script src="/app/shared.js"></script>` before page-specific scripts.
+### Design Direction
+Warm, light, airy. Think Pinterest's cream/white, mixed with a sophisticated interior-design magazine feel.
 
-In app.js: alias `const escapeHtml = Shared.escapeHtml` etc at the top, remove the original function definitions.
+### New Color System
 
-In admin.js: remove the duplicated `escapeHtml()` (lines 10-18) and base `api()` (lines 20-29). Replace with:
-```javascript
-const escapeHtml = Shared.escapeHtml;
-const formatApiError = Shared.formatApiError;
+```css
+:root {
+  /* Surfaces */
+  --bg: #faf8f5;              /* warm off-white, paper-like */
+  --panel: #ffffff;            /* clean white panels */
+  --panel-hover: #f5f2ee;     /* warm hover */
+  --surface-subtle: #f0ede8;  /* subtle section backgrounds */
 
-async function api(path, opts = {}, requireAuth = false) {
-  const headers = { ...(opts.headers || {}) };
-  if (requireAuth) headers["X-Admin-Token"] = state.token;
-  return Shared.api(path, { ...opts, headers });
+  /* Text */
+  --text: #2c2825;            /* warm near-black */
+  --text-secondary: #6b6560;  /* warm gray for secondary text */
+  --muted: #9c9590;           /* muted labels, counts */
+
+  /* Borders */
+  --border: rgba(44, 40, 37, 0.10);   /* warm subtle borders */
+  --border-hover: rgba(44, 40, 37, 0.20);
+
+  /* Accents */
+  --accent: #b8860b;          /* antique gold / warm brass */
+  --accent-soft: rgba(184, 134, 11, 0.12);
+  --accent-2: #8b6f5c;        /* warm taupe for secondary actions */
+  --accent-rose: #c4787a;     /* dusty rose for highlights */
+  --accent-sage: #7a9b8a;     /* sage green for success states */
+
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(44, 40, 37, 0.06);
+  --shadow-md: 0 4px 12px rgba(44, 40, 37, 0.08);
+  --shadow-lg: 0 12px 32px rgba(44, 40, 37, 0.12);
+
+  /* Typography (keep existing scale) */
+  --fs-xs: 10px;
+  --fs-sm: 12px;
+  --fs-base: 14px;
+  --fs-md: 16px;
+  --fs-lg: 18px;
+  --fs-xl: 22px;
 }
 ```
 
-### 1b. CSS spacing utilities + remove inline styles (SP-1, SP-2)
-Add utility classes to styles.css (after the `:root` block):
-```css
-.mt-1 { margin-top: 4px; }
-.mt-2 { margin-top: 8px; }
-.mt-3 { margin-top: 12px; }
-.mt-4 { margin-top: 16px; }
-.flex-wrap { flex-wrap: wrap; }
-```
+### Typography
+- Switch to warmer font stack: `"DM Sans", ui-sans-serif, system-ui, -apple-system, sans-serif`
+- Load DM Sans from Google Fonts (light + regular + semibold)
+- The brand "Inspirations" should feel editorial, not technical
 
-Replace all 8 inline `style` attributes in index.html with utility classes:
-- Line 67: `style="margin-top: 8px"` → add `mt-2` to class
-- Line 71: `style="margin-top: 6px"` → add `mt-2` to class (round 6→8)
-- Line 100: `style="margin-top: 10px"` → add `mt-3` to class (round 10→12)
-- Line 113: `style="margin-top: 8px; flex-wrap: wrap"` → add `mt-2 flex-wrap` to class
-- Line 118: `style="margin-top: 8px"` → add `mt-2` to class
-- Line 119: `style="margin-top: 6px"` → add `mt-2` to class
-- Line 201 (in modal): `style="margin-top: 12px"` → add `mt-3` to class
-- Line 203 (in modal): `style="margin-top: 6px"` → add `mt-2` to class
+### Card Treatment
+- White cards with subtle warm shadow instead of dark glass-panel
+- Rounded corners stay (12px), softer feel
+- Card hover: gentle lift shadow + slight border warmth
+- Remove dark gradient backgrounds on thumbnails
+- Source badges: warm taupe pill instead of dark overlay
 
-Standardize gap values in existing CSS rules to 4px-based scale:
-- `.searchInputRow` gap: 6px → 8px
-- `.chips` gap: 6px → 8px
-- `.compactTags` gap: 6px → 8px
-- `.filterList` gap: 6px → 8px
-- `.grid` gap: 10px → 12px
+### Topbar
+- White/cream background, thin warm border bottom
+- Logo gradient: gold to sage (instead of cyan to green)
 
-### 1c. Type scale (VH-1)
-Add CSS custom properties to `:root`:
-```css
---fs-xs: 10px;
---fs-sm: 12px;
---fs-base: 14px;
---fs-md: 16px;
---fs-lg: 18px;
---fs-xl: 22px;
-```
-Apply type scale changes in styles.css:
-- `.title`: 14px → `var(--fs-lg)` (18px)
-- `.sectionTitle`: 12px → `var(--fs-base)` (14px)
-- `.cardTitle`: 13px → `var(--fs-base)` (14px)
-- `.modalTitle`: 14px → `var(--fs-md)` (16px)
-- Keep `.muted`, `.cardMeta`, `.cardSummary` at `var(--fs-sm)` (12px)
-- Keep `.chip`, `.tagTitle`, `.badge` at `var(--fs-xs)` (10-11px)
+### Buttons
+- Default: warm off-white with border
+- Primary: gold/brass accent background, white text
+- Danger: dusty rose
+- Success: sage green
 
-### 1d. Sidebar width fix (SP-3)
-Change `.layout.three` from `grid-template-columns: 260px 1fr 260px` to `280px 1fr 280px`
+### Modals
+- White background with warm shadow
+- Light frosted backdrop (`background: rgba(250, 248, 245, 0.85); backdrop-filter: blur(8px)`)
 
-### 1e. Admin shell (SP-6)
-Add to styles.css:
-```css
-.adminShell { max-width: 800px; margin: 0 auto; padding: 24px 16px; }
-```
-Ensure admin.html uses `class="adminShell"` on its content wrapper.
+### Implementation
+The theme is largely in CSS custom properties, so updating `:root` handles most of it. But there are ~50 hardcoded `rgba(15,22,32,...)` dark values throughout styles.css that need to become variable references or warm equivalents.
+
+**Files:** `app/styles.css` (full theme pass), `app/index.html` (Google Fonts link), cluster explorer and admin page may need matching theme updates
 
 ---
 
-## Phase 2: Toolbar Redesign + Grid Performance
-**Findings: VH-2, VH-3, VH-4, UI-1, UI-8**
+## Phase 2: Unified Groups + Consumption Layout
 
-### 2a. Contextual toolbar (VH-2, VH-3, VH-4)
-Replace the current toolbar HTML (index.html lines 76-97) with contextual sections. The key insight: **hide inapplicable buttons instead of showing them disabled**.
+### 2a. Groups sidebar (replaces Filters + Collections)
 
-New structure:
-```html
-<div class="toolbar">
-  <div class="toolbarMeta">
-    <div id="stats" class="muted">Loading...</div>
-    <div id="canvasControls" class="row toolbar-section">
-      <button id="toggleLabelMode" type="button">AI Tags: Any</button>
-      <button id="showAll">Show All</button>
-      <button id="showTrayCanvas">Show Tray Canvas</button>
-      <button id="reviewCollection" disabled>Review Collection</button>
-    </div>
-  </div>
+**Current:** Left sidebar has "Filters" (6 checkbox groups) and "Collections" (list + New/Delete). Users just think "groups of things."
 
-  <!-- Selection actions: hidden when nothing selected -->
-  <div id="selectionBar" class="toolbar-section" hidden>
-    <div class="toolbar-divider"></div>
-    <div class="row">
-      <span class="toolbar-label" id="selectionLabel">0 selected</span>
-      <button id="addSelectedToCollection" class="primaryAction" disabled>Add to Collection</button>
-      <button id="addSelected" disabled>Add to Tray</button>
-      <button id="removeSelectedFromCollection" disabled>Remove from Collection</button>
-      <button id="removeSelectedFromTray" disabled>Remove from Tray</button>
-      <button id="clearSelection">Clear</button>
-    </div>
-  </div>
+**New design:**
 
-  <!-- Bulk/tray actions -->
-  <div id="trayToolbar" class="toolbar-section">
-    <div class="row">
-      <button id="selectAll">Select All</button>
-      <button id="addFiltered" disabled>Add Filtered</button>
-      <button id="createFromTrayTop" disabled>Create Collection</button>
-      <button id="addTrayToCollectionTop" disabled>Add Tray to Collection</button>
-      <button id="clearTrayTop" disabled>Clear Tray</button>
-    </div>
-  </div>
-</div>
+```
+LEFT SIDEBAR
+─────────────────────────
+GROUPS
+
+  [Search groups...]
+
+  From Pinterest
+    Kitchen Ideas          342
+    Bathroom Inspo         187
+    Exterior                94
+    Hardware + Fixtures     73
+
+  My Collections
+    CB: Kitchen             47  ★
+    CB: Primary Bath        23
+    Round 1 Draft           12
+
+  [+ New Group]
+
+─────────────────────────
+▸ Filters (2 active)
+    Source ▸
+    AI Tags ▸
+    Media Type ▸
+    Record Type ▸
+    Creator ▸
 ```
 
-In `setStats()` (app.js ~line 590), add logic to show/hide `#selectionBar`:
-```javascript
-const selectionBar = $("#selectionBar");
-if (selectionBar) {
-  selectionBar.hidden = state.selected.size === 0;
-  const label = $("#selectionLabel");
-  if (label) label.textContent = `${state.selected.size} selected`;
+- Boards and collections listed together, separated by origin headers
+- Clicking a board filters the grid (read-only)
+- Clicking a collection filters AND enables curation tools
+- Collections show subtle edit affordance; boards don't
+- Filters collapse into a single accordion at bottom, closed by default, badge shows active count
+
+**Data model:** Boards are `assets.board` string values. Collections are `collections` + `collection_items` tables. They query differently but display identically. Existing `renderFilters()` + `renderCollections()` merge into `renderGroups()`.
+
+**Files:** `app/index.html`, `app/app.js`, `app/styles.css`
+
+### 2b. Simplified toolbar
+
+**Always visible:** Stats count, Show All, Select All, Zoom control
+**Contextual (when selected):** "N selected" + "Add to Group" dropdown + Remove + Clear
+**Hidden:** Tray actions to tray sidebar, AI Tags toggle to Filters accordion, Review Collection to group context menu
+
+### 2c. De-emphasize tags on cards
+
+- **Default card:** Image + title only. No tag chips.
+- **Expanded card:** Title + summary + source link. Tags behind "Show tags" toggle.
+- Card footer: just annotation count + Annotate button (subtle)
+
+**Files:** `app/app.js`, `app/styles.css`
+
+---
+
+## Phase 3: Image Zoom Levels
+
+### 3a. Grid zoom control
+
+Toolbar zoom: `[−] S M L XL [+]`
+
+| Level | Grid `minmax()` | Card shows |
+|-------|----------------|------------|
+| S | `minmax(140px, 1fr)` | Image only |
+| M (default) | `minmax(220px, 1fr)` | Image + title |
+| L | `minmax(340px, 1fr)` | Image + title + summary |
+| XL | `minmax(480px, 1fr)` | Image dominant, minimal text overlay |
+
+- CSS classes `.grid.zoom-s` through `.grid.zoom-xl`
+- `state.gridZoom` persisted to `localStorage`
+- At XL, images fill most of the card — text overlaid or below
+
+**Files:** `app/styles.css`, `app/app.js`, `app/index.html`
+
+### 3b. Modal progressive loading
+
+1. Show 512px thumb instantly (cached)
+2. Background-load original, swap when ready
+3. "View Source" button: Pinterest → opens source_ref, Scan → opens PDF, Photo → opens original in new tab
+
+**Files:** `app/app.js`, `app/styles.css`
+
+### 3c. Future: multi-resolution thumbnails (backend, not blocking)
+
+Generate 256/512/1024px. Backend change in `thumbnails.py` + `server.py`. Can be done independently.
+
+---
+
+## Phase 4: 3D Semantic Explorer
+
+### Why Not Just "Old Graph in 3D"
+
+The current D3 cluster explorer is a **force-directed graph**: nodes connected by similarity edges, positions determined by spring physics. This is useful for finding duplicates and outliers but doesn't help with **visual discovery of semantic clusters**. It's a network diagram, not a spatial map of meaning.
+
+What we want is a **semantic landscape** where:
+- Position = meaning (embeddings projected to 3D)
+- Clusters emerge naturally as visible spatial groupings
+- You navigate through a field of images like walking through a gallery
+- Close things look alike; far things don't
+- You discover unexpected neighborhoods and relationships
+
+### Design: Immersive Image Landscape
+
+**Metaphor:** A gallery in space. Images float as cards arranged by meaning. You orbit, zoom, fly through.
+
+**Core visualization:**
+- Each image is a textured billboard (flat plane facing camera) in 3D space
+- Position from embedding vectors projected to 3D via UMAP (preserves local structure better than t-SNE for navigation)
+- **No edges/links by default** — this is a point cloud of images, not a graph
+- Cluster membership shown by subtle color-coded halos or soft ground-plane tinting beneath each cluster
+- Camera: orbit controls (drag rotate, scroll zoom, right-drag pan)
+
+**Level of Detail (distance-based):**
+- **Far (overview):** Soft colored dots at cluster centroids with floating labels ("Kitchen / Oak / Warm")
+- **Medium (neighborhood):** Small thumbnails (64-128px) appear as billboards
+- **Close (browsing):** Full thumbnails (256-512px) with title labels. Hover → image grows, border glows
+- **Click:** Opens detail panel without leaving the 3D scene
+
+**Key Interactions:**
+- **Search highlight:** Type a term → matching images glow/pulse, non-matching fade to low opacity. The semantic landscape becomes a spotlight tool.
+- **Lasso/box select:** Draw to select a spatial region → feeds into curation ("Add these to Group")
+- **Filter by group:** Select a group in sidebar → only those items visible, rest fades or hides
+- **Cluster labels:** Auto-generated from top AI tags per cluster. Float above centroids.
+- **Similarity edges (toggleable):** Optional — turn on to see the graph view overlaid on the spatial layout
+
+**Controls:**
+- Point spread slider (scale positions to separate or compact clusters)
+- Cluster count (if manual KMeans) or auto-detect
+- Show/hide cluster labels
+- Show/hide similarity edges
+- LOD distance thresholds
+- Reset camera
+
+### Technical Architecture
+
+**Backend (new endpoint):**
+```
+GET /api/explorer/layout?collection_id=...&method=umap&dimensions=3
+```
+Returns:
+```json
+{
+  "nodes": [
+    {"id": "...", "x": 1.23, "y": -0.45, "z": 0.78, "cluster_id": 2, "thumb_url": "/media/...?kind=thumb", "title": "..."},
+    ...
+  ],
+  "clusters": [
+    {"id": 0, "label": "Kitchen / Oak / Warm", "centroid": [0.5, -0.2, 0.3], "color": "#b8860b", "count": 47},
+    ...
+  ]
 }
 ```
 
-CSS additions:
-```css
-.toolbar-section { margin-top: 4px; }
-.toolbar-divider { height: 1px; background: var(--border); margin: 4px 0; }
-.toolbar-label { font-size: var(--fs-sm); color: var(--muted); white-space: nowrap; }
-.toolbar-section + .toolbar-section { padding-top: 4px; border-top: 1px solid rgba(255, 255, 255, 0.04); }
-```
+**Python layout computation:**
+- Load embeddings from `asset_embeddings` table
+- Run UMAP with `n_components=3` (via scikit-learn in isolated venv per D010)
+- Run KMeans for cluster assignment (auto-K via silhouette score or user-specified)
+- Generate cluster labels from top AI tags per cluster
+- Cache result as JSON in `data/explorer_layouts/`
+- Recompute only when embeddings change or user requests refresh
 
-### 2b. Grid performance fix (UI-1)
-The problem: `renderGrid()` calls `wrap.innerHTML = ""` and rebuilds all 240 cards on every checkbox click and card expansion.
-
-**Fix:** Add `data-id` to each card, then do targeted updates instead of full rebuild.
-
-In `renderGrid()` (app.js line 685), add:
+**Frontend module: `app/explorer.js`**
 ```javascript
-el.dataset.id = a.id;
-```
-
-New function:
-```javascript
-function updateCardState(id) {
-  const el = document.querySelector(`.card[data-id="${id}"]`);
-  if (!el) return;
-  el.classList.toggle("selected", state.selected.has(id));
-  el.classList.toggle("expanded", state.expanded.has(id));
-  const cb = el.querySelector("input[type=checkbox]");
-  if (cb) cb.checked = state.selected.has(id);
-  setStats();
-}
-```
-
-Change checkbox click handler (app.js ~line 783):
-```javascript
-checkbox.addEventListener("click", (e) => {
-  e.stopPropagation();
-  toggleSelect(a.id);
-  updateCardState(a.id);  // was: renderGrid()
-});
-```
-
-Change card click handler (app.js ~line 801):
-```javascript
-el.onclick = () => {
-  if (state.expanded.has(a.id)) state.expanded.delete(a.id);
-  else state.expanded.add(a.id);
-  updateCardState(a.id);  // was: renderGrid()
+window.Explorer = {
+  init(containerId, config) { /* Three.js scene, camera, renderer, controls */ },
+  loadData(data) { /* create billboards from node data, position in 3D */ },
+  setFilter(nodeIds) { /* show subset, fade rest */ },
+  highlight(nodeIds) { /* glow/pulse matching nodes */ },
+  onSelect(callback) { /* lasso-select fires callback with node IDs */ },
+  resetCamera() { /* fly back to overview */ },
+  destroy() { /* cleanup */ }
 };
 ```
 
-Keep `renderGrid()` for: data loads, filter changes, selectAll, clearSelection.
+**Dependencies (CDN only):**
+- Three.js r160+ (ES module from CDN)
+- OrbitControls from Three.js examples CDN
 
-### 2c. Mobile toolbar scroll affordance (UI-8)
-At ≤700px breakpoint, add CSS mask to hint at scrollable content:
-```css
-@media (max-width: 700px) {
-  .toolbar .row {
-    -webkit-mask-image: linear-gradient(to right, black 85%, transparent 100%);
-    mask-image: linear-gradient(to right, black 85%, transparent 100%);
-  }
-  .toolbar .row.scrolled-end {
-    -webkit-mask-image: none;
-    mask-image: none;
-  }
-}
-```
+**Integration in main app:**
+- View toggle: `[Grid] [Explore]` in toolbar area
+- Explore replaces the grid area, sidebar stays
+- Selection syncs between views (`state.selected`)
+- Group selection in sidebar filters both views
 
-Add scroll listener in app.js init:
-```javascript
-document.querySelectorAll('.toolbar .row').forEach(row => {
-  row.addEventListener('scroll', () => {
-    const atEnd = row.scrollLeft + row.clientWidth >= row.scrollWidth - 8;
-    row.classList.toggle('scrolled-end', atEnd);
-  });
-});
-```
+**Modular for sharing portal:**
+- `explorer.js` takes a container + pre-computed layout JSON
+- Export portal embeds layout data at export time — no live server needed
+- Same visual experience for recipients
+
+### Cluster Label Generation
+For each cluster, take top 3 most frequent AI tags across members:
+- "Kitchen / Oak / Warm"
+- "Bathroom / Tile / Modern"
+- "Exterior / Stone / Traditional"
+
+Labels float above cluster centroids in 3D. Also shown in a legend panel.
+
+**Files:** `app/explorer.js` (new), `app/styles.css`, `app/index.html`, `app/app.js`, `src/inspirations/server.py`, new Python module for layout computation
 
 ---
 
-## Phase 3: Toast System + Alert/Confirm Replacement
-**Findings: UI-3, UI-4, A-2, A-7**
+## Phase 5: Curation Workflow
 
-### 3a. Toast notification system
-Add `showToast()` and `removeToast()` to `shared.js`:
-```javascript
-Shared.showToast = function(message, options = {}) {
-  const { type = "info", duration = 5000, actionLabel, onAction } = options;
-  const container = document.getElementById("toastContainer");
-  if (!container) return;
-  const toast = document.createElement("div");
-  toast.className = `toast toast-${type}`;
-  toast.innerHTML = `<span class="toast-message">${Shared.escapeHtml(message)}</span>`;
-  if (actionLabel && onAction) {
-    const btn = document.createElement("button");
-    btn.className = "toast-action";
-    btn.textContent = actionLabel;
-    btn.onclick = () => { onAction(); Shared._removeToast(toast); };
-    toast.appendChild(btn);
-  }
-  container.appendChild(toast);
-  toast._timer = setTimeout(() => Shared._removeToast(toast), duration);
-};
+### 5a. Quick-add to group
+Card hover reveals `+` icon. Click → dropdown of user collections → pick → item added, toast confirms. One interaction, not five.
 
-Shared._removeToast = function(toast) {
-  if (toast._removed) return;
-  toast._removed = true;
-  clearTimeout(toast._timer);
-  toast.classList.add("toast-exit");
-  toast.addEventListener("animationend", () => toast.remove());
-};
-```
+### 5b. Multi-select + "Add to Group" dropdown
+Toolbar dropdown lists all user collections. Pick one → selected items added → toast with undo.
 
-Add toast container to index.html (before `</body>`):
-```html
-<div id="toastContainer" class="toast-container" aria-live="polite"></div>
-```
+### 5c. Drag-to-reorder in collection view
+HTML5 drag-and-drop when viewing a collection. `collection_items.position` already supports ordering.
+New endpoint: `PUT /api/collections/{id}/reorder`
 
-Add toast CSS to styles.css:
-```css
-.toast-container {
-  position: fixed; bottom: 16px; right: 16px;
-  display: grid; gap: 8px; z-index: 90; max-width: min(400px, 90vw);
-}
-.toast {
-  padding: 12px 16px; border-radius: 10px;
-  background: rgba(16, 24, 36, 0.95); border: 1px solid var(--border);
-  color: var(--text); font-size: var(--fs-sm);
-  display: flex; align-items: center; gap: 12px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  animation: toast-in 0.25s ease;
-}
-.toast.toast-exit { animation: toast-out 0.2s ease forwards; }
-.toast-success { border-left: 3px solid var(--accent-2); }
-.toast-error { border-left: 3px solid #ff7a7a; }
-.toast-info { border-left: 3px solid var(--accent); }
-.toast-message { flex: 1; }
-.toast-action {
-  background: none; border: none; color: var(--accent);
-  font-weight: 600; cursor: pointer; padding: 4px 8px; white-space: nowrap;
-}
-@keyframes toast-in { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-@keyframes toast-out { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
-```
+### 5d. Collection stars (winners vs explored)
+Star button on cards when viewing a collection. Starred items sort to top. Export portal shows starred prominently, unstarred in "See more."
+New column: `collection_items.starred` (boolean, default false)
 
-### 3b. Replace all alert() calls (UI-3)
-Replace every `alert()` in app.js with `Shared.showToast()`:
-
-| Location | Current | Replacement |
-|----------|---------|-------------|
-| ~line 305 | `alert(options.invalidMessage)` | `Shared.showToast(options.invalidMessage, { type: "error" })` |
-| ~line 981 | `alert("Print failed: " + err.message)` | `Shared.showToast("Print failed: " + err.message, { type: "error" })` |
-| ~line 1013 | `alert("Print failed: " + err.message)` | `Shared.showToast("Print failed: " + err.message, { type: "error" })` |
-| ~line 1020 | `alert("Print failed: " + err.message)` | `Shared.showToast("Print failed: " + err.message, { type: "error" })` |
-| ~line 1089 | `alert("Unhide failed: " + ...)` | `Shared.showToast("Unhide failed: " + ..., { type: "error" })` |
-| ~line 1115 | `alert("Hide failed: " + ...)` | `Shared.showToast("Hide failed: " + ..., { type: "error" })` |
-| ~line 1426 | `alert("Delete failed: " + ...)` | `Shared.showToast("Delete failed: " + ..., { type: "error" })` |
-| ~line 1456 | `alert("Add selected to collection failed: " + ...)` | `Shared.showToast("Add failed: " + ..., { type: "error" })` |
-| ~line 1478 | `alert("Remove from collection failed: " + ...)` | `Shared.showToast("Remove failed: " + ..., { type: "error" })` |
-| ~line 1880 | `alert(msg)` (scan import success) | `Shared.showToast(msg, { type: "success" })` |
-| ~line 1883 | `alert("Scan import failed: " + ...)` | `Shared.showToast("Scan import failed: " + ..., { type: "error", duration: 8000 })` |
-| ~line 1955 | `alert(msg)` (photo import success) | `Shared.showToast(msg, { type: "success" })` |
-| ~line 1958 | `alert("Photo import failed: " + ...)` | `Shared.showToast("Photo import failed: " + ..., { type: "error", duration: 8000 })` |
-| ~line 2038 | `alert("Please choose a PDF file.")` | `Shared.showToast("Please choose a PDF file.", { type: "error" })` |
-
-### 3c. Replace confirm() with undo toasts where reversible (UI-4)
-For reversible actions, execute immediately then show undo toast:
-
-**Remove from collection** (~line 1465): Execute API remove, then:
-```javascript
-Shared.showToast(`Removed ${count} items from "${colName}"`, {
-  type: "success",
-  actionLabel: "Undo",
-  onAction: async () => {
-    await api(`/api/collections/${colId}/items`, {
-      method: "POST", body: JSON.stringify({ asset_ids: removedIds })
-    });
-    await loadCollections(); await loadAssets();
-    Shared.showToast("Restored items.", { type: "info" });
-  }
-});
-```
-
-**Hide asset** (~line 1093): Execute hide, show undo toast that calls unhide.
-**Unhide asset** (~line 1078): Execute unhide, show undo toast that calls hide.
-**Clear tray**: Capture tray IDs, clear, show undo toast that re-adds.
-
-**Delete collection** (~line 1406): Keep `confirm()` — genuinely destructive, no API undo path.
-
-### 3d. Annotation delete with undo (A-7)
-In `renderAnnotations()` and marker delete handlers: execute delete, then show undo toast. On undo, POST to create new annotation with same x/y/text data.
-
-### 3e. Color contrast fix (A-2)
-In styles.css:
-- `.filterItem.zeroOption`: Replace `opacity: 0.55` with `color: rgba(255, 255, 255, 0.52)` (maintains ~5:1 contrast ratio)
-- `.badge`: Increase background opacity from `0.65` → `0.82`
+**Files:** `app/app.js`, `app/styles.css`, `src/inspirations/db.py`, `src/inspirations/store.py`, `src/inspirations/server.py`
 
 ---
 
-## Phase 4: Modern UX Patterns
-**Findings: UI-2, UI-6, UI-7, VH-5, UI-9**
+## Phase 6: Admin / Ingestion Panel
 
-### 4a. Loading skeletons (UI-2)
-New function in app.js:
-```javascript
-function renderSkeletons(count = 12) {
-  const wrap = $("#grid");
-  wrap.innerHTML = "";
-  for (let i = 0; i < count; i++) {
-    const el = document.createElement("div");
-    el.className = "skeleton-card";
-    el.innerHTML = '<div class="skeleton-thumb"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div>';
-    wrap.appendChild(el);
-  }
-}
-```
+Expand `admin.html` into a dashboard for ingestion operations:
+- Import status (counts per source, last import dates)
+- Processing coverage (thumbnails, AI tags, embeddings)
+- Upload ZIP for re-import
+- Trigger thumbnail/tagging/embedding jobs
+- Existing delete functionality preserved
 
-Call `renderSkeletons()` at start of `loadAssets()` for fresh loads (not appends).
+Keep "Add Scan PDF" and "Add Photos" in main app for quick session imports.
 
-CSS:
-```css
-.skeleton-card { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: rgba(15,23,34,0.55); }
-.skeleton-thumb { width: 100%; aspect-ratio: 4/3; background: linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.04) 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; }
-.skeleton-line { height: 12px; border-radius: 6px; background: rgba(255,255,255,0.06); margin: 8px 10px; }
-.skeleton-line.short { width: 60%; }
-@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-```
+**New endpoints:** `GET /api/admin/status`, `POST /api/admin/import/pinterest`, etc.
 
-### 4b. Remove hardcoded name (UI-6)
-In `displayTitle()` (app.js ~line 550), replace:
-```javascript
-.replace(/^leslie brannigan saved a (?:link|product|video)(?: from)?\s+/i, "")
-.replace(/^leslie brannigan saved a (?:link|product|video)\.?$/i, "")
-```
-With:
-```javascript
-.replace(/^.{1,40}\s+saved a (?:link|product|video)(?: from)?\s+/i, "")
-.replace(/^.{1,40}\s+saved a (?:link|product|video)\.?$/i, "")
-```
-
-### 4c. Empty state design (UI-7)
-In `renderGrid()` (~line 678), replace simple muted text with designed empty state:
-```javascript
-if (!state.assets.length) {
-  const isFiltered = state.q || state.sources.size || state.boards.size ||
-    state.labels.size || state.contentKinds.size || state.creators.size;
-  const message = state.error
-    ? `Unable to load items: ${escapeHtml(state.error)}`
-    : isFiltered ? "No items match your current filters." : "No items yet.";
-  const action = state.error ? ""
-    : isFiltered ? '<button class="miniBtn" id="emptyStateClear">Clear all filters</button>'
-    : "<p>Use the import buttons above to add your first items.</p>";
-  wrap.innerHTML = `<div class="empty-state"><div class="empty-state-message">${message}</div>${action}</div>`;
-  const clearBtn = wrap.querySelector("#emptyStateClear");
-  if (clearBtn) clearBtn.onclick = async () => { resetFiltersAndSearch(); await loadFacets({ seedDefaultMedia: false }); await loadAssets(); };
-  setStats();
-  return;
-}
-```
-
-CSS:
-```css
-.empty-state { grid-column: 1 / -1; text-align: center; padding: 48px 16px; }
-.empty-state-message { font-size: var(--fs-base); color: var(--muted); margin-bottom: 12px; }
-```
-
-### 4d. Simplify card footer (VH-5)
-In `renderGrid()`, change card footer from:
-```
-AI: ${model} • ${labelCount} tags
-```
-To:
-```javascript
-const tagStatus = labelCount > 0 ? `${labelCount} tags` : "Not tagged";
-```
-Keep model info visible only in expanded `.expandedInfo` section.
-
-Add CSS:
-```css
-.tag-status { font-size: var(--fs-xs); }
-.tag-status.tagged { color: var(--accent-2); }
-.tag-status.untagged { color: var(--muted); }
-```
-
-### 4e. Admin link on mobile (UI-9)
-In styles.css, remove `.adminNav { display: none; }` from the 700px breakpoint. Replace with:
-```css
-.adminNav { font-size: 11px; padding: 5px 8px; }
-```
+**Files:** `app/admin.html`, `app/admin.js`, `src/inspirations/server.py`, `src/inspirations/store.py`
 
 ---
 
-## Phase 5: Layout Polish
-**Findings: SP-4, SP-5**
+## Implementation Order
 
-### 5a. Mobile grid (SP-4)
-At ≤700px, change `.grid` from `repeat(2, minmax(0, 1fr))` to:
-```css
-.grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
-```
+### Round 1 — Visual + Structural (ship first)
+1. Phase 1: Light theme (CSS rewrite)
+2. Phase 2a: Unified Groups sidebar
+3. Phase 2b-2c: Toolbar simplification + card de-emphasis
+4. Phase 3a-3b: Grid zoom control + modal progressive loading
 
-### 5b. Modal image stage (SP-5)
-Replace `.imageStage` from:
-```css
-.imageStage { ... aspect-ratio: 4/3; }
-.imageStage img { width: 100%; height: 100%; object-fit: contain; }
-```
-To:
-```css
-.imageStage {
-  position: relative; border: 1px solid var(--border); border-radius: 12px;
-  overflow: hidden; background: rgba(15,23,34,0.6);
-  min-height: 200px; max-height: 70vh;
-  display: flex; align-items: center; justify-content: center;
-}
-.imageStage img { max-width: 100%; max-height: 70vh; object-fit: contain; display: block; }
-```
+### Round 2 — Explorer
+5. Phase 4 backend: UMAP 3D layout endpoint
+6. Phase 4 frontend: explorer.js (Three.js immersive landscape)
+7. Phase 4 integration: view toggle, sidebar sync, search highlight
 
-**Risk:** Annotation marker positioning uses normalized coordinates. The existing `modalImageGeometry()` computes from actual rendered dimensions, so it should adapt. Manual QA required after this change — test adding/viewing annotations on both landscape and portrait images.
+### Round 3 — Curation + Admin
+8. Phase 5: Quick add, drag-to-reorder, stars
+9. Phase 6: Admin/ingestion panel
+10. Sharing portal upgrade (incorporate explorer.js)
 
 ---
 
 ## Verification
 
-After each phase:
-1. `PYTHONPATH=src python3 -m inspirations serve --reload` — start dev server
-2. Open http://127.0.0.1:8000 — verify visually
-3. `PYTHONPATH=src python3 -m unittest discover -s tests -v` — all tests pass
-4. `ruff check src tests` — lint clean
+After each round:
+1. `PYTHONPATH=src python3 -m inspirations serve --reload`
+2. Open http://127.0.0.1:8000
+3. `PYTHONPATH=src python3 -m unittest discover -s tests -v`
+4. `ruff check src tests`
 
-### Phase-specific checks:
-- **Phase 1:** Larger headings, consistent spacing, no inline styles, admin centered
-- **Phase 2:** Rapid checkbox clicks are instant, toolbar shows/hides contextually
-- **Phase 3:** Import success shows toast, remove-from-collection has undo, no alert() dialogs
-- **Phase 4:** Loading shows shimmer skeletons, empty state has clear-filters button, card footer simplified
-- **Phase 5:** iPhone SE shows 1-column grid, modal portrait images display properly
+### Round 1:
+- App feels warm, light, inviting — like a design magazine, not a dev tool
+- Groups sidebar shows boards + collections unified
+- Filters collapsed with active-count badge
+- Grid zoom S/M/L/XL, images scale correctly
+- Modal loads full-res, "View Source" opens original material
+- Cards: image + title by default, tags hidden
+
+### Round 2:
+- [Explore] view shows 3D image landscape
+- Clusters emerge as visible spatial groupings
+- Hover grows images, click opens detail
+- Search highlights matching nodes, non-matching fade
+- Group filter shows/hides nodes
+- Lasso select feeds curation
+
+### Round 3:
+- `+` on cards opens group picker
+- Drag-to-reorder in collection view
+- Stars, sorted to top
+- Admin dashboard with import status and actions
