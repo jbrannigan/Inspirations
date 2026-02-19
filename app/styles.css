@@ -354,6 +354,37 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .scanOptionRow { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .scanImportActions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+/* ── Scan page nav (card thumbnails) ──────────────────────────────────────── */
+.scanPageNav {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  padding: 4px; background: rgba(250,248,245,0.82);
+}
+.scanPagePrev, .scanPageNext {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--surface-subtle);
+  font-size: 16px; line-height: 1; cursor: pointer; color: var(--text);
+}
+.scanPagePrev:hover:not(:disabled), .scanPageNext:hover:not(:disabled) { background: var(--border); }
+.scanPagePrev:disabled, .scanPageNext:disabled { opacity: 0.3; cursor: default; }
+.scanPageIndicator { font-size: 11px; color: var(--muted); min-width: 40px; text-align: center; }
+
+/* ── Scan page nav (modal image stage) ───────────────────────────────────── */
+.modalScanNav {
+  position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(250,248,245,0.9); border: 1px solid var(--border);
+  border-radius: 20px; padding: 4px 10px;
+}
+.modalScanPrev, .modalScanNext {
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--surface-subtle);
+  font-size: 18px; line-height: 1; cursor: pointer; color: var(--text);
+}
+.modalScanPrev:hover:not(:disabled), .modalScanNext:hover:not(:disabled) { background: var(--border); }
+.modalScanPrev:disabled, .modalScanNext:disabled { opacity: 0.3; cursor: default; }
+.modalScanIndicator { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .imageStage {
   position: relative; border: 1px solid var(--border); border-radius: 12px;
   overflow: hidden; background: var(--surface-subtle);
