@@ -34,6 +34,8 @@ const state = {
   mediaDefaultsSeeded: false,
   canvasMode: "main",
   filterOpen: { sources: true },
+  filtersExpanded: false,
+  gridZoom: localStorage.getItem("gridZoom") || "m",
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -46,6 +48,24 @@ const EXTREME_ASPECT_RATIO_MIN = 0.8;
 const ASSETS_PAGE_SIZE = 240;
 
 const escapeHtml = Shared.escapeHtml;
+
+function applyZoom() {
+  const grid = $("#grid");
+  if (!grid) return;
+  grid.className = `grid zoom-${state.gridZoom}`;
+  const zoomControl = $("#zoomControl");
+  if (zoomControl) {
+    zoomControl.querySelectorAll("button[data-zoom]").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.zoom === state.gridZoom);
+    });
+  }
+}
+
+function setZoom(level) {
+  state.gridZoom = level;
+  localStorage.setItem("gridZoom", level);
+  applyZoom();
+}
 
 function asList(value) {
   if (!value) return [];
@@ -632,30 +652,83 @@ function setStats() {
 }
 
 function renderCollections() {
-  const wrap = $("#collections");
+  renderGroups();
+}
+
+function renderGroups() {
+  const wrap = $("#groups");
+  if (!wrap) return;
   wrap.innerHTML = "";
-  if (!state.collections.length) {
-    wrap.innerHTML = '<div class="muted">No collections yet.</div>';
-    return;
+  const searchVal = ($("#groupSearch")?.value || "").toLowerCase().trim();
+
+  // Boards section (from facets)
+  const boards = (state.facets.boards || []).filter((it) => {
+    if (!it.board) return false;
+    if (searchVal && !it.board.toLowerCase().includes(searchVal)) return false;
+    return true;
+  });
+  if (boards.length) {
+    const header = document.createElement("div");
+    header.className = "groupsHeader";
+    header.textContent = "Boards";
+    wrap.appendChild(header);
+    for (const it of boards) {
+      const isActive = state.boards.has(it.board);
+      const el = document.createElement("div");
+      el.className = `listItem groupItem${isActive ? " on" : ""}`;
+      el.innerHTML = `<div class="groupItemRow"><span class="groupItemName">${escapeHtml(it.board)}</span><span class="groupItemCount">${it.n}</span></div>`;
+      el.onclick = async () => {
+        if (state.boards.has(it.board)) state.boards.delete(it.board);
+        else state.boards.add(it.board);
+        renderGroups();
+        await loadAssets();
+      };
+      wrap.appendChild(el);
+    }
   }
-  for (const c of state.collections) {
-    const isViewing = c.id === state.viewCollectionId;
-    const isDestination = c.id === state.activeCollectionId;
-    const stateText = isViewing ? "Viewing" : isDestination ? "Destination" : "";
-    const el = document.createElement("div");
-    el.className = `listItem ${isViewing ? "on" : ""}`;
-    el.innerHTML = `<div><strong>${c.name}</strong></div><div class="muted">${c.count} items${stateText ? ` • ${stateText}` : ""}</div>`;
-    el.onclick = async () => {
-      await selectCollection(c.id);
-    };
-    wrap.appendChild(el);
+
+  // Collections section
+  const collections = state.collections.filter((c) => {
+    if (!searchVal) return true;
+    return c.name.toLowerCase().includes(searchVal);
+  });
+  if (collections.length) {
+    const header = document.createElement("div");
+    header.className = "groupsHeader";
+    header.textContent = "My Collections";
+    wrap.appendChild(header);
+    for (const c of collections) {
+      const isViewing = c.id === state.viewCollectionId;
+      const isDestination = c.id === state.activeCollectionId;
+      const stateText = isViewing ? "Viewing" : isDestination ? "Destination" : "";
+      const el = document.createElement("div");
+      el.className = `listItem groupItem${isViewing ? " on" : ""}`;
+      el.innerHTML = `<div class="groupItemRow"><span class="groupItemName">${escapeHtml(c.name)}</span><span class="groupItemCount">${c.count}</span></div>${stateText ? `<div class="muted" style="font-size:11px;margin-top:2px">${stateText}</div>` : ""}`;
+      el.onclick = async () => {
+        await selectCollection(c.id);
+      };
+      wrap.appendChild(el);
+    }
   }
+
+  if (!boards.length && !collections.length) {
+    wrap.innerHTML = searchVal ? '<div class="muted">No matching groups.</div>' : '<div class="muted">No groups yet.</div>';
+  }
+  updateFiltersBadge();
+}
+
+function updateFiltersBadge() {
+  const badge = $("#filtersBadge");
+  if (!badge) return;
+  const count = state.sources.size + state.labels.size + state.mediaStatuses.size + state.contentKinds.size + state.creators.size;
+  badge.textContent = count > 0 ? `(${count})` : "";
 }
 
 function renderSkeletons(count) {
   if (count === undefined) count = 12;
   const wrap = $("#grid");
   wrap.innerHTML = "";
+  applyZoom();
   for (let i = 0; i < count; i++) {
     const el = document.createElement("div");
     el.className = "skeleton-card";
@@ -667,6 +740,7 @@ function renderSkeletons(count) {
 function renderGrid() {
   const wrap = $("#grid");
   wrap.innerHTML = "";
+  applyZoom();
   if (!state.assets.length) {
     const isFiltered = state.q || state.sources.size || state.boards.size ||
       state.labels.size || state.contentKinds.size || state.creators.size;
@@ -1049,19 +1123,36 @@ async function openModal(asset) {
   $("#modalMeta").textContent = `${asset.source} • ${asset.source_ref || ""}`;
   const hideBtn = $("#hideAssetBtn");
   if (hideBtn) hideBtn.textContent = isViewingHiddenCollection() ? "Unhide" : "Hide to Hidden";
+
+  // Progressive image loading: show thumb immediately, swap to original when ready
   const modalImage = $("#modalImage");
   const previewUrl = thumbFor(asset);
+  const hasThumb = !!asset.thumb_path;
+  const originalUrl = asset.stored_path ? `/media/${asset.id}?kind=original` : null;
   if (previewUrl) {
     modalImage.src = previewUrl;
     modalImage.style.display = "block";
     modalImage.onload = () => {
       renderMarkers();
       renderFloatingNote();
+      // Background-load higher-res original if we started with a thumbnail
+      if (hasThumb && originalUrl && originalUrl !== previewUrl) {
+        const hires = new Image();
+        hires.onload = () => {
+          if (state.modalAsset === asset) {
+            modalImage.src = originalUrl;
+            renderMarkers();
+          }
+        };
+        hires.src = originalUrl;
+      }
     };
   } else {
     modalImage.removeAttribute("src");
     modalImage.style.display = "none";
   }
+
+  // Source link in notes area
   $("#assetNotes").value = asset.notes || "";
   const link = $("#sourceLink");
   if (asset.source_ref) {
@@ -1071,6 +1162,21 @@ async function openModal(asset) {
     link.href = "#";
     link.textContent = "No source";
   }
+
+  // View Source button: open external source or stored file
+  const viewSourceBtn = $("#viewSourceBtn");
+  if (viewSourceBtn) {
+    const extUrl = isHttpUrl(asset.source_ref) ? asset.source_ref : null;
+    const storedUrl = asset.stored_path ? `/media/${asset.id}?kind=original` : null;
+    const targetUrl = extUrl || storedUrl;
+    if (targetUrl) {
+      viewSourceBtn.style.display = "";
+      viewSourceBtn.onclick = () => window.open(targetUrl, "_blank", "noopener");
+    } else {
+      viewSourceBtn.style.display = "none";
+    }
+  }
+
   $("#modal").classList.remove("hidden");
   await loadAnnotations(asset.id);
   renderAnnotations();
@@ -1440,6 +1546,26 @@ window.addEventListener("resize", () => {
   renderFloatingNote();
 });
 
+// Filters accordion toggle
+$("#filtersToggle")?.addEventListener("click", () => {
+  state.filtersExpanded = !state.filtersExpanded;
+  const filtersDiv = $("#filters");
+  const chevron = $("#filtersChevron");
+  if (filtersDiv) filtersDiv.style.display = state.filtersExpanded ? "" : "none";
+  if (chevron) chevron.textContent = state.filtersExpanded ? "▾" : "▸";
+  const toggle = $("#filtersToggle");
+  if (toggle) toggle.setAttribute("aria-expanded", state.filtersExpanded ? "true" : "false");
+});
+
+// Group search filter
+$("#groupSearch")?.addEventListener("input", () => renderGroups());
+
+// Zoom control buttons
+$("#zoomControl")?.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-zoom]");
+  if (btn) setZoom(btn.dataset.zoom);
+});
+
 $("#selectAll").onclick = () => {
   for (const a of state.assets) state.selected.add(a.id);
   setStats();
@@ -1670,6 +1796,7 @@ $("#floatingText").addEventListener("keydown", (e) => {
 // refresh button removed
 
 async function init() {
+  applyZoom();
   try {
     await loadCollections();
     await loadFacets();
@@ -1724,6 +1851,8 @@ async function loadFacets(options = {}) {
     state.facets = data2.facets;
   }
   renderFilters();
+  renderGroups();
+  updateFiltersBadge();
 }
 
 function prettyFacetValue(groupKey, value) {
@@ -1765,10 +1894,10 @@ function isFilterGroupOpen(key) {
 
 function renderFilters() {
   const wrap = $("#filters");
+  if (!wrap) return;
   wrap.innerHTML = "";
   const groups = [
     { key: "sources", label: "Source", set: state.sources, valueKey: "source" },
-    { key: "boards", label: "Source Tags", set: state.boards, valueKey: "board" },
     { key: "labels", label: "AI Tags", set: state.labels, valueKey: "label" },
     { key: "media_statuses", label: "Media Type", set: state.mediaStatuses, valueKey: "media_status" },
     { key: "content_kinds", label: "Record Type", set: state.contentKinds, valueKey: "content_kind" },
@@ -1815,6 +1944,7 @@ function renderFilters() {
       row.querySelector("input").addEventListener("change", async (e) => {
         if (e.target.checked) g.set.add(value);
         else g.set.delete(value);
+        updateFiltersBadge();
         if (g.key === "sources" || g.key === "media_statuses") {
           await loadFacets();
         }

@@ -52,23 +52,27 @@
     <div class="layout three">
       <aside id="leftSidebar" class="sidebar sidebarLeft">
         <div class="mobileDrawerHeader">
-          <strong>Filters & Collections</strong>
+          <strong>Groups</strong>
           <button id="closeLeftSidebar" type="button">Close</button>
         </div>
         <div class="section">
-          <div class="sectionTitle">Filters</div>
-          <div class="list" id="filters">
-            <div class="muted">Loading filters…</div>
-          </div>
-        </div>
-        <div class="section">
-          <div class="sectionTitle">Collections</div>
-          <div id="collections" class="list"></div>
+          <div class="sectionTitle">Groups</div>
+          <input id="groupSearch" class="groupSearchInput" placeholder="Search groups…" type="search" autocomplete="off" />
+          <div id="groups" class="groupsList"></div>
           <div class="row mt-2">
-            <button id="newCollection">New</button>
+            <button id="newCollection">+ New Group</button>
             <button id="deleteCollection">Delete</button>
           </div>
-          <div class="muted mt-2" id="collectionHint">No collection selected. Main canvas is showing all items.</div>
+          <div class="muted mt-2" id="collectionHint">No group selected.</div>
+        </div>
+        <div class="section">
+          <button type="button" id="filtersToggle" class="filterToggle filtersToggle">
+            <span>Filters <span id="filtersBadge" class="filtersBadge"></span></span>
+            <span class="filterChevron" id="filtersChevron">▸</span>
+          </button>
+          <div id="filters" style="display:none">
+            <div class="muted">Loading filters…</div>
+          </div>
         </div>
       </aside>
 
@@ -81,6 +85,12 @@
               <button id="showAll">Show All</button>
               <button id="showTrayCanvas">Show Tray Canvas</button>
               <button id="reviewCollection" disabled>Review Collection</button>
+              <div class="zoomControl" id="zoomControl" role="group" aria-label="Grid zoom">
+                <button type="button" data-zoom="s">S</button>
+                <button type="button" data-zoom="m">M</button>
+                <button type="button" data-zoom="l">L</button>
+                <button type="button" data-zoom="xl">XL</button>
+              </div>
             </div>
           </div>
 
@@ -204,6 +214,7 @@
           </div>
           <div class="row modalActions">
             <button id="hideAssetBtn" type="button">Hide</button>
+            <button id="viewSourceBtn" type="button">View Source</button>
             <button id="printAssetBtn" type="button">Print</button>
             <button id="closeModal">Close</button>
           </div>
