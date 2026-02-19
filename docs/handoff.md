@@ -793,3 +793,21 @@ Operational closeout:
 - Next actions:
   1. Review scan PDF ingestion UX for separator-page handling and drag/drop nice-to-have.
   2. Continue cluster-review UX integration into main app once scan pipeline is stable.
+
+## Session Checkpoint (2026-02-19T02:21:37.211962+00:00)
+- Branch: `codex/ux-simplification-pass`
+- Commit: `6e9d2e8`
+- Upstream: `(none)`
+- Dirty files: `1`
+- Tagging: source=pinterest provider=gemini model=gemini-2.5-flash
+- Coverage: total=3661 tagged_model=3654 remaining_model=7 tagged_provider_any_model=3661 remaining_provider_any_model=0
+- Asset integrity: missing_stored=0 missing_thumb=0
+- Errors: rows=359 actionable=0 recitation_blocked=7
+- Model coverage breakdown: gemini-2.5-flash=3654, gemini-2.0-flash=7
+- Embeddings: total=3661 by_model=gemini-embedding-001=3661
+- Latest run: `c0c9a48f-5bb3-41f3-a612-79d9370721f0` (2026-02-19T01:26:10.991748+00:00)
+- Latest batch meta: `/Users/minime/Projects/Inspirations/data/batch_jobs/batch_20260205_013427/meta_001.json` name=`batches/6moh82ogzaks688e0wqi2xwzu9opios54h2v` state=``
+- Notes: Added drag-and-drop upload UX for Add Scan PDF and Add Photos, clarified separator-page copy/default behavior, and updated scan import success messaging to explain page counts vs document-card grouping.
+- Next actions:
+  1. User visual QA on desktop/iPad/iPhone for drag-drop zones and updated scan import copy/messaging.
+  2. Continue cluster-review UX integration refinements in main app after visual QA.
