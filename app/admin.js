@@ -6,26 +6,13 @@ const state = {
 };
 
 const $ = (sel) => document.querySelector(sel);
-
-function escapeHtml(value) {
-  return (value || "")
-    .toString()
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
+const escapeHtml = Shared.escapeHtml;
+const formatApiError = Shared.formatApiError;
 
 async function api(path, opts = {}, requireAuth = false) {
-  const headers = { "Content-Type": "application/json", ...(opts.headers || {}) };
+  const headers = { ...(opts.headers || {}) };
   if (requireAuth) headers["X-Admin-Token"] = state.token;
-  const res = await fetch(path, { ...opts, headers });
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(t || res.statusText);
-  }
-  return res.json();
+  return Shared.api(path, { ...opts, headers });
 }
 
 function setUiState() {

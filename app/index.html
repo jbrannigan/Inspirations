@@ -64,11 +64,11 @@
         <div class="section">
           <div class="sectionTitle">Collections</div>
           <div id="collections" class="list"></div>
-          <div class="row" style="margin-top: 8px">
+          <div class="row mt-2">
             <button id="newCollection">New</button>
             <button id="deleteCollection">Delete</button>
           </div>
-          <div class="muted" id="collectionHint" style="margin-top: 6px">No collection selected. Main canvas is showing all items.</div>
+          <div class="muted mt-2" id="collectionHint">No collection selected. Main canvas is showing all items.</div>
         </div>
       </aside>
 
@@ -76,28 +76,40 @@
         <div class="toolbar">
           <div class="toolbarMeta">
             <div id="stats" class="muted">Loading...</div>
-            <div class="row trayQuickActions">
+            <div id="canvasControls" class="row toolbar-section">
               <button id="toggleLabelMode" type="button">AI Tags: Any</button>
+              <button id="showAll">Show All</button>
+              <button id="showTrayCanvas">Show Tray Canvas</button>
+              <button id="reviewCollection" disabled>Review Collection</button>
+            </div>
+          </div>
+
+          <!-- Selection actions: hidden when nothing selected -->
+          <div id="selectionBar" class="toolbar-section" hidden>
+            <div class="toolbar-divider"></div>
+            <div class="row">
+              <span class="toolbar-label" id="selectionLabel">0 selected</span>
+              <button id="addSelectedToCollection" class="primaryAction" disabled>Add to Collection</button>
+              <button id="addSelected" disabled>Add to Tray</button>
+              <button id="removeSelectedFromCollection" disabled>Remove from Collection</button>
+              <button id="removeSelectedFromTray" disabled>Remove from Tray</button>
+              <button id="clearSelection">Clear</button>
+            </div>
+          </div>
+
+          <!-- Bulk/tray actions -->
+          <div id="trayToolbar" class="toolbar-section">
+            <div class="row">
+              <button id="selectAll">Select All</button>
+              <button id="addFiltered" disabled>Add Filtered</button>
               <button id="createFromTrayTop" disabled>Create Collection</button>
               <button id="addTrayToCollectionTop" disabled>Add Tray to Collection</button>
               <button id="clearTrayTop" disabled>Clear Tray</button>
             </div>
           </div>
-          <div class="row">
-            <button id="selectAll">Select All</button>
-            <button id="addSelectedToCollection" class="primaryAction" disabled>Add Selected to Collection</button>
-            <button id="addSelected" disabled>Add Selected to Tray</button>
-            <button id="removeSelectedFromCollection" disabled>Remove Selected from Collection</button>
-            <button id="removeSelectedFromTray" disabled>Remove Selected from Tray</button>
-            <button id="addFiltered" disabled>Add Filtered</button>
-            <button id="clearSelection" disabled>Clear Selection</button>
-            <button id="reviewCollection" disabled>Review Collection</button>
-            <button id="showTrayCanvas">Show Tray Canvas</button>
-            <button id="showAll">Show All</button>
-          </div>
         </div>
         <div id="grid" class="grid"></div>
-        <div class="row" style="margin-top: 10px">
+        <div class="row mt-3">
           <button id="loadMore" hidden>Load More</button>
         </div>
       </main>
@@ -110,13 +122,13 @@
         <div class="section">
           <div class="sectionTitle">Curate Tray</div>
           <div class="muted" id="trayCount">0 items</div>
-          <div class="row" style="margin-top: 8px; flex-wrap: wrap">
+          <div class="row mt-2 flex-wrap">
             <button id="createFromTray" disabled>Create Collection</button>
             <button id="addTrayToCollection" disabled>Add Tray to Collection</button>
             <button id="clearTray" disabled>Clear Tray</button>
           </div>
-          <div id="tray" class="list" style="margin-top: 8px"></div>
-          <div class="muted" style="margin-top: 6px">
+          <div id="tray" class="list mt-2"></div>
+          <div class="muted mt-2">
             Tray is your “shopping cart” for what you want to share. Use “Show Tray Canvas” to curate visually.
             In the tray list, tap an item to preview it and use Remove to take it out.
           </div>
@@ -207,9 +219,9 @@
             <div class="sectionTitle">Annotations</div>
             <div id="annList" class="list"></div>
             <div class="muted">Click on the image to add a note.</div>
-            <div class="sectionTitle" style="margin-top: 12px">General Notes</div>
+            <div class="sectionTitle mt-3">General Notes</div>
             <textarea id="assetNotes" placeholder="General notes about this image…"></textarea>
-            <div class="muted" style="margin-top: 6px">
+            <div class="muted mt-2">
               Source: <a id="sourceLink" href="#" target="_blank" rel="noopener">Open original</a>
             </div>
           </div>
@@ -217,6 +229,8 @@
       </div>
     </div>
 
+    <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+    <script src="/app/shared.js"></script>
     <script src="/app/app.js"></script>
   </body>
 </html>
