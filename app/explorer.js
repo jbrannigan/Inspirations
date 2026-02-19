@@ -30,7 +30,7 @@
   let _meshes = [];          // { id, sprite, data }
   let _clusterDots = [];     // { mesh, labelEl }
   let _clusterHalos = [];
-  let _spread = 1.0;
+  let _spread = 1.5;
   let _showLabels = true;
   let _selectCallback = null;
   let _clickCallback = null;
@@ -45,11 +45,11 @@
   let _lassoEl = null;
 
   // LOD thresholds (distance from camera to node).
-  // Data is normalized to ±5–10 units; camera starts at z=25, so the
-  // closest nodes are ~20 units away. These values must exceed that.
-  const LOD_FAR = 40;
-  const LOD_MED = 22;
-  const LOD_CLOSE = 12;
+  // Data is normalized to ±15 units; camera starts at z=75, so the
+  // closest nodes are ~60 units away. These values must exceed that.
+  const LOD_FAR = 120;
+  const LOD_MED = 65;
+  const LOD_CLOSE = 35;
 
   // Texture cache
   const _texCache = {};
@@ -107,8 +107,8 @@
 
     _scene = new THREE.Scene();
 
-    _camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 1000);
-    _camera.position.set(0, 0, 25);
+    _camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 2000);
+    _camera.position.set(0, 0, 75);
 
     _controls = new OrbitControls(_camera, _renderer.domElement);
     _controls.enableDamping = true;
@@ -153,7 +153,7 @@
       <div class="explorerPanelBody" id="explorerPanelBody">
         <label class="explorerControl">
           <span>Spread</span>
-          <input type="range" id="explorerSpread" min="0.5" max="3" step="0.1" value="1">
+          <input type="range" id="explorerSpread" min="0.5" max="5" step="0.1" value="1.5">
         </label>
         <label class="explorerControl explorerCheckbox">
           <input type="checkbox" id="explorerLabels" checked>
@@ -540,7 +540,7 @@
 
   function resetCamera() {
     if (!_camera || !_controls) return;
-    _camera.position.set(0, 0, 25);
+    _camera.position.set(0, 0, 75);
     _controls.target.set(0, 0, 0);
     _controls.update();
   }
