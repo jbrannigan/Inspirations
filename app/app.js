@@ -590,7 +590,6 @@ function setStats() {
   const trayIds = trayAssetIdsSet();
   const traySelectedCount = Array.from(state.selected).filter((id) => trayIds.has(id)).length;
   const trayMode = state.canvasMode === "tray";
-  const reviewBtn = $("#reviewCollection");
   const destination = activeCollection ? ` • Add-to "${activeCollection.name}"` : "";
   const narrative = buildCanvasNarrative();
   $("#canvasNarrative").textContent = narrative;
@@ -617,16 +616,6 @@ function setStats() {
   $("#addFiltered").textContent = activeCollection ? `Add Filtered to "${activeCollection.name}"` : "Add Filtered to Tray";
   $("#addFiltered").disabled = state.assets.length === 0 || trayMode;
   $("#clearSelection").disabled = state.selected.size === 0;
-  if (reviewBtn) {
-    const canReview = !!viewCollection && !trayMode;
-    reviewBtn.disabled = !canReview;
-    if (viewCollection) {
-      reviewBtn.textContent = `Review "${viewCollection.name}"`;
-    } else {
-      reviewBtn.textContent = "Review Collection";
-    }
-    reviewBtn.classList.toggle("primaryAction", !!canReview);
-  }
   $("#showTrayCanvas").textContent = trayMode ? "Tray Canvas On" : "Show Tray Canvas";
   $("#showTrayCanvas").disabled = !trayMode && state.tray.length === 0;
   $("#showAll").textContent = trayMode ? "Back to Main Canvas" : "Show All";
@@ -1609,14 +1598,6 @@ $("#showTrayCanvas").onclick = async () => {
   await loadAssets();
 };
 
-$("#reviewCollection").onclick = () => {
-  const viewCollection = getViewCollection();
-  if (!viewCollection) return;
-  const dataUrl = `/api/cluster/review?collection_id=${encodeURIComponent(viewCollection.id)}&include_neighbors=0`;
-  const url = `/tools/cluster_explorer.html?data=${encodeURIComponent(dataUrl)}`;
-  window.open(url, "_blank");
-};
-
 $("#loadMore").onclick = async () => {
   await loadAssets(true);
 };
@@ -2595,5 +2576,15 @@ function _syncExplorerFilter() {
 
 const viewGridBtn = $("#viewGrid");
 const viewExploreBtn = $("#viewExplore");
+const viewReviewBtn = $("#viewReview");
 if (viewGridBtn) viewGridBtn.addEventListener("click", switchToGrid);
 if (viewExploreBtn) viewExploreBtn.addEventListener("click", switchToExplore);
+if (viewReviewBtn) viewReviewBtn.addEventListener("click", () => {
+  const viewCollection = getViewCollection();
+  if (viewCollection) {
+    const dataUrl = `/api/cluster/review?collection_id=${encodeURIComponent(viewCollection.id)}&include_neighbors=0`;
+    window.open(`/tools/cluster_explorer.html?data=${encodeURIComponent(dataUrl)}`, "_blank");
+  } else {
+    window.open(`/tools/cluster_explorer.html`, "_blank");
+  }
+});

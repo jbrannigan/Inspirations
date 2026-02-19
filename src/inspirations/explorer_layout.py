@@ -143,7 +143,7 @@ def _normalize_coords(coords: list[list[float]]) -> list[list[float]]:
     x_range = max(xs) - min(xs) or 1.0
     y_range = max(ys) - min(ys) or 1.0
     z_range = max(zs) - min(zs) or 1.0
-    scale = 10.0 / max(x_range, y_range, z_range)
+    scale = 30.0 / max(x_range, y_range, z_range)
     x_mid = (max(xs) + min(xs)) / 2
     y_mid = (max(ys) + min(ys)) / 2
     z_mid = (max(zs) + min(zs)) / 2
