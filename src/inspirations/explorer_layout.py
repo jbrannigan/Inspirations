@@ -1,0 +1,269 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import random
+import sqlite3
+from pathlib import Path
+
+
+CLUSTER_PALETTE = [
+    "#b8860b",
+    "#8b6914",
+    "#6b8e23",
+    "#7b68ee",
+    "#cd853f",
+    "#2e8b57",
+    "#b05050",
+    "#4682b4",
+    "#d2691e",
+    "#708090",
+    "#9b59b6",
+    "#1abc9c",
+    "#e67e22",
+    "#c0392b",
+    "#7f8c8d",
+]
+
+
+def _cache_key(asset_ids: list[str]) -> str:
+    joined = ",".join(sorted(asset_ids))
+    return hashlib.sha256(joined.encode()).hexdigest()[:16]
+
+
+def _load_embeddings(
+    conn: sqlite3.Connection, collection_id: str | None
+) -> tuple[list[str], list[list[float]]]:
+    if collection_id:
+        rows = conn.execute(
+            """
+            select ae.asset_id, ae.vector_json
+            from asset_embeddings ae
+            join collection_items ci on ci.asset_id = ae.asset_id
+            where ci.collection_id = ?
+            order by ae.asset_id
+            """,
+            (collection_id,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "select asset_id, vector_json from asset_embeddings order by asset_id"
+        ).fetchall()
+
+    ids: list[str] = []
+    vectors: list[list[float]] = []
+    for asset_id, vector_json in rows:
+        try:
+            vec = json.loads(vector_json)
+        except Exception:
+            continue
+        ids.append(asset_id)
+        vectors.append(vec)
+    return ids, vectors
+
+
+def _load_asset_meta(conn: sqlite3.Connection, asset_ids: list[str]) -> dict[str, dict]:
+    if not asset_ids:
+        return {}
+    placeholders = ",".join("?" * len(asset_ids))
+    rows = conn.execute(
+        f"select id, title, thumb_path from assets where id in ({placeholders})",
+        asset_ids,
+    ).fetchall()
+    return {r[0]: {"title": r[1] or "", "thumb_path": r[2] or ""} for r in rows}
+
+
+def _load_cluster_labels(
+    conn: sqlite3.Connection, cluster_members: dict[int, list[str]]
+) -> dict[int, str]:
+    result: dict[int, str] = {}
+    for cid, member_ids in cluster_members.items():
+        if not member_ids:
+            result[cid] = f"Cluster {cid}"
+            continue
+        placeholders = ",".join("?" * len(member_ids))
+        rows = conn.execute(
+            f"""
+            select label, count(*) as cnt
+            from asset_labels
+            where asset_id in ({placeholders})
+            group by label
+            order by cnt desc
+            limit 3
+            """,
+            member_ids,
+        ).fetchall()
+        if rows:
+            result[cid] = " / ".join(r[0] for r in rows)
+        else:
+            result[cid] = f"Cluster {cid}"
+    return result
+
+
+def _project_umap(vectors: list[list[float]]) -> list[list[float]] | None:
+    try:
+        import umap  # type: ignore
+        import numpy as np  # type: ignore
+    except Exception:
+        return None
+    X = np.array(vectors, dtype=float)
+    n_neighbors = min(15, len(vectors) - 1)
+    reducer = umap.UMAP(n_components=3, random_state=42, n_neighbors=n_neighbors)
+    return reducer.fit_transform(X).tolist()
+
+
+def _project_pca(vectors: list[list[float]]) -> list[list[float]] | None:
+    try:
+        from sklearn.decomposition import PCA  # type: ignore
+        import numpy as np  # type: ignore
+    except Exception:
+        return None
+    X = np.array(vectors, dtype=float)
+    n_components = min(3, X.shape[0], X.shape[1])
+    coords = PCA(n_components=n_components, random_state=42).fit_transform(X)
+    if coords.shape[1] < 3:
+        import numpy as np  # type: ignore  # noqa: F811
+        pad = np.zeros((coords.shape[0], 3 - coords.shape[1]))
+        coords = np.hstack([coords, pad])
+    return coords.tolist()
+
+
+def _project_random(n: int) -> list[list[float]]:
+    rng = random.Random(42)
+    return [[rng.uniform(-1, 1), rng.uniform(-1, 1), rng.uniform(-1, 1)] for _ in range(n)]
+
+
+def _normalize_coords(coords: list[list[float]]) -> list[list[float]]:
+    if not coords:
+        return coords
+    xs = [c[0] for c in coords]
+    ys = [c[1] for c in coords]
+    zs = [c[2] for c in coords]
+    x_range = max(xs) - min(xs) or 1.0
+    y_range = max(ys) - min(ys) or 1.0
+    z_range = max(zs) - min(zs) or 1.0
+    scale = 10.0 / max(x_range, y_range, z_range)
+    x_mid = (max(xs) + min(xs)) / 2
+    y_mid = (max(ys) + min(ys)) / 2
+    z_mid = (max(zs) + min(zs)) / 2
+    return [
+        [(c[0] - x_mid) * scale, (c[1] - y_mid) * scale, (c[2] - z_mid) * scale]
+        for c in coords
+    ]
+
+
+def _cluster_coords(coords: list[list[float]]) -> list[int]:
+    n = len(coords)
+    if n < 4:
+        return [0] * n
+    try:
+        from sklearn.cluster import KMeans  # type: ignore
+        from sklearn.metrics import silhouette_score  # type: ignore
+        import numpy as np  # type: ignore
+    except Exception:
+        return [0] * n
+
+    X = np.array(coords, dtype=float)
+    k_max = min(15, n - 1)
+    if k_max < 2:
+        return [0] * n
+
+    best_k = 2
+    best_score = -1.0
+    for k in range(2, k_max + 1):
+        km = KMeans(n_clusters=k, n_init=10, random_state=42, max_iter=200)
+        labels = km.fit_predict(X)
+        try:
+            score = float(silhouette_score(X, labels, sample_size=min(2000, n)))
+        except Exception:
+            continue
+        if score > best_score:
+            best_score = score
+            best_k = k
+
+    km = KMeans(n_clusters=best_k, n_init=10, random_state=42, max_iter=300)
+    return [int(lbl) for lbl in km.fit_predict(X)]
+
+
+def compute_layout(
+    conn: sqlite3.Connection,
+    data_dir: Path,
+    collection_id: str | None = None,
+    method: str = "umap",
+    refresh: bool = False,
+) -> dict:
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    ids, vectors = _load_embeddings(conn, collection_id)
+    if not ids:
+        return {"nodes": [], "clusters": []}
+
+    cache_file = data_dir / f"{_cache_key(ids)}.json"
+    if not refresh and cache_file.exists():
+        try:
+            return json.loads(cache_file.read_text())
+        except Exception:
+            pass
+
+    # Project to 3D
+    coords: list[list[float]] | None = None
+    if method == "umap":
+        coords = _project_umap(vectors)
+    if coords is None:
+        coords = _project_pca(vectors)
+    if coords is None:
+        coords = _project_random(len(ids))
+
+    coords = _normalize_coords(coords)
+
+    # Cluster in 3D space
+    labels = _cluster_coords(coords)
+    num_clusters = max(labels) + 1 if labels else 1
+
+    cluster_members: dict[int, list[str]] = {i: [] for i in range(num_clusters)}
+    for idx, asset_id in enumerate(ids):
+        cluster_members[labels[idx]].append(asset_id)
+
+    asset_meta = _load_asset_meta(conn, ids)
+    label_strings = _load_cluster_labels(conn, cluster_members)
+
+    nodes = []
+    for idx, asset_id in enumerate(ids):
+        meta = asset_meta.get(asset_id, {})
+        thumb_url = f"/media/{asset_id}?kind=thumb" if meta.get("thumb_path") else ""
+        nodes.append(
+            {
+                "id": asset_id,
+                "x": round(coords[idx][0], 4),
+                "y": round(coords[idx][1], 4),
+                "z": round(coords[idx][2], 4),
+                "cluster_id": labels[idx],
+                "thumb_url": thumb_url,
+                "title": meta.get("title", ""),
+            }
+        )
+
+    clusters = []
+    for cid in range(num_clusters):
+        member_indices = [i for i, lbl in enumerate(labels) if lbl == cid]
+        if not member_indices:
+            continue
+        cx = sum(coords[i][0] for i in member_indices) / len(member_indices)
+        cy = sum(coords[i][1] for i in member_indices) / len(member_indices)
+        cz = sum(coords[i][2] for i in member_indices) / len(member_indices)
+        clusters.append(
+            {
+                "id": cid,
+                "label": label_strings.get(cid, f"Cluster {cid}"),
+                "centroid": [round(cx, 4), round(cy, 4), round(cz, 4)],
+                "color": CLUSTER_PALETTE[cid % len(CLUSTER_PALETTE)],
+                "count": len(member_indices),
+            }
+        )
+
+    result = {"nodes": nodes, "clusters": clusters}
+    try:
+        cache_file.write_text(json.dumps(result))
+    except Exception:
+        pass
+    return result
