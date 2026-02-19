@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from string import Template
 
-DEFAULT_DB = "/Users/minime/Projects/Inspirations/data/inspirations.sqlite"
+DEFAULT_DB = "data/inspirations.sqlite"
 DEFAULT_LOG = "/tmp/inspirations_gemini_tag_progress.log"
 DEFAULT_MODEL = "gemini-2.5-flash"
 

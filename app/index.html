@@ -27,6 +27,7 @@
                 aria-label="Advanced search help"
                 aria-controls="searchHelpTooltip"
                 aria-expanded="false"
+                title='Tip: start with "sem:" to run semantic search (example: sem: warm oak kitchen)'
               >
                 ?
               </button>
@@ -43,6 +44,7 @@
           </div>
         </div>
         <button id="addScanPdf" class="topActionBtn" type="button">Add Scan PDF</button>
+        <button id="addPhotos" class="topActionBtn" type="button">Add Photos</button>
         <a href="/app/admin.html" class="adminNav">Admin</a>
       </div>
     </header>
@@ -89,6 +91,7 @@
             <button id="removeSelectedFromTray" disabled>Remove Selected from Tray</button>
             <button id="addFiltered" disabled>Add Filtered</button>
             <button id="clearSelection" disabled>Clear Selection</button>
+            <button id="reviewCollection" disabled>Review Collection</button>
             <button id="showTrayCanvas">Show Tray Canvas</button>
             <button id="showAll">Show All</button>
           </div>
@@ -146,6 +149,26 @@
           <div class="scanImportActions">
             <button id="cancelScanImport" type="button">Cancel</button>
             <button id="runScanImport" type="button" disabled>Import</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="photoImportModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="photoImportTitle">
+      <div class="modalContent scanImportContent">
+        <div class="modalHeader">
+          <div>
+            <div id="photoImportTitle" class="modalTitle">Import Photo</div>
+            <div class="muted">Upload one image to add it to your inspirations library.</div>
+          </div>
+          <button id="closePhotoImport" type="button">Close</button>
+        </div>
+        <div class="scanImportBody">
+          <input id="photoInput" type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.heif,.tif,.tiff" />
+          <div class="muted">Photo imports are tagged as source: photo and record type: photo.</div>
+          <div class="scanImportActions">
+            <button id="cancelPhotoImport" type="button">Cancel</button>
+            <button id="runPhotoImport" type="button" disabled>Import</button>
           </div>
         </div>
       </div>

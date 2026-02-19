@@ -49,6 +49,21 @@ KEYWORDS = [
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 DEFAULT_GEMINI_RECITATION_FALLBACK_MODEL = "gemini-2.0-flash"
 DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001"
+_SCAN_DOC_SUFFIX_RE = re.compile(r"(\s-\sdoc\s+\d+(?:\s+p\d+)?)\s*$", re.IGNORECASE)
+_SCAN_GENERIC_PREFIX_RE = re.compile(
+    r"^(?:a|an|the|this)\s+(?:scanned?\s+)?(?:magazine\s+page|image|photo|scan|page|document)"
+    r"(?:\s+that)?\s+(?:show(?:ing|s)?|depict(?:ing|s)?|of|featur(?:ing|es)|with)\s+",
+    re.IGNORECASE,
+)
+_SCAN_BOILERPLATE_PREFIX_RE = re.compile(
+    r"^(?:this|the)\s+(?:image|photo|scan|page|document)\s+"
+    r"(?:is|shows?|showcases?|depicts?|features?|illustrates?|captures?|displays?|presents?)\s+",
+    re.IGNORECASE,
+)
+_SCAN_TRAILING_FILLER_RE = re.compile(
+    r"(?:\s+|,)(?:and|or|with|of|in|on|to|for|from|featuring|showing|including)$",
+    re.IGNORECASE,
+)
 LEXICAL_STOPWORDS = {
     "a",
     "an",
@@ -266,6 +281,68 @@ def _flatten_ai_labels(payload: dict[str, Any]) -> list[str]:
         seen.add(lab)
         out.append(lab)
     return out
+
+
+def _scan_doc_suffix(title: str) -> str:
+    m = _SCAN_DOC_SUFFIX_RE.search((title or "").strip())
+    if not m:
+        return ""
+    return str(m.group(1) or "")
+
+
+def _strip_scan_doc_suffix(title: str) -> str:
+    return _SCAN_DOC_SUFFIX_RE.sub("", (title or "").strip()).strip()
+
+
+def _truncate_title(text: str, max_len: int = 74) -> str:
+    if len(text) <= max_len:
+        return text
+    cut = text[: max_len + 1]
+    if " " in cut:
+        cut = cut[: cut.rfind(" ")]
+    return cut.rstrip(" ,.;:-")
+
+
+def _clean_scan_title_text(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", (text or "").strip())
+    if not cleaned:
+        return ""
+    cleaned = re.split(r"(?<=[.!?])\s+", cleaned, maxsplit=1)[0]
+    cleaned = cleaned.rstrip(" .!?")
+    cleaned = _SCAN_GENERIC_PREFIX_RE.sub("", cleaned).strip()
+    cleaned = _SCAN_BOILERPLATE_PREFIX_RE.sub("", cleaned).strip()
+    cleaned = re.sub(r"^(?:a|an|the)\s+", "", cleaned, flags=re.IGNORECASE).strip()
+    if len(cleaned) > 64:
+        lead = re.split(r"\s*[,;:]\s*", cleaned, maxsplit=1)[0].strip()
+        if len(lead) >= 22:
+            cleaned = lead
+    cleaned = cleaned.strip(" ,.;:-")
+    if len(cleaned) < 3:
+        return ""
+    cleaned = _truncate_title(cleaned)
+    while cleaned and _SCAN_TRAILING_FILLER_RE.search(cleaned):
+        cleaned = _SCAN_TRAILING_FILLER_RE.sub("", cleaned).strip(" ,.;:-")
+    if len(cleaned) < 3:
+        return ""
+    if cleaned and cleaned[0].islower():
+        cleaned = cleaned[0].upper() + cleaned[1:]
+    return cleaned
+
+
+def _suggest_scan_title(payload: dict[str, Any], current_title: str) -> str:
+    for key in ("suggested_title", "title", "headline"):
+        value = _clean_scan_title_text(str(payload.get(key) or ""))
+        if value:
+            base = _strip_scan_doc_suffix(value)
+            suffix = _scan_doc_suffix(current_title)
+            return f"{base}{suffix}" if suffix else base
+
+    summary = _clean_scan_title_text(str(payload.get("summary") or ""))
+    if summary:
+        base = _strip_scan_doc_suffix(summary)
+        suffix = _scan_doc_suffix(current_title)
+        return f"{base}{suffix}" if suffix else base
+    return ""
 
 
 def _log_ai_error(
@@ -508,8 +585,14 @@ def run_ai_error_triage(
     clauses: list[str] = []
     params: list[Any] = []
     if source:
-        clauses.append("a.source = ?")
-        params.append(source)
+        sources = [s.strip() for s in source.split(",") if s.strip()]
+        if sources:
+            if len(sources) == 1:
+                clauses.append("a.source = ?")
+                params.append(sources[0])
+            else:
+                clauses.append("a.source in (%s)" % ",".join(["?"] * len(sources)))
+                params.extend(sources)
     if provider:
         clauses.append("e.provider = ?")
         params.append(provider)
@@ -752,8 +835,13 @@ def run_similarity_search(
     clauses = ["e.provider = ?", "e.model = ?"]
     params: list[Any] = ["gemini", model]
     if source:
-        clauses.append("a.source = ?")
-        params.append(source)
+        sources = [s.strip() for s in source.split(",") if s.strip()]
+        if len(sources) == 1:
+            clauses.append("a.source = ?")
+            params.append(sources[0])
+        elif len(sources) > 1:
+            clauses.append("a.source in (%s)" % ",".join(["?"] * len(sources)))
+            params.extend(sources)
     where = "where " + " and ".join(clauses)
 
     rows = db.query(
@@ -761,6 +849,7 @@ def run_similarity_search(
         select e.asset_id, e.vector_json, e.dimensions, e.created_at,
                a.source, a.source_ref, a.title, a.description, a.board, a.notes,
                a.image_url, a.stored_path, a.thumb_path, a.imported_at,
+               a.media_status, a.content_kind, a.creator_name, a.source_domain, a.source_name,
                coalesce(
                  (select ai.summary from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1),
                  a.ai_summary
@@ -814,6 +903,11 @@ def run_similarity_search(
                 "stored_path": r["stored_path"],
                 "thumb_path": r["thumb_path"],
                 "imported_at": r["imported_at"],
+                "media_status": r["media_status"],
+                "content_kind": r["content_kind"],
+                "creator_name": r["creator_name"],
+                "source_domain": r["source_domain"],
+                "source_name": r["source_name"],
                 "ai_summary": r["ai_summary"],
                 "ai_json": r["ai_json"],
                 "ai_model": r["ai_model"],
@@ -941,7 +1035,7 @@ def run_gemini_image_labeler(
     where = "where " + " and ".join(clauses) if clauses else ""
     rows = db.query(
         f"""
-        select a.id, a.title, a.description, a.board, a.stored_path, a.thumb_path
+        select a.id, a.source, a.title, a.description, a.board, a.stored_path, a.thumb_path
         from assets a
         {where}
         order by a.imported_at asc
@@ -959,6 +1053,8 @@ def run_gemini_image_labeler(
             break
         attempted += 1
         asset_id = r["id"]
+        asset_source = str(r["source"] or "").strip().lower()
+        current_title = str(r["title"] or "").strip()
         preferred = r["thumb_path"] if image_kind == "thumb" else r["stored_path"]
         fallback = r["stored_path"] if image_kind == "thumb" else r["thumb_path"]
         path_str = preferred or fallback
@@ -1015,6 +1111,10 @@ def run_gemini_image_labeler(
             )
             if summary:
                 db.exec("update assets set ai_summary=? where id=?", (summary, asset_id))
+            if asset_source == "scan":
+                suggested_title = _suggest_scan_title(payload, current_title)
+                if suggested_title and suggested_title != current_title:
+                    db.exec("update assets set title=? where id=?", (suggested_title, asset_id))
             labels = _flatten_ai_labels(payload)
             for lab in labels:
                 db.exec(

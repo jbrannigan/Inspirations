@@ -4,6 +4,7 @@ from pathlib import Path
 
 from inspirations.db import Db, ensure_schema
 from inspirations.store import (
+    add_to_tray,
     add_items_to_collection,
     create_annotation,
     create_collection,
@@ -13,11 +14,111 @@ from inspirations.store import (
     list_facets,
     list_collection_items,
     list_collections,
+    list_tray,
+    remove_from_tray,
     remove_items_from_collection,
 )
 
 
 class TestStore(unittest.TestCase):
+    def test_list_assets_collapses_scan_document_pages(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            sha = "a" * 64
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at, media_status, content_kind)
+                    values (?, ?, ?, ?, datetime('now'), ?, ?)
+                    """,
+                    ("s1", "scan", f"scan://{sha}#p1", "Scan Story - doc 1 p1", "image", "scan"),
+                )
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at, media_status, content_kind)
+                    values (?, ?, ?, ?, datetime('now'), ?, ?)
+                    """,
+                    ("s2", "scan", f"scan://{sha}#p2", "Scan Story - doc 1 p2", "image", "scan"),
+                )
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at, media_status, content_kind)
+                    values (?, ?, ?, ?, datetime('now'), ?, ?)
+                    """,
+                    ("s3", "scan", f"scan://{sha}#p3", "Scan Story - doc 2 p1", "image", "scan"),
+                )
+                rows = list_assets(db, source="scan", limit=20)
+
+            self.assertEqual(len(rows), 2)
+            doc1 = next(r for r in rows if int(r.get("scan_doc_index") or 0) == 1)
+            self.assertEqual(doc1.get("title"), "Scan Story")
+            self.assertEqual(int(doc1.get("scan_doc_pages") or 0), 2)
+            self.assertEqual(set(doc1.get("scan_group_member_ids") or []), {"s1", "s2"})
+
+    def test_add_remove_collection_expands_scan_document_members(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            sha = "b" * 64
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at, media_status, content_kind)
+                    values (?, ?, ?, ?, datetime('now'), ?, ?)
+                    """,
+                    ("s1", "scan", f"scan://{sha}#p1", "Scan Group - doc 1 p1", "image", "scan"),
+                )
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at, media_status, content_kind)
+                    values (?, ?, ?, ?, datetime('now'), ?, ?)
+                    """,
+                    ("s2", "scan", f"scan://{sha}#p2", "Scan Group - doc 1 p2", "image", "scan"),
+                )
+                col = create_collection(db, name="Scan Set", description="")
+                add_items_to_collection(db, collection_id=col["id"], asset_ids=["s1"])
+                items = list_collection_items(db, collection_id=col["id"])
+                self.assertEqual({r["id"] for r in items}, {"s1", "s2"})
+
+                removed = remove_items_from_collection(db, collection_id=col["id"], asset_ids=["s1"])
+                self.assertEqual(removed, 2)
+                remaining = list_collection_items(db, collection_id=col["id"])
+                self.assertEqual(remaining, [])
+
+    def test_tray_collapses_scan_documents_and_remove_expands_members(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            sha = "c" * 64
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at, media_status, content_kind)
+                    values (?, ?, ?, ?, datetime('now'), ?, ?)
+                    """,
+                    ("s1", "scan", f"scan://{sha}#p1", "Tray Scan - doc 1 p1", "image", "scan"),
+                )
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at, media_status, content_kind)
+                    values (?, ?, ?, ?, datetime('now'), ?, ?)
+                    """,
+                    ("s2", "scan", f"scan://{sha}#p2", "Tray Scan - doc 1 p2", "image", "scan"),
+                )
+                added = add_to_tray(db, asset_ids=["s1"])
+                self.assertEqual(added, 2)
+                raw_count = db.query_value("select count(*) from tray_items")
+                self.assertEqual(raw_count, 2)
+
+                tray_rows = list_tray(db)
+                self.assertEqual(len(tray_rows), 1)
+                self.assertEqual(int(tray_rows[0].get("scan_doc_pages") or 0), 2)
+                self.assertEqual(set(tray_rows[0].get("scan_group_member_ids") or []), {"s1", "s2"})
+
+                remove_from_tray(db, asset_ids=["s1"])
+                self.assertEqual(db.query_value("select count(*) from tray_items"), 0)
+
     def test_collections_and_items(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "t.sqlite"

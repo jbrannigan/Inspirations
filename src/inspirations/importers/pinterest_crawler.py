@@ -93,14 +93,16 @@ def import_pinterest_crawler_zip(db: Db, zip_path: Path, limit: int = 0) -> dict
                 created_at,
                 _now_iso(),
                 image_url,
+                "image",
+                "pin",
             )
         )
 
     db.executemany(
         """
         insert or ignore into assets
-          (id, source, source_ref, title, description, board, created_at, imported_at, image_url)
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?);
+          (id, source, source_ref, title, description, board, created_at, imported_at, image_url, media_status, content_kind)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """,
         rows,
     )

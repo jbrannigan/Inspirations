@@ -28,6 +28,7 @@ const state = {
   hasMore: false,
   loadingAssets: false,
   scanImportBusy: false,
+  photoImportBusy: false,
   mediaDefaultsSeeded: false,
   canvasMode: "main",
   filterOpen: { sources: true },
@@ -229,6 +230,17 @@ function thumbFor(a) {
   return previewForAsset(a).url;
 }
 
+function isHttpUrl(value) {
+  const text = `${value || ""}`.trim();
+  if (!text) return false;
+  try {
+    const parsed = new URL(text);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 function getCollectionById(collectionId) {
   if (!collectionId) return null;
   return state.collections.find((c) => c.id === collectionId) || null;
@@ -240,6 +252,10 @@ function getActiveCollection() {
 
 function getViewCollection() {
   return getCollectionById(state.viewCollectionId);
+}
+
+function getHiddenCollection() {
+  return state.collections.find((c) => `${c.name || ""}`.trim().toLowerCase() === "hidden") || null;
 }
 
 function updateLoadMoreButton() {
@@ -266,7 +282,7 @@ function summarizeValues(values, max = 4) {
 }
 
 function sourceLabel(value) {
-  const map = { pinterest: "Pinterest", facebook: "Facebook", scan: "Scan" };
+  const map = { pinterest: "Pinterest", facebook: "Facebook", scan: "Scan", photo: "Photo" };
   return map[value] || value;
 }
 
@@ -329,6 +345,35 @@ function mediaNarrativeClause(selectedMediaStatuses) {
 
 function trayAssetIdsSet() {
   return new Set(state.tray.map((item) => item.id));
+}
+
+function memberAssetIds(item) {
+  const explicit = asList(item && item.scan_group_member_ids)
+    .map((id) => `${id || ""}`.trim())
+    .filter(Boolean);
+  if (explicit.length) return Array.from(new Set(explicit));
+  const fallback = `${(item && item.id) || ""}`.trim();
+  return fallback ? [fallback] : [];
+}
+
+function expandAssetIds(ids) {
+  const byId = new Map();
+  for (const item of state.assets) byId.set(item.id, item);
+  for (const item of state.tray) if (!byId.has(item.id)) byId.set(item.id, item);
+  const expanded = [];
+  const seen = new Set();
+  for (const rawId of ids || []) {
+    const id = `${rawId || ""}`.trim();
+    if (!id) continue;
+    const item = byId.get(id);
+    const members = item ? memberAssetIds(item) : [id];
+    for (const memberId of members) {
+      if (!memberId || seen.has(memberId)) continue;
+      seen.add(memberId);
+      expanded.push(memberId);
+    }
+  }
+  return expanded;
 }
 
 function buildCanvasNarrative() {
@@ -479,6 +524,7 @@ function setStats() {
   const trayIds = trayAssetIdsSet();
   const traySelectedCount = Array.from(state.selected).filter((id) => trayIds.has(id)).length;
   const trayMode = state.canvasMode === "tray";
+  const reviewBtn = $("#reviewCollection");
   const destination = activeCollection ? ` • Add-to "${activeCollection.name}"` : "";
   const narrative = buildCanvasNarrative();
   $("#canvasNarrative").textContent = narrative;
@@ -499,6 +545,11 @@ function setStats() {
   $("#addFiltered").textContent = activeCollection ? `Add Filtered to "${activeCollection.name}"` : "Add Filtered to Tray";
   $("#addFiltered").disabled = state.assets.length === 0 || trayMode;
   $("#clearSelection").disabled = state.selected.size === 0;
+  if (reviewBtn) {
+    reviewBtn.disabled = !viewCollection || trayMode;
+    reviewBtn.textContent = viewCollection ? `Review "${viewCollection.name}"` : "Review Collection";
+    reviewBtn.classList.toggle("primaryAction", !!viewCollection && !trayMode);
+  }
   $("#showTrayCanvas").textContent = trayMode ? "Tray Canvas On" : "Show Tray Canvas";
   $("#showTrayCanvas").disabled = !trayMode && state.tray.length === 0;
   $("#showAll").textContent = trayMode ? "Back to Main Canvas" : "Show All";
@@ -512,9 +563,9 @@ function setStats() {
   } else if (!viewCollection) {
     $("#collectionHint").textContent = `Selected collection: "${activeCollection.name}". Canvas is showing all items.`;
   } else if (state.tray.length > 0) {
-    $("#collectionHint").textContent = `Selected collection: "${activeCollection.name}". Direct add is primary; tray has ${state.tray.length} optional item${state.tray.length === 1 ? "" : "s"}.`;
+    $("#collectionHint").textContent = `Viewing "${viewCollection.name}". Use Review to inspect similarity groups. Direct add is primary; tray has ${state.tray.length} optional item${state.tray.length === 1 ? "" : "s"}.`;
   } else {
-    $("#collectionHint").textContent = `Selected collection: "${activeCollection.name}". Add selected items directly; tray is optional.`;
+    $("#collectionHint").textContent = `Viewing "${viewCollection.name}". Use Review to inspect similarity groups, then keep adding selected items directly.`;
   }
   $("#trayCount").textContent = `${state.tray.length} items`;
   const addTrayLabel = activeCollection ? `Add Tray to "${activeCollection.name}"` : "Add Tray to Collection";
@@ -579,6 +630,9 @@ function renderGrid() {
     }
     if (a.board) metaParts.push(`Board: ${a.board}`);
     metaParts.push(`Source: ${a.source}`);
+    if (a.source === "scan" && Number(a.scan_doc_pages || 0) > 1) {
+      metaParts.push(`Pages: ${Number(a.scan_doc_pages)}`);
+    }
     if (a.creator_name) metaParts.push(`Creator: ${a.creator_name}`);
     if (a.content_kind) metaParts.push(`Type: ${a.content_kind}`);
     if (a.media_status) metaParts.push(`Media: ${a.media_status}`);
@@ -626,7 +680,7 @@ function renderGrid() {
         </div>
         <div class="cardFooter">
           <div>AI: ${escapeHtml(a.ai_model || a.ai_provider || "—")} • ${labelCount} tags</div>
-          <button class="miniBtn" data-annotate>Annotate</button>
+          <button class="miniBtn annotateBtn" data-annotate>Annotate</button>
         </div>
       </div>
     `;
@@ -812,10 +866,14 @@ function printModalAsset(asset) {
   const meta = escapeHtml(metaParts.join(" • "));
   const src = thumbFor(asset) || (asset.image_url ? escapeHtml(asset.image_url) : "");
   const notes = escapeHtml(asset.notes || "");
-  const sourceRef = escapeHtml(asset.source_ref || "");
-  const win = window.open("", "_blank", "noopener,noreferrer,width=980,height=760");
-  if (!win) return;
-  win.document.write(`<!doctype html>
+  const rawSourceRef = `${asset.source_ref || ""}`.trim();
+  const sourceRef = escapeHtml(rawSourceRef);
+  const sourceRefBlock = sourceRef
+    ? isHttpUrl(rawSourceRef)
+      ? `<div><a href="${sourceRef}" target="_blank" rel="noopener">Open source</a></div>`
+      : `<div class="notes"><strong>Source:</strong> ${sourceRef}</div>`
+    : "";
+  const html = `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -836,22 +894,76 @@ function printModalAsset(asset) {
     <h1>${title}</h1>
     <div class="meta">${meta}</div>
     ${src ? `<img src="${src}" alt="" />` : ""}
-    ${sourceRef ? `<div><a href="${sourceRef}" target="_blank" rel="noopener">Open source</a></div>` : ""}
+    ${sourceRefBlock}
     ${notes ? `<div class="notes"><strong>Notes:</strong><br/>${notes}</div>` : ""}
   </div>
 </body>
-</html>`);
-  win.document.close();
-  setTimeout(() => {
-    win.focus();
-    win.print();
-  }, 120);
+</html>`;
+  const openPrintWindow = window.open("", "_blank");
+  if (openPrintWindow) {
+    try {
+      openPrintWindow.document.write(html);
+      openPrintWindow.document.close();
+      setTimeout(() => {
+        try {
+          openPrintWindow.focus();
+          openPrintWindow.print();
+        } catch (err) {
+          alert(`Print failed: ${err && err.message ? err.message : err}`);
+        }
+      }, 140);
+      return;
+    } catch {}
+  }
+  const frame = document.createElement("iframe");
+  frame.style.position = "fixed";
+  frame.style.right = "0";
+  frame.style.bottom = "0";
+  frame.style.width = "0";
+  frame.style.height = "0";
+  frame.style.opacity = "0";
+  frame.style.border = "0";
+  frame.setAttribute("aria-hidden", "true");
+  document.body.appendChild(frame);
+  const cleanup = () => {
+    setTimeout(() => {
+      if (frame.parentNode) frame.parentNode.removeChild(frame);
+    }, 1200);
+  };
+  try {
+    const doc = frame.contentWindow && frame.contentWindow.document;
+    if (!doc || !frame.contentWindow) throw new Error("embedded print frame unavailable");
+    doc.open();
+    doc.write(html);
+    doc.close();
+    setTimeout(() => {
+      try {
+        frame.contentWindow.focus();
+        frame.contentWindow.print();
+      } catch (err) {
+        alert(`Print failed: ${err && err.message ? err.message : err}`);
+      } finally {
+        cleanup();
+      }
+    }, 160);
+  } catch (err) {
+    cleanup();
+    alert(`Print failed: ${err && err.message ? err.message : err}`);
+  }
+}
+
+function isViewingHiddenCollection() {
+  const hidden = getHiddenCollection();
+  if (!hidden) return false;
+  return hidden.id === state.viewCollectionId;
 }
 
 async function openModal(asset) {
   state.modalAsset = asset;
   $("#modalTitle").textContent = displayTitle(asset);
   $("#modalMeta").textContent = `${asset.source} • ${asset.source_ref || ""}`;
+  const hideBtn = $("#hideAssetBtn");
+  if (hideBtn) hideBtn.textContent = isViewingHiddenCollection() ? "Unhide" : "Hide to Hidden";
   const modalImage = $("#modalImage");
   const previewUrl = thumbFor(asset);
   if (previewUrl) {
@@ -890,10 +1002,43 @@ function closeModal() {
 async function hideModalAsset() {
   const asset = state.modalAsset;
   if (!asset) return;
-  const ok = confirm(`Hide "${displayTitle(asset)}" from the main canvas?`);
+  const memberIds = memberAssetIds(asset);
+  if (isViewingHiddenCollection()) {
+    const hidden = getHiddenCollection();
+    if (!hidden) return;
+    const ok = confirm(`Unhide "${displayTitle(asset)}" and return it to normal canvas results?`);
+    if (!ok) return;
+    try {
+      await api(`/api/collections/${encodeURIComponent(hidden.id)}/items/remove`, {
+        method: "POST",
+        body: JSON.stringify({ asset_ids: memberIds }),
+      });
+      closeModal();
+      await loadCollections();
+      await loadAssets();
+    } catch (e) {
+      alert(`Unhide failed: ${formatApiError(e)}`);
+    }
+    return;
+  }
+  const ok = confirm(
+    `Hide "${displayTitle(asset)}" from the main canvas?\n\nThis does not delete it. It moves to the "Hidden" collection, where you can choose Unhide later.`
+  );
   if (!ok) return;
   try {
-    await api(`/api/assets/${encodeURIComponent(asset.id)}/hide`, { method: "POST", body: JSON.stringify({}) });
+    const firstId = memberIds[0];
+    if (!firstId) return;
+    const hiddenRes = await api(`/api/assets/${encodeURIComponent(firstId)}/hide`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    const hiddenCollectionId = `${hiddenRes.hidden_collection_id || ""}`.trim();
+    if (hiddenCollectionId && memberIds.length > 1) {
+      await api(`/api/collections/${encodeURIComponent(hiddenCollectionId)}/items`, {
+        method: "POST",
+        body: JSON.stringify({ asset_ids: memberIds.slice(1) }),
+      });
+    }
     closeModal();
     await loadCollections();
     await loadAssets();
@@ -1144,6 +1289,14 @@ $("#showTrayCanvas").onclick = async () => {
   await loadAssets();
 };
 
+$("#reviewCollection").onclick = () => {
+  const viewCollection = getViewCollection();
+  if (!viewCollection) return;
+  const dataUrl = `/api/cluster/review?collection_id=${encodeURIComponent(viewCollection.id)}&include_neighbors=0`;
+  const url = `/tools/cluster_explorer.html?data=${encodeURIComponent(dataUrl)}`;
+  window.open(url, "_blank");
+};
+
 $("#loadMore").onclick = async () => {
   await loadAssets(true);
 };
@@ -1207,9 +1360,11 @@ $("#deleteCollection").onclick = async () => {
 };
 
 $("#addSelected").onclick = async () => {
+  const ids = expandAssetIds(Array.from(state.selected));
+  if (!ids.length) return;
   await api(`/api/tray/add`, {
     method: "POST",
-    body: JSON.stringify({ asset_ids: Array.from(state.selected) }),
+    body: JSON.stringify({ asset_ids: ids }),
   });
   state.selected.clear();
   await loadTray();
@@ -1218,10 +1373,12 @@ $("#addSelected").onclick = async () => {
 
 $("#addSelectedToCollection").onclick = async () => {
   if (!state.activeCollectionId || state.selected.size === 0) return;
+  const ids = expandAssetIds(Array.from(state.selected));
+  if (!ids.length) return;
   try {
     await api(`/api/collections/${state.activeCollectionId}/items`, {
       method: "POST",
-      body: JSON.stringify({ asset_ids: Array.from(state.selected) }),
+      body: JSON.stringify({ asset_ids: ids }),
     });
     state.selected.clear();
     await loadCollections();
@@ -1233,10 +1390,11 @@ $("#addSelectedToCollection").onclick = async () => {
 
 $("#removeSelectedFromCollection").onclick = async () => {
   if (!state.viewCollectionId || state.selected.size === 0) return;
-  const ids = Array.from(state.selected);
+  const ids = expandAssetIds(Array.from(state.selected));
+  if (!ids.length) return;
   const col = getViewCollection();
   const ok = confirm(
-    `Remove ${ids.length} selected item${ids.length === 1 ? "" : "s"} from "${col ? col.name : "this collection"}"?`
+    `Remove ${state.selected.size} selected item${state.selected.size === 1 ? "" : "s"} from "${col ? col.name : "this collection"}"?`
   );
   if (!ok) return;
   try {
@@ -1254,19 +1412,20 @@ $("#removeSelectedFromCollection").onclick = async () => {
 
 $("#removeSelectedFromTray").onclick = async () => {
   const trayIds = trayAssetIdsSet();
-  const ids = Array.from(state.selected).filter((id) => trayIds.has(id));
+  const selectedTrayIds = Array.from(state.selected).filter((id) => trayIds.has(id));
+  const ids = expandAssetIds(selectedTrayIds);
   if (!ids.length) return;
   await api("/api/tray/remove", {
     method: "POST",
     body: JSON.stringify({ asset_ids: ids }),
   });
-  ids.forEach((id) => state.selected.delete(id));
+  selectedTrayIds.forEach((id) => state.selected.delete(id));
   await loadTray();
   await loadAssets();
 };
 
 $("#addFiltered").onclick = async () => {
-  const ids = state.assets.map((a) => a.id);
+  const ids = expandAssetIds(state.assets.map((a) => a.id));
   if (!ids.length) return;
   if (state.activeCollectionId) {
     await api(`/api/collections/${state.activeCollectionId}/items`, {
@@ -1285,9 +1444,13 @@ $("#addFiltered").onclick = async () => {
   await loadAssets();
 };
 
-$("#clearSelection").onclick = () => {
+$("#clearSelection").onclick = (e) => {
+  if (e) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
   state.selected.clear();
-  setStats();
+  renderGrid();
 };
 
 $("#assetNotes").addEventListener("input", async (e) => {
@@ -1550,7 +1713,7 @@ function renderTray() {
       e.stopPropagation();
       await api("/api/tray/remove", {
         method: "POST",
-        body: JSON.stringify({ asset_ids: [item.id] }),
+        body: JSON.stringify({ asset_ids: memberAssetIds(item) }),
       });
       await loadTray();
     };
@@ -1564,10 +1727,10 @@ function renderTray() {
 function setScanImportButtonState() {
   const button = $("#addScanPdf");
   if (!button) return;
-  button.disabled = !!state.scanImportBusy;
+  button.disabled = !!state.scanImportBusy || !!state.photoImportBusy;
   button.textContent = state.scanImportBusy ? "Importing..." : "Add Scan PDF";
   const runButton = $("#runScanImport");
-  if (runButton) runButton.disabled = !!state.scanImportBusy || !currentScanImportFile();
+  if (runButton) runButton.disabled = !!state.scanImportBusy || !!state.photoImportBusy || !currentScanImportFile();
 }
 
 function currentScanImportFile() {
@@ -1609,6 +1772,7 @@ async function importScanPdf(file, opts = {}) {
 
   state.scanImportBusy = true;
   setScanImportButtonState();
+  setPhotoImportButtonState();
   const narrative = $("#canvasNarrative");
   const previousNarrative = narrative ? narrative.textContent : "";
   if (narrative) {
@@ -1645,7 +1809,77 @@ async function importScanPdf(file, opts = {}) {
   } finally {
     state.scanImportBusy = false;
     setScanImportButtonState();
+    setPhotoImportButtonState();
     const input = $("#scanPdfInput");
+    if (input) input.value = "";
+    if (narrative) narrative.textContent = previousNarrative;
+    setStats();
+  }
+}
+
+function setPhotoImportButtonState() {
+  const button = $("#addPhotos");
+  if (!button) return;
+  button.disabled = !!state.photoImportBusy || !!state.scanImportBusy;
+  button.textContent = state.photoImportBusy ? "Importing..." : "Add Photos";
+  const runButton = $("#runPhotoImport");
+  if (runButton) runButton.disabled = !!state.photoImportBusy || !!state.scanImportBusy || !currentPhotoImportFile();
+}
+
+function currentPhotoImportFile() {
+  const input = $("#photoInput");
+  return (input && input.files && input.files[0]) || null;
+}
+
+function openPhotoImportModal() {
+  const modal = $("#photoImportModal");
+  if (!modal) return;
+  modal.classList.remove("hidden");
+}
+
+function closePhotoImportModal() {
+  const modal = $("#photoImportModal");
+  if (!modal) return;
+  modal.classList.add("hidden");
+}
+
+function resetPhotoImportModal() {
+  const input = $("#photoInput");
+  if (input) input.value = "";
+  setPhotoImportButtonState();
+}
+
+async function importPhoto(file) {
+  if (!file) return;
+  const name = `${file.name || ""}`.trim();
+  if (!name) return;
+  state.photoImportBusy = true;
+  setPhotoImportButtonState();
+  setScanImportButtonState();
+  const narrative = $("#canvasNarrative");
+  const previousNarrative = narrative ? narrative.textContent : "";
+  if (narrative) narrative.textContent = `Importing "${name}" into photos...`;
+
+  try {
+    const formData = new FormData();
+    formData.append("file", file, name);
+    const payload = await apiUpload("/api/import/photos", formData);
+    const importReport = payload.import || {};
+    const created = Number(importReport.created_assets || 0);
+    const errors = Array.isArray(importReport.errors) ? importReport.errors.length : 0;
+    await loadFacets();
+    await loadAssets();
+    let msg = `Imported ${created} photo item${created === 1 ? "" : "s"} from "${name}".`;
+    if (errors > 0) msg += ` ${errors} import error${errors === 1 ? "" : "s"} were reported.`;
+    alert(msg);
+    closePhotoImportModal();
+  } catch (e) {
+    alert(`Photo import failed: ${formatApiError(e)}`);
+  } finally {
+    state.photoImportBusy = false;
+    setPhotoImportButtonState();
+    setScanImportButtonState();
+    const input = $("#photoInput");
     if (input) input.value = "";
     if (narrative) narrative.textContent = previousNarrative;
     setStats();
@@ -1673,10 +1907,12 @@ async function createCollectionFromTray() {
 
 async function addTrayToActiveCollection() {
   if (!state.activeCollectionId || state.tray.length === 0) return;
+  const ids = expandAssetIds(state.tray.map((x) => x.id));
+  if (!ids.length) return;
   try {
     await api(`/api/collections/${state.activeCollectionId}/items`, {
       method: "POST",
-      body: JSON.stringify({ asset_ids: state.tray.map((x) => x.id) }),
+      body: JSON.stringify({ asset_ids: ids }),
     });
     await api("/api/tray/clear", { method: "POST" });
     await loadCollections();
@@ -1740,6 +1976,41 @@ if (addScanPdfBtn && scanPdfInput && runScanImportBtn) {
   }
   setScanImportButtonState();
 }
+const addPhotosBtn = $("#addPhotos");
+const photoInput = $("#photoInput");
+const runPhotoImportBtn = $("#runPhotoImport");
+const cancelPhotoImportBtn = $("#cancelPhotoImport");
+const closePhotoImportBtn = $("#closePhotoImport");
+if (addPhotosBtn && photoInput && runPhotoImportBtn) {
+  addPhotosBtn.onclick = () => {
+    if (state.photoImportBusy || state.scanImportBusy) return;
+    openPhotoImportModal();
+    resetPhotoImportModal();
+  };
+  photoInput.addEventListener("change", () => {
+    setPhotoImportButtonState();
+  });
+  runPhotoImportBtn.addEventListener("click", async () => {
+    if (state.photoImportBusy || state.scanImportBusy) return;
+    const file = currentPhotoImportFile();
+    await importPhoto(file);
+  });
+  if (cancelPhotoImportBtn) {
+    cancelPhotoImportBtn.onclick = () => {
+      if (state.photoImportBusy) return;
+      closePhotoImportModal();
+      resetPhotoImportModal();
+    };
+  }
+  if (closePhotoImportBtn) {
+    closePhotoImportBtn.onclick = () => {
+      if (state.photoImportBusy) return;
+      closePhotoImportModal();
+      resetPhotoImportModal();
+    };
+  }
+  setPhotoImportButtonState();
+}
 
 const openLeftSidebarBtn = $("#openLeftSidebar");
 if (openLeftSidebarBtn) {
@@ -1766,6 +2037,7 @@ window.addEventListener("keydown", (e) => {
     closeMobilePanels();
     closeSearchHelp();
     if (!state.scanImportBusy) closeScanImportModal();
+    if (!state.photoImportBusy) closePhotoImportModal();
   }
 });
 

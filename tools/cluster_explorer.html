@@ -23,7 +23,8 @@
     right: 0;
     z-index: 100;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
+    flex-wrap: wrap;
     gap: 12px;
     padding: 10px 16px;
     border-bottom: 1px solid #1f2a3f;
@@ -59,6 +60,81 @@
     border: 1px solid #24344f;
     border-radius: 10px;
     overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  #collection-review-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    border: 1px solid #263851;
+    border-radius: 10px;
+    background: #111c2f;
+    flex-shrink: 0;
+  }
+
+  #discover-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: #9fb1c8;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  #view-controls {
+    display: inline-flex;
+    border: 1px solid #24344f;
+    border-radius: 10px;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .view-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    min-width: 34px;
+    padding: 0;
+  }
+
+  .view-btn svg {
+    width: 14px;
+    height: 14px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  #discover-slider {
+    width: 140px;
+  }
+
+  #discover-reset,
+  #discover-download {
+    display: inline-block;
+  }
+
+  #collection-select {
+    min-width: 180px;
+    max-width: 300px;
+    border: 1px solid #304866;
+    border-radius: 8px;
+    background: #0f192b;
+    color: #e3eef9;
+    font-size: 12px;
+    padding: 5px 8px;
+  }
+
+  #collection-order {
+    font-size: 11px;
+    color: #8fa8c7;
+    white-space: nowrap;
   }
 
   .mode-btn {
@@ -87,15 +163,103 @@
     font-size: 11px;
     color: #9fb1c8;
     white-space: nowrap;
+    flex: 1 1 100%;
+    width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-top: 2px;
+    padding-bottom: 2px;
+    scrollbar-width: thin;
   }
 
   #outlier-slider {
     width: 160px;
   }
 
+  #outlier-controls #outlier-reset-keeps,
+  #outlier-controls #outlier-download-keeps {
+    display: inline-block;
+  }
+
+  #duplicate-controls {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: #9fb1c8;
+    white-space: nowrap;
+    flex: 1 1 100%;
+    width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-top: 2px;
+    padding-bottom: 2px;
+    scrollbar-width: thin;
+  }
+
+  #duplicate-slider {
+    width: 160px;
+  }
+
+  #duplicate-cohesion-slider {
+    width: 130px;
+  }
+
+  #duplicate-group-label {
+    font-size: 11px;
+    color: #b7c9dd;
+    min-width: 260px;
+  }
+
+  #dup-queue-group,
+  #dup-apply-group,
+  #dup-apply-all {
+    display: none;
+  }
+
+  .top-toggle {
+    border: 1px solid #2c4161;
+    background: #131f33;
+    color: #9fb5cf;
+    font-size: 12px;
+    border-radius: 8px;
+    padding: 6px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .top-toggle:hover {
+    color: #eaf4ff;
+    border-color: #3e5d8a;
+  }
+
+  .top-toggle:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  .top-toggle.active {
+    background: #213958;
+    color: #eef7ff;
+    border-color: #4a74a8;
+  }
+
+  .top-toggle.danger {
+    border-color: #6b2f2f;
+    background: #3f1b1b;
+    color: #f4caca;
+  }
+
+  .top-toggle.danger:hover {
+    border-color: #9a4646;
+    background: #5a2424;
+    color: #ffe7e7;
+  }
+
   #search {
     margin-left: auto;
     width: 280px;
+    min-width: 220px;
     max-width: 34vw;
     border: 1px solid #304464;
     background: #101a2c;
@@ -104,6 +268,7 @@
     padding: 6px 10px;
     font-size: 13px;
     outline: none;
+    flex-shrink: 0;
   }
 
   #search:focus {
@@ -127,6 +292,196 @@
     text-overflow: ellipsis;
   }
 
+  #review-panel {
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    bottom: 14px;
+    top: 96px;
+    z-index: 96;
+    display: none;
+    overflow-y: auto;
+    border: 1px solid #1f2a3f;
+    border-radius: 12px;
+    background: rgba(8, 14, 26, 0.96);
+    box-shadow: 0 16px 34px rgba(0, 0, 0, 0.35);
+    padding: 14px;
+  }
+
+  .keeper-intro {
+    font-size: 12px;
+    color: #9eb3cf;
+    margin-bottom: 12px;
+  }
+
+  .keeper-empty {
+    color: #8ca3c1;
+    font-size: 13px;
+    padding: 10px 6px;
+  }
+
+  .keeper-group {
+    margin-bottom: 16px;
+    border: 1px solid #21324d;
+    border-radius: 10px;
+    background: #0f1b2f;
+    padding: 10px;
+  }
+
+  .keeper-group-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .keeper-group-title {
+    font-size: 13px;
+    color: #e8f3ff;
+    font-weight: 650;
+  }
+
+  .keeper-group-meta {
+    margin-left: auto;
+    font-size: 11px;
+    color: #8ea8c8;
+    white-space: nowrap;
+  }
+
+  .keeper-lanes {
+    display: grid;
+    grid-template-columns: minmax(210px, 1fr) minmax(280px, 2fr) minmax(210px, 1fr);
+    gap: 10px;
+  }
+
+  .keeper-lane {
+    border: 1px solid #2a3f5f;
+    border-radius: 10px;
+    background: #0b1628;
+    padding: 8px;
+    min-height: 160px;
+  }
+
+  .keeper-lane-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+    color: #b9cbe1;
+  }
+
+  .keeper-lane-title.keepers {
+    color: #6ee7b7;
+  }
+
+  .keeper-lane-title.candidates {
+    color: #f3c264;
+  }
+
+  .keeper-lane-title.losers {
+    color: #f19b9b;
+  }
+
+  .keeper-lane-empty {
+    color: #8aa1bf;
+    font-size: 11px;
+    padding: 8px 2px;
+  }
+
+  .keeper-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px;
+  }
+
+  .keeper-card {
+    border: 1px solid #2b4060;
+    border-radius: 10px;
+    background: #0d1a2e;
+    overflow: hidden;
+  }
+
+  .keeper-card.keeper {
+    border-color: #2ca77e;
+    box-shadow: 0 0 0 2px rgba(44, 167, 126, 0.28);
+  }
+
+  .keeper-card.loser {
+    border-color: #8a3a3a;
+    box-shadow: 0 0 0 2px rgba(138, 58, 58, 0.24);
+    opacity: 0.72;
+  }
+
+  .keeper-card img {
+    width: 100%;
+    height: 180px;
+    object-fit: cover;
+    background: #121d30;
+    border-bottom: 1px solid #20344f;
+  }
+
+  .keeper-card-body {
+    padding: 8px;
+  }
+
+  .keeper-card-title {
+    font-size: 12px;
+    color: #dceaf8;
+    line-height: 1.35;
+    min-height: 33px;
+    margin-bottom: 6px;
+  }
+
+  .keeper-card-meta {
+    font-size: 11px;
+    color: #8fa9c9;
+    margin-bottom: 8px;
+  }
+
+  .keeper-card-actions {
+    display: flex;
+    gap: 6px;
+  }
+
+  .keeper-card-btn {
+    border: 1px solid #2e4567;
+    background: #112238;
+    color: #d3e6fb;
+    font-size: 11px;
+    border-radius: 7px;
+    padding: 5px 8px;
+    cursor: pointer;
+  }
+
+  .keeper-card-btn:hover {
+    border-color: #44628f;
+    background: #173150;
+  }
+
+  .keeper-card-btn.danger {
+    border-color: #6b2f2f;
+    background: #3a1a1a;
+    color: #f4caca;
+  }
+
+  .keeper-card-btn.danger:hover {
+    border-color: #924444;
+    background: #562222;
+    color: #ffe7e7;
+  }
+
+  .keeper-card-btn:disabled {
+    opacity: 0.58;
+    cursor: default;
+  }
+
+  @media (max-width: 1180px) {
+    .keeper-lanes {
+      grid-template-columns: 1fr;
+    }
+  }
+
   #legend {
     position: fixed;
     top: 70px;
@@ -140,6 +495,7 @@
     border-radius: 10px;
     background: rgba(11, 18, 32, 0.9);
     backdrop-filter: blur(6px);
+    display: none;
   }
 
   #legend h3 {
@@ -454,15 +810,67 @@
   <span class="stat"><b id="stat-links">0</b> links</span>
   <span class="stat"><b id="stat-clusters">0</b> clusters</span>
   <span class="stat"><b id="stat-outliers">0</b> outliers</span>
+  <span class="stat"><b id="stat-dupes">0</b> likely dup nodes</span>
   <div class="sep"></div>
   <div id="mode-controls">
     <button id="mode-discover" class="mode-btn active">Discover</button>
     <button id="mode-outliers" class="mode-btn">Outliers</button>
+    <button id="mode-duplicates" class="mode-btn">Duplicates</button>
   </div>
+  <div id="discover-controls">
+    <span>Theme similarity >= <b id="discover-value">0.78</b></span>
+    <input id="discover-slider" type="range" min="0.65" max="0.95" step="0.01" value="0.78" />
+    <button id="discover-reset" class="top-toggle">Reset Picks</button>
+    <button id="discover-download" class="top-toggle">Download Picks</button>
+  </div>
+  <div id="view-controls">
+    <button id="view-grid" class="mode-btn view-btn active" title="Grid view" aria-label="Grid view">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="3.5" y="3.5" width="7" height="7"></rect>
+        <rect x="13.5" y="3.5" width="7" height="7"></rect>
+        <rect x="3.5" y="13.5" width="7" height="7"></rect>
+        <rect x="13.5" y="13.5" width="7" height="7"></rect>
+      </svg>
+    </button>
+    <button id="view-graph" class="mode-btn view-btn" title="Graph view" aria-label="Graph view">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="6" cy="6" r="2"></circle>
+        <circle cx="18" cy="7" r="2"></circle>
+        <circle cx="12" cy="18" r="2"></circle>
+        <line x1="7.6" y1="7.3" x2="16.4" y2="8.2"></line>
+        <line x1="7.1" y1="7.9" x2="10.9" y2="16.2"></line>
+        <line x1="16.9" y1="8.5" x2="13.1" y2="16.2"></line>
+      </svg>
+    </button>
+  </div>
+  <div id="collection-review-controls">
+    <button id="collection-prev" class="top-toggle" title="Previous collection">&larr;</button>
+    <select id="collection-select" aria-label="Collection"></select>
+    <button id="collection-next" class="top-toggle" title="Next collection">&rarr;</button>
+    <span id="collection-order">Collection 0/0</span>
+  </div>
+  <button id="toggle-nearby" class="top-toggle" style="display:none;">Show nearby items</button>
   <div id="outlier-controls">
     <span>Isolation >= <b id="outlier-value">0.70</b></span>
     <input id="outlier-slider" type="range" min="0" max="1" step="0.01" value="0.70" />
+    <button id="outlier-reset-keeps" class="top-toggle">Reset Keeps</button>
+    <button id="outlier-download-keeps" class="top-toggle">Download Outlier Keeps</button>
   </div>
+  <div id="duplicate-controls">
+    <span>Similarity >= <b id="duplicate-value">0.92</b></span>
+    <input id="duplicate-slider" type="range" min="0.80" max="1" step="0.01" value="0.92" />
+    <span>Cohesion >= <b id="duplicate-cohesion-value">0.75</b></span>
+    <input id="duplicate-cohesion-slider" type="range" min="0.60" max="0.98" step="0.01" value="0.75" />
+    <button id="dup-prev" class="top-toggle" title="Previous duplicate group">&larr;</button>
+    <span id="duplicate-group-label">Group 0/0</span>
+    <button id="dup-next" class="top-toggle" title="Next duplicate group">&rarr;</button>
+    <button id="dup-toggle-scope" class="top-toggle">Show All Dupes</button>
+    <button id="dup-download-keepers" class="top-toggle">Download Keepers</button>
+    <button id="dup-queue-group" class="top-toggle">Queue losers</button>
+    <button id="dup-apply-group" class="top-toggle danger">Delete this group</button>
+    <button id="dup-apply-all" class="top-toggle danger">Delete queued</button>
+  </div>
+  <button id="toggle-bridge-links" class="top-toggle">Show weak bridge links</button>
   <input id="search" type="text" placeholder="Search title, labels, or board" />
 </div>
 
@@ -477,6 +885,8 @@
 </div>
 
 <svg id="graph"></svg>
+
+<section id="review-panel"></section>
 
 <div id="tooltip">
   <img id="tt-image" alt="" />
@@ -503,6 +913,8 @@
     <div id="det-tags" class="det-tags"></div>
     <div class="det-section">Actions</div>
     <div class="det-actions">
+      <button id="set-keeper-btn" class="action-btn" style="display:none;">Mark as keeper</button>
+      <button id="set-loser-btn" class="action-btn" style="display:none;">Mark as loser</button>
       <button id="remove-btn" class="action-btn" style="display:none;">Remove from this collection</button>
       <button id="open-source-btn" class="action-btn">Open source</button>
     </div>
@@ -540,14 +952,46 @@ const state = {
   width: window.innerWidth,
   height: window.innerHeight,
   allCollections: [],
+  reviewCollections: [],
+  reviewCollectionCounts: new Map(),
+  reviewCollectionIndex: 0,
   activeCollections: new Set(),
   colorScale: null,
+  clusterAnchors: new Map(),
+  clusterAnchorStrength: 0.14,
+  discoverThreshold: 0.78,
+  duplicateThreshold: 0.92,
+  duplicateMinCohesion: 0.75,
+  duplicateMutualTopK: 2,
+  duplicateMutualSlack: 0.02,
+  duplicateNodeIds: new Set(),
+  duplicateStrictEdgeKeys: new Set(),
+  duplicatePairCount: 0,
+  duplicateTotalGroups: 0,
+  duplicateHiddenCount: 0,
+  duplicateVisibleNodeIds: new Set(),
+  duplicateGroups: [],
+  duplicateGroupIndex: 0,
+  duplicateShowAll: false,
+  duplicateKeeperByGroup: new Map(),
+  duplicateLosersByGroup: new Map(),
+  pendingDeleteIds: new Set(),
   mode: "discover",
   outlierThreshold: 0.7,
+  outlierKeptIds: new Set(),
+  weakBridgeThreshold: 0.78,
+  showWeakBridges: false,
   search: "",
   selectedNode: null,
   apiBase: "",
   collectionId: "",
+  focusCollectionName: "",
+  hasNearbyContext: false,
+  showNearbyContext: false,
+  discoverDecisionById: new Map(),
+  viewMode: "grid",
+  focusFitTimer: null,
+  lastFocusSignature: "",
 };
 
 const PALETTE = [
@@ -616,6 +1060,32 @@ function primaryCollection(node) {
   return colls.length ? colls[0] : "Uncategorized";
 }
 
+function nodeCollectionNames(node) {
+  const colls = (node.collections && node.collections.length) ? node.collections : ["Uncategorized"];
+  return colls;
+}
+
+function cleanCollectionLabel(name) {
+  return String(name || "").replace(/^CB:\s*/g, "");
+}
+
+function countFocusNodes() {
+  return state.nodes.filter((node) => !node._removed && node.in_focus_collection).length;
+}
+
+function countNearbyNodes() {
+  return state.nodes.filter((node) => !node._removed && node.is_nearby_context).length;
+}
+
+function nodeIsInCollectionScope(node) {
+  if (state.collectionId) {
+    if (node.in_focus_collection) return true;
+    return state.showNearbyContext && node.is_nearby_context;
+  }
+  const colls = nodeCollectionNames(node);
+  return colls.some((name) => state.activeCollections.has(name));
+}
+
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
@@ -626,42 +1096,1418 @@ function truncate(text, limit) {
   return `${t.slice(0, limit)}...`;
 }
 
-function nodeRadius(node) {
-  const base = node.is_centroid ? 10 : 6;
-  return base + Math.min((Number(node.neighbor_count || 0) * 0.35), 4);
+function nodeVisualSize(node) {
+  const base = node.is_centroid ? 34 : 26;
+  return base + Math.min((Number(node.neighbor_count || 0) * 1.0), 10);
+}
+
+function nodePreviewUrl(node) {
+  const urls = imageCandidates(node);
+  return urls.length ? urls[0] : "";
+}
+
+function discoverActiveLinkCount(visibleIds = null) {
+  return state.links.filter((link) => {
+    if (Number(link.similarity || 0) < state.discoverThreshold) return false;
+    if (!visibleIds) return true;
+    const sid = linkEndpointId(link.source);
+    const tid = linkEndpointId(link.target);
+    return visibleIds.has(sid) && visibleIds.has(tid);
+  }).length;
+}
+
+function renderDiscoverThresholdLabel(visibleIds = null) {
+  const valueEl = document.getElementById("discover-value");
+  if (!valueEl) return;
+  valueEl.textContent = `${state.discoverThreshold.toFixed(2)} (${discoverActiveLinkCount(visibleIds)} links)`;
 }
 
 function setMetaNote(meta) {
   const details = [];
+  if (state.collectionId) {
+    const focusName = cleanCollectionLabel(state.focusCollectionName || state.collectionId);
+    details.push(`Collection focus: ${focusName}`);
+    details.push(`In collection: ${countFocusNodes()}`);
+    if (state.hasNearbyContext) {
+      const nearbyLabel = state.showNearbyContext ? "shown" : "hidden";
+      details.push(`Nearby context: ${countNearbyNodes()} similar items outside this collection (${nearbyLabel})`);
+    }
+  } else if (meta && meta.collection_id) {
+    details.push(`Collection focus: ${meta.collection_id}`);
+  }
   if (meta && meta.source_db) details.push(`DB: ${meta.source_db}`);
-  if (meta && meta.collection_id) details.push(`Collection focus: ${meta.collection_id}`);
-  if (meta && Number(meta.include_neighbors) > 0) details.push(`Neighbors: ${meta.include_neighbors}`);
   if (meta && meta.exported_at) details.push(`Exported: ${meta.exported_at}`);
   document.getElementById("meta-note").textContent = details.length
     ? details.join(" | ")
     : "Cluster data loaded.";
 }
 
+function updateLayoutOffsets() {
+  const topbar = document.getElementById("topbar");
+  const metaNote = document.getElementById("meta-note");
+  const legend = document.getElementById("legend");
+  const reviewPanel = document.getElementById("review-panel");
+  if (!topbar || !metaNote || !legend || !reviewPanel) return;
+  const topbarHeight = Math.ceil(topbar.getBoundingClientRect().height);
+  const metaTop = topbarHeight + 8;
+  const legendTop = metaTop + 20;
+  const keeperTop = topbarHeight + 12;
+  metaNote.style.top = `${metaTop}px`;
+  legend.style.top = `${legendTop}px`;
+  legend.style.maxHeight = `calc(100vh - ${legendTop + 16}px)`;
+  reviewPanel.style.top = `${keeperTop}px`;
+}
+
+function currentReviewCollectionName() {
+  if (!state.reviewCollections.length) return "";
+  return state.reviewCollections[state.reviewCollectionIndex] || "";
+}
+
+function renderCollectionReviewControls() {
+  const select = document.getElementById("collection-select");
+  const prevBtn = document.getElementById("collection-prev");
+  const nextBtn = document.getElementById("collection-next");
+  const order = document.getElementById("collection-order");
+  if (!select || !prevBtn || !nextBtn || !order) return;
+
+  if (!state.reviewCollections.length) {
+    select.innerHTML = "";
+    select.disabled = true;
+    prevBtn.disabled = true;
+    nextBtn.disabled = true;
+    order.textContent = "Collection 0/0";
+    return;
+  }
+
+  const currentName = currentReviewCollectionName();
+  select.innerHTML = "";
+  state.reviewCollections.forEach((name, idx) => {
+    const opt = document.createElement("option");
+    const count = state.collectionId
+      ? countFocusNodes()
+      : (state.reviewCollectionCounts.get(name) || 0);
+    opt.value = String(idx);
+    opt.textContent = `${cleanCollectionLabel(name)} (${count})`;
+    if (name === currentName) opt.selected = true;
+    select.appendChild(opt);
+  });
+
+  select.disabled = false;
+  prevBtn.disabled = state.reviewCollectionIndex <= 0;
+  nextBtn.disabled = state.reviewCollectionIndex >= state.reviewCollections.length - 1;
+  order.textContent = `Collection ${state.reviewCollectionIndex + 1}/${state.reviewCollections.length}`;
+}
+
+function renderNearbyToggle() {
+  const btn = document.getElementById("toggle-nearby");
+  if (!btn) return;
+  const canShow = Boolean(state.collectionId) && state.hasNearbyContext;
+  btn.style.display = canShow ? "inline-block" : "none";
+  btn.disabled = !canShow;
+  btn.classList.toggle("active", canShow && state.showNearbyContext);
+  if (!canShow) {
+    btn.textContent = "Include Nearby Context";
+    btn.title = "";
+    return;
+  }
+  const nearbyCount = countNearbyNodes();
+  btn.textContent = state.showNearbyContext
+    ? `Focus Collection Only (${countFocusNodes()})`
+    : `Include Nearby Context (+${nearbyCount})`;
+  btn.title = "Nearby context adds similar items outside the focused collection.";
+}
+
+function setReviewCollectionIndex(index) {
+  if (!state.reviewCollections.length) return;
+  const nextIndex = Math.max(0, Math.min(index, state.reviewCollections.length - 1));
+  const changed = nextIndex !== state.reviewCollectionIndex;
+  state.reviewCollectionIndex = nextIndex;
+  const selected = currentReviewCollectionName();
+  state.activeCollections = selected ? new Set([selected]) : new Set(state.allCollections);
+  renderCollectionReviewControls();
+  renderNearbyToggle();
+  if (!changed) return;
+
+  state.selectedNode = null;
+  document.getElementById("detail").classList.remove("open");
+  document.getElementById("action-status").textContent = "";
+  state.duplicateGroupIndex = 0;
+  state.duplicateShowAll = false;
+  state.outlierKeptIds = new Set();
+  rebuildDuplicateStats();
+  rebuildDuplicateGroups();
+  renderReviewPanel();
+  setMetaNote(state.raw ? (state.raw.meta || {}) : {});
+  updateVisibility();
+  updateLayoutOffsets();
+}
+
+function buildClusterAnchors() {
+  const clusterIds = [...new Set(state.nodes.map((node) => node.cluster))].sort((a, b) => Number(a) - Number(b));
+  const anchors = new Map();
+  if (!clusterIds.length) {
+    state.clusterAnchors = anchors;
+    state.clusterAnchorStrength = 0.14;
+    return;
+  }
+
+  if (clusterIds.length === 1) {
+    anchors.set(clusterIds[0], { x: state.width / 2, y: state.height / 2 });
+    state.clusterAnchors = anchors;
+    state.clusterAnchorStrength = 0.05;
+    return;
+  }
+
+  const ringRadius = Math.min(state.width, state.height) * 0.31;
+  clusterIds.forEach((clusterId, idx) => {
+    const theta = (Math.PI * 2 * idx) / clusterIds.length - Math.PI / 2;
+    anchors.set(clusterId, {
+      x: state.width / 2 + ringRadius * Math.cos(theta),
+      y: state.height / 2 + ringRadius * Math.sin(theta),
+    });
+  });
+  state.clusterAnchors = anchors;
+  state.clusterAnchorStrength = clusterIds.length <= 4 ? 0.12 : 0.16;
+}
+
+function bridgeToggleLabel() {
+  return state.showWeakBridges ? "Hide weak bridges" : "Show weak bridges";
+}
+
+function renderBridgeToggleLabel(visibleIds = null) {
+  const btn = document.getElementById("toggle-bridge-links");
+  if (!btn) return;
+  const weakCount = state.links.filter((link) => {
+    if (!link.isWeakBridge) return false;
+    if (!visibleIds) return true;
+    const sid = linkEndpointId(link.source);
+    const tid = linkEndpointId(link.target);
+    return visibleIds.has(sid) && visibleIds.has(tid);
+  }).length;
+  if (weakCount <= 0) {
+    btn.textContent = "No weak bridges";
+    btn.title = "No weak inter-cluster links in the current view.";
+  } else {
+    btn.textContent = `${bridgeToggleLabel()} (${weakCount})`;
+    btn.title = state.showWeakBridges
+      ? "Weak inter-cluster links are currently visible."
+      : "Weak inter-cluster links are currently hidden.";
+  }
+  btn.classList.toggle("active", state.showWeakBridges);
+}
+
+function isDuplicateLink(link) {
+  return Number(link.similarity || 0) >= state.duplicateThreshold;
+}
+
+function duplicateEdgeKeyFromIds(aId, bId) {
+  if (!aId || !bId || aId === bId) return "";
+  return aId < bId ? `${aId}::${bId}` : `${bId}::${aId}`;
+}
+
+function duplicateEdgeKey(link) {
+  return duplicateEdgeKeyFromIds(linkEndpointId(link.source), linkEndpointId(link.target));
+}
+
+function isStrictDuplicateLink(link) {
+  if (!isDuplicateLink(link)) return false;
+  const key = duplicateEdgeKey(link);
+  return Boolean(key && state.duplicateStrictEdgeKeys.has(key));
+}
+
+function buildDuplicateNeighborRankings(duplicateLinks) {
+  const neighborsByNode = new Map();
+  duplicateLinks.forEach((link) => {
+    const sourceId = linkEndpointId(link.source);
+    const targetId = linkEndpointId(link.target);
+    const similarity = Number(link.similarity || 0);
+    if (!sourceId || !targetId || sourceId === targetId) return;
+    if (!neighborsByNode.has(sourceId)) neighborsByNode.set(sourceId, []);
+    if (!neighborsByNode.has(targetId)) neighborsByNode.set(targetId, []);
+    neighborsByNode.get(sourceId).push({ id: targetId, similarity });
+    neighborsByNode.get(targetId).push({ id: sourceId, similarity });
+  });
+
+  const rankByNode = new Map();
+  const bestByNode = new Map();
+  neighborsByNode.forEach((neighbors, nodeId) => {
+    neighbors.sort((a, b) => b.similarity - a.similarity);
+    bestByNode.set(nodeId, neighbors.length ? neighbors[0].similarity : 0);
+    const rankMap = new Map();
+    neighbors.forEach((neighbor, idx) => {
+      if (!rankMap.has(neighbor.id)) {
+        rankMap.set(neighbor.id, idx + 1);
+      }
+    });
+    rankByNode.set(nodeId, rankMap);
+  });
+  return { rankByNode, bestByNode };
+}
+
+function linkIsMutualStrong(link, rankByNode, bestByNode) {
+  const sourceId = linkEndpointId(link.source);
+  const targetId = linkEndpointId(link.target);
+  if (!sourceId || !targetId || sourceId === targetId) return false;
+  const rankA = (rankByNode.get(sourceId) || new Map()).get(targetId) || Number.POSITIVE_INFINITY;
+  const rankB = (rankByNode.get(targetId) || new Map()).get(sourceId) || Number.POSITIVE_INFINITY;
+  if (rankA > state.duplicateMutualTopK || rankB > state.duplicateMutualTopK) return false;
+
+  const similarity = Number(link.similarity || 0);
+  const bestA = bestByNode.get(sourceId) || similarity;
+  const bestB = bestByNode.get(targetId) || similarity;
+  return similarity >= (bestA - state.duplicateMutualSlack) && similarity >= (bestB - state.duplicateMutualSlack);
+}
+
+function rebuildDuplicateStats() {
+  const dupNodes = new Set();
+  let pairCount = 0;
+  for (const link of state.links) {
+    if (!isDuplicateLink(link)) continue;
+    const sourceId = linkEndpointId(link.source);
+    const targetId = linkEndpointId(link.target);
+    if (!sourceId || !targetId) continue;
+    const sourceNode = state.nodeById.get(sourceId);
+    const targetNode = state.nodeById.get(targetId);
+    if (!sourceNode || !targetNode || sourceNode._removed || targetNode._removed) continue;
+    if (!nodeIsInCollectionScope(sourceNode) || !nodeIsInCollectionScope(targetNode)) continue;
+    dupNodes.add(sourceId);
+    dupNodes.add(targetId);
+    pairCount += 1;
+  }
+  state.duplicateNodeIds = dupNodes;
+  state.duplicatePairCount = pairCount;
+  document.getElementById("stat-dupes").textContent = String(dupNodes.size);
+}
+
+function pickDefaultKeeperId(nodeIds) {
+  if (!nodeIds.length) return "";
+  let bestId = nodeIds[0];
+  let bestScore = -Infinity;
+  nodeIds.forEach((id) => {
+    const node = state.nodeById.get(id);
+    if (!node) return;
+    const score =
+      Number(node.neighbor_count || 0) * 2.0 +
+      (1 - Number(node.isolation_score || 0)) * 1.2 +
+      Number(node.bridge_score || 0) * 0.3;
+    if (score > bestScore) {
+      bestScore = score;
+      bestId = id;
+    }
+  });
+  return bestId;
+}
+
+function getCurrentDuplicateGroup() {
+  if (!state.duplicateGroups.length) return null;
+  const idx = Math.max(0, Math.min(state.duplicateGroupIndex, state.duplicateGroups.length - 1));
+  return state.duplicateGroups[idx];
+}
+
+function getDuplicateKeeperId(group) {
+  if (!group) return "";
+  return state.duplicateKeeperByGroup.get(group.id) || group.defaultKeeperId || "";
+}
+
+function getDuplicateLoserIds(group) {
+  if (!group) return [];
+  const keeperId = getDuplicateKeeperId(group);
+  const mapped = state.duplicateLosersByGroup.get(group.id);
+  if (!mapped || !(mapped instanceof Set)) return [];
+  return [...mapped].filter((id) => group.nodeIdSet.has(id) && id !== keeperId);
+}
+
+function getGroupLoserIds(group) {
+  return getDuplicateLoserIds(group);
+}
+
+function rebuildDuplicateGroups() {
+  const thresholdLinks = state.links.filter((link) => {
+    if (!isDuplicateLink(link)) return false;
+    const sourceNode = state.nodeById.get(linkEndpointId(link.source));
+    const targetNode = state.nodeById.get(linkEndpointId(link.target));
+    if (!sourceNode || !targetNode || sourceNode._removed || targetNode._removed) return false;
+    if (!nodeIsInCollectionScope(sourceNode) || !nodeIsInCollectionScope(targetNode)) return false;
+    return true;
+  });
+  if (!thresholdLinks.length) {
+    state.duplicateGroups = [];
+    state.duplicateKeeperByGroup = new Map();
+    state.duplicateLosersByGroup = new Map();
+    state.duplicateGroupIndex = 0;
+    state.duplicateStrictEdgeKeys = new Set();
+    state.duplicateTotalGroups = 0;
+    state.duplicateHiddenCount = 0;
+    state.duplicateVisibleNodeIds = new Set();
+    state.pendingDeleteIds = new Set();
+    renderDuplicateGroupControls();
+    renderReviewPanel();
+    return;
+  }
+
+  const { rankByNode, bestByNode } = buildDuplicateNeighborRankings(thresholdLinks);
+  const duplicateLinks = thresholdLinks.filter((link) => linkIsMutualStrong(link, rankByNode, bestByNode));
+
+  const adjacency = new Map();
+  duplicateLinks.forEach((link) => {
+    const sourceId = linkEndpointId(link.source);
+    const targetId = linkEndpointId(link.target);
+    if (!sourceId || !targetId || sourceId === targetId) return;
+    if (!adjacency.has(sourceId)) adjacency.set(sourceId, new Set());
+    if (!adjacency.has(targetId)) adjacency.set(targetId, new Set());
+    adjacency.get(sourceId).add(targetId);
+    adjacency.get(targetId).add(sourceId);
+  });
+
+  const visited = new Set();
+  const groups = [];
+
+  for (const startId of adjacency.keys()) {
+    if (visited.has(startId)) continue;
+    const stack = [startId];
+    const nodeIds = [];
+    while (stack.length) {
+      const current = stack.pop();
+      if (visited.has(current)) continue;
+      visited.add(current);
+      nodeIds.push(current);
+      const neighbors = adjacency.get(current) || new Set();
+      neighbors.forEach((nextId) => {
+        if (!visited.has(nextId)) stack.push(nextId);
+      });
+    }
+    if (nodeIds.length < 2) continue;
+    const nodeSet = new Set(nodeIds);
+    const groupLinks = [];
+    duplicateLinks.forEach((link) => {
+      const sid = linkEndpointId(link.source);
+      const tid = linkEndpointId(link.target);
+      if (nodeSet.has(sid) && nodeSet.has(tid)) groupLinks.push(link);
+    });
+    const pairCount = groupLinks.length;
+    const possiblePairs = (nodeIds.length * (nodeIds.length - 1)) / 2;
+    const density = possiblePairs > 0 ? pairCount / possiblePairs : 0;
+    const sims = groupLinks.map((link) => Number(link.similarity || 0));
+    const avgSimilarity = sims.length ? sims.reduce((a, b) => a + b, 0) / sims.length : 0;
+    const minSimilarity = sims.length ? Math.min(...sims) : 0;
+    const cohesion = clamp(avgSimilarity * (0.55 + (0.45 * density)), 0, 1);
+    const dominance = nodeIds.length * (0.55 + (0.45 * avgSimilarity)) * (0.6 + (0.4 * density));
+    groups.push({
+      nodeIds: nodeIds.sort(),
+      nodeIdSet: nodeSet,
+      edgeKeys: groupLinks.map((link) => duplicateEdgeKey(link)).filter(Boolean),
+      pairCount,
+      density,
+      avgSimilarity,
+      minSimilarity,
+      dominance,
+      cohesion,
+    });
+  }
+
+  groups.sort((a, b) => {
+    if (b.dominance !== a.dominance) return b.dominance - a.dominance;
+    if (b.nodeIds.length !== a.nodeIds.length) return b.nodeIds.length - a.nodeIds.length;
+    if (b.cohesion !== a.cohesion) return b.cohesion - a.cohesion;
+    return b.avgSimilarity - a.avgSimilarity;
+  });
+
+  const previousKeeperByGroup = state.duplicateKeeperByGroup || new Map();
+  const previousLosersByGroup = state.duplicateLosersByGroup || new Map();
+  const keeperMap = new Map();
+  const loserMap = new Map();
+  groups.forEach((group) => {
+    group.id = `dup-group:${group.nodeIds.join("|")}`;
+    group.defaultKeeperId = pickDefaultKeeperId(group.nodeIds);
+    const existingKeeper = previousKeeperByGroup.get(group.id);
+    const keeperId = existingKeeper && group.nodeIdSet.has(existingKeeper)
+      ? existingKeeper
+      : group.defaultKeeperId;
+    keeperMap.set(group.id, keeperId);
+    const prevLosers = previousLosersByGroup.get(group.id);
+    const nextLosers = new Set();
+    if (prevLosers && prevLosers instanceof Set) {
+      prevLosers.forEach((id) => {
+        if (group.nodeIdSet.has(id) && id !== keeperId) nextLosers.add(id);
+      });
+    }
+    loserMap.set(group.id, nextLosers);
+  });
+
+  const visibleGroups = groups.filter((group) => group.cohesion >= state.duplicateMinCohesion);
+  const visibleNodeIds = new Set();
+  const visibleEdgeKeys = new Set();
+  visibleGroups.forEach((group) => {
+    group.nodeIds.forEach((id) => visibleNodeIds.add(id));
+    group.edgeKeys.forEach((key) => visibleEdgeKeys.add(key));
+  });
+  state.pendingDeleteIds = new Set([...state.pendingDeleteIds].filter((id) => visibleNodeIds.has(id)));
+
+  state.duplicateTotalGroups = groups.length;
+  state.duplicateHiddenCount = Math.max(0, groups.length - visibleGroups.length);
+  state.duplicateVisibleNodeIds = visibleNodeIds;
+  state.duplicateGroups = visibleGroups;
+  state.duplicateStrictEdgeKeys = visibleEdgeKeys;
+  state.duplicateKeeperByGroup = new Map(
+    visibleGroups.map((group) => [group.id, keeperMap.get(group.id) || group.defaultKeeperId])
+  );
+  state.duplicateLosersByGroup = new Map(
+    visibleGroups.map((group) => [group.id, loserMap.get(group.id) || new Set()])
+  );
+  state.duplicateGroupIndex = Math.max(0, Math.min(state.duplicateGroupIndex, Math.max(0, groups.length - 1)));
+  if (state.duplicateGroups.length) {
+    state.duplicateGroupIndex = Math.min(state.duplicateGroupIndex, state.duplicateGroups.length - 1);
+  } else {
+    state.duplicateGroupIndex = 0;
+  }
+  renderDuplicateGroupControls();
+  renderReviewPanel();
+}
+
+function renderDuplicateGroupControls() {
+  const prevBtn = document.getElementById("dup-prev");
+  const nextBtn = document.getElementById("dup-next");
+  const scopeBtn = document.getElementById("dup-toggle-scope");
+  const downloadBtn = document.getElementById("dup-download-keepers");
+  const queueBtn = document.getElementById("dup-queue-group");
+  const applyGroupBtn = document.getElementById("dup-apply-group");
+  const applyAllBtn = document.getElementById("dup-apply-all");
+  const label = document.getElementById("duplicate-group-label");
+  const hiddenSuffix = state.duplicateHiddenCount > 0 ? ` (${state.duplicateHiddenCount} hidden)` : "";
+  const scopeSuffix = state.duplicateShowAll ? " [all visible]" : "";
+  const collectionName = cleanCollectionLabel(currentReviewCollectionName());
+  const collectionPrefix = collectionName ? `${collectionName}: ` : "";
+  const scopeLabel = state.collectionId && state.hasNearbyContext
+    ? (state.showNearbyContext ? "focus + nearby" : "focus only")
+    : "focus";
+
+  if (!state.duplicateGroups.length) {
+    if (state.duplicateTotalGroups > 0) {
+      label.textContent = `Group 0/0${hiddenSuffix}`;
+    } else if (collectionName) {
+      label.textContent = `${collectionName} (${scopeLabel}): no groups at current settings`;
+    } else {
+      label.textContent = "Group 0/0";
+    }
+    prevBtn.disabled = true;
+    nextBtn.disabled = true;
+    scopeBtn.disabled = true;
+    scopeBtn.textContent = "Show All Dupes";
+    scopeBtn.classList.remove("active");
+    downloadBtn.disabled = true;
+    queueBtn.disabled = true;
+    applyGroupBtn.disabled = true;
+    applyAllBtn.disabled = state.pendingDeleteIds.size === 0;
+    return;
+  }
+
+  const idx = Math.max(0, Math.min(state.duplicateGroupIndex, state.duplicateGroups.length - 1));
+  const group = state.duplicateGroups[idx];
+  const keeperId = getDuplicateKeeperId(group);
+  const loserCount = getDuplicateLoserIds(group).length;
+  const keeperNode = state.nodeById.get(keeperId);
+  const keeperLabel = keeperNode ? truncate(keeperNode.title || keeperNode.id, 24) : truncate(keeperId, 24);
+  label.textContent =
+    `${collectionPrefix}${scopeLabel} · Group ${idx + 1}/${state.duplicateGroups.length} (${group.nodeIds.length} items, losers ${loserCount}, dominance ${group.dominance.toFixed(2)}, keeper: ${keeperLabel})${hiddenSuffix}${scopeSuffix}`;
+  prevBtn.disabled = idx <= 0;
+  nextBtn.disabled = idx >= state.duplicateGroups.length - 1;
+  scopeBtn.disabled = false;
+  scopeBtn.textContent = state.duplicateShowAll ? "Focus Group" : "Show All Dupes";
+  scopeBtn.classList.toggle("active", state.duplicateShowAll);
+  downloadBtn.disabled = false;
+  queueBtn.disabled = loserCount === 0;
+  applyGroupBtn.disabled = loserCount === 0;
+  applyAllBtn.disabled = state.pendingDeleteIds.size === 0;
+}
+
+function linkSimilarity(aId, bId) {
+  if (!aId || !bId || aId === bId) return 1.0;
+  for (const link of state.links) {
+    const sid = linkEndpointId(link.source);
+    const tid = linkEndpointId(link.target);
+    if ((sid === aId && tid === bId) || (sid === bId && tid === aId)) {
+      return Number(link.similarity || 0);
+    }
+  }
+  return 0;
+}
+
+function setDuplicateGroupKeeper(group, keeperId, message) {
+  if (!group || !group.nodeIdSet.has(keeperId)) return;
+  state.duplicateKeeperByGroup.set(group.id, keeperId);
+  const losers = state.duplicateLosersByGroup.get(group.id);
+  if (losers && losers instanceof Set) losers.delete(keeperId);
+  state.pendingDeleteIds.delete(keeperId);
+  const statusEl = document.getElementById("action-status");
+  statusEl.textContent = message || "Keeper updated for this duplicate group.";
+  renderDuplicateGroupControls();
+  renderReviewPanel();
+  updateVisibility();
+  if (state.selectedNode && group.nodeIdSet.has(state.selectedNode.id)) {
+    showDetail(state.selectedNode);
+  }
+}
+
+function setDuplicateGroupLoser(group, nodeId, message) {
+  if (!group || !group.nodeIdSet.has(nodeId)) return;
+  const keeperId = getDuplicateKeeperId(group);
+  if (nodeId === keeperId) return;
+  const losers = state.duplicateLosersByGroup.get(group.id) || new Set();
+  losers.add(nodeId);
+  state.duplicateLosersByGroup.set(group.id, losers);
+  const statusEl = document.getElementById("action-status");
+  statusEl.textContent = message || "Marked as loser for this duplicate group.";
+  renderDuplicateGroupControls();
+  renderReviewPanel();
+  updateVisibility();
+  if (state.selectedNode && group.nodeIdSet.has(state.selectedNode.id)) {
+    showDetail(state.selectedNode);
+  }
+}
+
+function clearDuplicateGroupLoser(group, nodeId, message) {
+  if (!group || !group.nodeIdSet.has(nodeId)) return;
+  const losers = state.duplicateLosersByGroup.get(group.id);
+  if (!losers || !(losers instanceof Set)) return;
+  losers.delete(nodeId);
+  const statusEl = document.getElementById("action-status");
+  statusEl.textContent = message || "Returned to candidates.";
+  renderDuplicateGroupControls();
+  renderReviewPanel();
+  updateVisibility();
+  if (state.selectedNode && group.nodeIdSet.has(state.selectedNode.id)) {
+    showDetail(state.selectedNode);
+  }
+}
+
+function renderKeeperCard(node, group, lane = "candidate") {
+  const keeperId = getDuplicateKeeperId(group);
+  const isKeeper = node.id === keeperId;
+  const loserIds = new Set(getDuplicateLoserIds(group));
+  const isLoser = loserIds.has(node.id);
+  const card = document.createElement("article");
+  card.className = `keeper-card${isKeeper ? " keeper" : ""}${isLoser ? " loser" : ""}`;
+
+  const img = document.createElement("img");
+  img.alt = "";
+  setImageWithFallback(img, node);
+  card.appendChild(img);
+
+  const body = document.createElement("div");
+  body.className = "keeper-card-body";
+
+  const title = document.createElement("div");
+  title.className = "keeper-card-title";
+  title.textContent = truncate(node.title || node.id, 74);
+  body.appendChild(title);
+
+  const similarityToKeeper = isKeeper ? 1 : linkSimilarity(node.id, keeperId);
+  const meta = document.createElement("div");
+  meta.className = "keeper-card-meta";
+  if (isKeeper) {
+    meta.textContent = "Selected keeper";
+  } else if (isLoser) {
+    meta.textContent = "Marked loser";
+  } else if (similarityToKeeper > 0) {
+    meta.textContent = `Similarity to keeper ${(similarityToKeeper * 100).toFixed(0)}%`;
+  } else {
+    meta.textContent = "No direct duplicate edge to current keeper";
+  }
+  body.appendChild(meta);
+
+  const actions = document.createElement("div");
+  actions.className = "keeper-card-actions";
+
+  const keeperBtn = document.createElement("button");
+  keeperBtn.className = "keeper-card-btn";
+  keeperBtn.textContent = isKeeper ? "Current keeper" : "Set keeper";
+  keeperBtn.disabled = isKeeper;
+  keeperBtn.onclick = () => setDuplicateGroupKeeper(group, node.id);
+  actions.appendChild(keeperBtn);
+
+  if (!isKeeper) {
+    const loserBtn = document.createElement("button");
+    loserBtn.className = "keeper-card-btn danger";
+    loserBtn.textContent = isLoser ? "Unmark loser" : "Mark loser";
+    loserBtn.onclick = () => {
+      if (isLoser) clearDuplicateGroupLoser(group, node.id);
+      else setDuplicateGroupLoser(group, node.id);
+    };
+    actions.appendChild(loserBtn);
+  }
+
+  const detailBtn = document.createElement("button");
+  detailBtn.className = "keeper-card-btn";
+  detailBtn.textContent = "Details";
+  detailBtn.onclick = () => showDetail(node);
+  actions.appendChild(detailBtn);
+
+  body.appendChild(actions);
+  card.appendChild(body);
+  return card;
+}
+
+function buildDuplicateLane(titleText, className, nodes, group) {
+  const lane = document.createElement("div");
+  lane.className = "keeper-lane";
+  const title = document.createElement("div");
+  title.className = `keeper-lane-title ${className}`;
+  title.textContent = `${titleText} (${nodes.length})`;
+  lane.appendChild(title);
+  if (!nodes.length) {
+    const empty = document.createElement("div");
+    empty.className = "keeper-lane-empty";
+    empty.textContent = "None selected yet.";
+    lane.appendChild(empty);
+    return lane;
+  }
+  const cards = document.createElement("div");
+  cards.className = "keeper-cards";
+  nodes.forEach((node) => {
+    cards.appendChild(renderKeeperCard(node, group, className));
+  });
+  lane.appendChild(cards);
+  return lane;
+}
+
+function renderKeeperReview(panel) {
+  if (!panel) return;
+  panel.style.display = "block";
+  panel.innerHTML = "";
+  const collectionName = cleanCollectionLabel(currentReviewCollectionName());
+  const nearbyHint = state.collectionId && state.hasNearbyContext
+    ? ` Nearby context is ${state.showNearbyContext ? "included" : "hidden"}.`
+    : "";
+
+  const intro = document.createElement("div");
+  intro.className = "keeper-intro";
+  intro.textContent = `Collection review: ${collectionName || "All items"}. Groups are ordered strongest to weakest by dominance. Mark one keeper, then move rejects to Losers.${nearbyHint}`;
+  panel.appendChild(intro);
+
+  if (!state.duplicateGroups.length) {
+    const empty = document.createElement("div");
+    empty.className = "keeper-empty";
+    empty.textContent = "No duplicate groups at the current Similarity/Cohesion thresholds.";
+    panel.appendChild(empty);
+    return;
+  }
+
+  const groupsToRender = state.duplicateShowAll
+    ? state.duplicateGroups
+    : [getCurrentDuplicateGroup()].filter(Boolean);
+
+  groupsToRender.forEach((group) => {
+    const section = document.createElement("section");
+    section.className = "keeper-group";
+
+    const head = document.createElement("div");
+    head.className = "keeper-group-head";
+
+    const idx = state.duplicateGroups.findIndex((g) => g.id === group.id);
+    const title = document.createElement("div");
+    title.className = "keeper-group-title";
+    title.textContent = `Group ${idx + 1} · ${group.nodeIds.length} items`;
+    head.appendChild(title);
+
+    if (state.duplicateShowAll) {
+      const focusBtn = document.createElement("button");
+      focusBtn.className = "keeper-card-btn";
+      focusBtn.textContent = "Focus";
+      focusBtn.onclick = () => {
+        state.duplicateShowAll = false;
+        state.duplicateGroupIndex = Math.max(0, idx);
+        renderDuplicateGroupControls();
+        renderReviewPanel();
+        updateVisibility();
+      };
+      head.appendChild(focusBtn);
+    }
+
+    const meta = document.createElement("div");
+    meta.className = "keeper-group-meta";
+    meta.textContent = `Dominance ${group.dominance.toFixed(2)} · Cohesion ${group.cohesion.toFixed(2)} · Density ${(group.density * 100).toFixed(0)}%`;
+    head.appendChild(meta);
+
+    section.appendChild(head);
+
+    const keeperId = getDuplicateKeeperId(group);
+    const loserSet = new Set(getDuplicateLoserIds(group));
+    const groupNodes = group.nodeIds
+      .map((id) => state.nodeById.get(id))
+      .filter(Boolean)
+      .sort((a, b) => String(a.title || a.id).localeCompare(String(b.title || b.id)));
+
+    const keepers = [];
+    const losers = [];
+    const candidates = [];
+    groupNodes.forEach((node) => {
+      if (node.id === keeperId) {
+        keepers.push(node);
+        return;
+      }
+      if (loserSet.has(node.id)) {
+        losers.push(node);
+        return;
+      }
+      candidates.push(node);
+    });
+
+    const lanes = document.createElement("div");
+    lanes.className = "keeper-lanes";
+    lanes.appendChild(buildDuplicateLane("Keepers", "keepers", keepers, group));
+    lanes.appendChild(buildDuplicateLane("Candidates", "candidates", candidates, group));
+    lanes.appendChild(buildDuplicateLane("Losers", "losers", losers, group));
+    section.appendChild(lanes);
+    panel.appendChild(section);
+  });
+}
+
+function getOutlierCandidates() {
+  return state.nodes
+    .filter((node) => {
+      if (node._removed) return false;
+      if (state.outlierKeptIds.has(node.id)) return false;
+      if (node.isolation_score < state.outlierThreshold) return false;
+      if (!nodeMatchesCollection(node)) return false;
+      if (!nodeMatchesSearch(node, state.search)) return false;
+      return true;
+    })
+    .sort((a, b) => b.isolation_score - a.isolation_score);
+}
+
+function markOutlierKeep(nodeId, message) {
+  if (!nodeId) return;
+  state.outlierKeptIds.add(nodeId);
+  document.getElementById("action-status").textContent = message || "Marked as keep; removed from outlier candidates.";
+  updateVisibility();
+  if (state.selectedNode && state.selectedNode.id === nodeId) {
+    showDetail(state.selectedNode);
+  }
+}
+
+function resetOutlierKeeps() {
+  state.outlierKeptIds = new Set();
+  document.getElementById("action-status").textContent = "Cleared outlier keep decisions for this session.";
+  updateVisibility();
+}
+
+function downloadOutlierKeeps() {
+  const collectionName = currentReviewCollectionName();
+  const ids = [...state.outlierKeptIds];
+  const items = ids.map((id) => {
+    const node = state.nodeById.get(id);
+    return {
+      id,
+      title: node ? (node.title || "") : "",
+      isolation_score: node ? Number(node.isolation_score.toFixed(4)) : null,
+      bridge_score: node ? Number(node.bridge_score.toFixed(4)) : null,
+      source_url: node ? (node.source_url || "") : "",
+    };
+  });
+  const payload = {
+    generated_at: new Date().toISOString(),
+    collection_name: collectionName,
+    isolation_threshold: Number(state.outlierThreshold.toFixed(2)),
+    kept_count: items.length,
+    kept_items: items,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "outlier_keeps.json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function renderOutlierReview(panel) {
+  if (!panel) return;
+  panel.style.display = "block";
+  panel.innerHTML = "";
+  const collectionName = cleanCollectionLabel(currentReviewCollectionName());
+  const nearbyHint = state.collectionId && state.hasNearbyContext
+    ? ` Nearby context is ${state.showNearbyContext ? "included" : "hidden"}.`
+    : "";
+
+  const intro = document.createElement("div");
+  intro.className = "keeper-intro";
+  intro.textContent = `Collection review: ${collectionName || "All items"}. Outlier candidates are sorted by isolation. Mark items to keep; nothing is deleted.${nearbyHint}`;
+  panel.appendChild(intro);
+
+  const candidates = getOutlierCandidates();
+  if (!candidates.length) {
+    const empty = document.createElement("div");
+    empty.className = "keeper-empty";
+    const keptCount = state.outlierKeptIds.size;
+    empty.textContent = keptCount > 0
+      ? `No outlier candidates remain at this threshold. (${keptCount} kept in this session.)`
+      : "No outlier candidates at the current threshold.";
+    panel.appendChild(empty);
+    return;
+  }
+
+  const section = document.createElement("section");
+  section.className = "keeper-group";
+
+  const head = document.createElement("div");
+  head.className = "keeper-group-head";
+
+  const title = document.createElement("div");
+  title.className = "keeper-group-title";
+  title.textContent = `${candidates.length} outlier candidates`;
+  head.appendChild(title);
+
+  const meta = document.createElement("div");
+  meta.className = "keeper-group-meta";
+  meta.textContent = `Threshold ${state.outlierThreshold.toFixed(2)} · Kept ${state.outlierKeptIds.size}`;
+  head.appendChild(meta);
+
+  section.appendChild(head);
+
+  const cards = document.createElement("div");
+  cards.className = "keeper-cards";
+  candidates.forEach((node) => {
+    const card = document.createElement("article");
+    card.className = "keeper-card";
+
+    const img = document.createElement("img");
+    img.alt = "";
+    setImageWithFallback(img, node);
+    card.appendChild(img);
+
+    const body = document.createElement("div");
+    body.className = "keeper-card-body";
+
+    const cardTitle = document.createElement("div");
+    cardTitle.className = "keeper-card-title";
+    cardTitle.textContent = truncate(node.title || node.id, 74);
+    body.appendChild(cardTitle);
+
+    const cardMeta = document.createElement("div");
+    cardMeta.className = "keeper-card-meta";
+    cardMeta.textContent = `Isolation ${node.isolation_score.toFixed(2)} · Bridge ${node.bridge_score.toFixed(2)}`;
+    body.appendChild(cardMeta);
+
+    const actions = document.createElement("div");
+    actions.className = "keeper-card-actions";
+
+    const keepBtn = document.createElement("button");
+    keepBtn.className = "keeper-card-btn";
+    keepBtn.textContent = "Mark keep";
+    keepBtn.onclick = () => markOutlierKeep(node.id);
+    actions.appendChild(keepBtn);
+
+    const detailBtn = document.createElement("button");
+    detailBtn.className = "keeper-card-btn";
+    detailBtn.textContent = "Details";
+    detailBtn.onclick = () => showDetail(node);
+    actions.appendChild(detailBtn);
+
+    body.appendChild(actions);
+    card.appendChild(body);
+    cards.appendChild(card);
+  });
+  section.appendChild(cards);
+  panel.appendChild(section);
+}
+
+function getDiscoverCandidateNodes() {
+  return state.nodes.filter((node) => {
+    if (node._removed) return false;
+    if (!nodeMatchesCollection(node)) return false;
+    if (!nodeMatchesSearch(node, state.search)) return false;
+    return true;
+  });
+}
+
+function getDiscoverDecision(nodeId) {
+  return state.discoverDecisionById.get(nodeId) || "";
+}
+
+function discoverDecisionVisual(decision) {
+  if (decision === "keeper") {
+    return { symbol: "K", color: "#34d399", stroke: "#1e6b53", label: "keeper" };
+  }
+  if (decision === "loser") {
+    return { symbol: "L", color: "#ef4444", stroke: "#7a2222", label: "loser" };
+  }
+  return { symbol: "?", color: "#d9a93e", stroke: "#7a5d26", label: "undecided" };
+}
+
+function graphDecisionVisualForNode(node, visibleIds, dupGroup, dupKeeperId, dupLoserIds) {
+  if (!visibleIds.has(node.id)) {
+    return { show: false, symbol: "", color: "#d9a93e", stroke: "#7a5d26" };
+  }
+  if (state.mode === "discover") {
+    const d = discoverDecisionVisual(getDiscoverDecision(node.id));
+    return { show: true, symbol: d.symbol, color: d.color, stroke: d.stroke };
+  }
+  if (state.mode === "duplicates" && dupGroup && dupGroup.nodeIdSet.has(node.id)) {
+    if (node.id === dupKeeperId) {
+      return { show: true, symbol: "K", color: "#34d399", stroke: "#1e6b53" };
+    }
+    if (dupLoserIds.has(node.id) || state.pendingDeleteIds.has(node.id)) {
+      return { show: true, symbol: "L", color: "#ef4444", stroke: "#7a2222" };
+    }
+    return { show: true, symbol: "?", color: "#d9a93e", stroke: "#7a5d26" };
+  }
+  if (state.mode === "outliers") {
+    if (state.outlierKeptIds.has(node.id)) {
+      return { show: true, symbol: "K", color: "#34d399", stroke: "#1e6b53" };
+    }
+    return { show: true, symbol: "?", color: "#d9a93e", stroke: "#7a5d26" };
+  }
+  return { show: false, symbol: "", color: "#d9a93e", stroke: "#7a5d26" };
+}
+
+function setDiscoverDecision(nodeId, decision, message) {
+  if (!nodeId) return;
+  if (decision === "keeper" || decision === "loser") {
+    state.discoverDecisionById.set(nodeId, decision);
+  } else {
+    state.discoverDecisionById.delete(nodeId);
+  }
+  document.getElementById("action-status").textContent = message || "Updated pick for this item.";
+  renderReviewPanel();
+  updateVisibility();
+  if (state.selectedNode && state.selectedNode.id === nodeId) {
+    showDetail(state.selectedNode);
+  }
+}
+
+function renderViewControls() {
+  const controls = document.getElementById("view-controls");
+  const gridBtn = document.getElementById("view-grid");
+  const graphBtn = document.getElementById("view-graph");
+  if (!controls || !gridBtn || !graphBtn) return;
+  controls.style.display = "inline-flex";
+  gridBtn.classList.toggle("active", state.viewMode === "grid");
+  graphBtn.classList.toggle("active", state.viewMode === "graph");
+}
+
+function discoverDecisionCounts() {
+  const candidates = getDiscoverCandidateNodes();
+  let keepers = 0;
+  let losers = 0;
+  candidates.forEach((node) => {
+    const decision = getDiscoverDecision(node.id);
+    if (decision === "keeper") keepers += 1;
+    if (decision === "loser") losers += 1;
+  });
+  return {
+    total: candidates.length,
+    keepers,
+    losers,
+    undecided: Math.max(0, candidates.length - keepers - losers),
+  };
+}
+
+function resetDiscoverDecisions() {
+  state.discoverDecisionById = new Map();
+  document.getElementById("action-status").textContent = "Cleared discover picks for this session.";
+  renderReviewPanel();
+  updateVisibility();
+  if (state.selectedNode) showDetail(state.selectedNode);
+}
+
+function downloadDiscoverDecisions() {
+  const collectionName = currentReviewCollectionName();
+  const rows = getDiscoverCandidateNodes().map((node) => ({
+    id: node.id,
+    title: node.title || "",
+    decision: getDiscoverDecision(node.id) || "undecided",
+    isolation_score: Number(node.isolation_score.toFixed(4)),
+    bridge_score: Number(node.bridge_score.toFixed(4)),
+    source_url: node.source_url || "",
+  }));
+  const summary = rows.reduce(
+    (acc, row) => {
+      if (row.decision === "keeper") acc.keepers += 1;
+      else if (row.decision === "loser") acc.losers += 1;
+      else acc.undecided += 1;
+      return acc;
+    },
+    { keepers: 0, losers: 0, undecided: 0 }
+  );
+  const payload = {
+    generated_at: new Date().toISOString(),
+    collection_name: collectionName,
+    theme_similarity_threshold: Number(state.discoverThreshold.toFixed(2)),
+    ...summary,
+    picks: rows,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "discover_picks.json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function compareThemeNodes(a, b) {
+  const aScore = Number(a.neighbor_count || 0) * 1.2 + (1 - Number(a.isolation_score || 0));
+  const bScore = Number(b.neighbor_count || 0) * 1.2 + (1 - Number(b.isolation_score || 0));
+  if (bScore !== aScore) return bScore - aScore;
+  return String(a.title || a.id).localeCompare(String(b.title || b.id));
+}
+
+function buildDiscoverGroups() {
+  const candidates = getDiscoverCandidateNodes();
+  if (!candidates.length) return { groups: [], singles: [] };
+
+  const candidateIds = new Set(candidates.map((node) => node.id));
+  const adjacency = new Map();
+  const scopedLinks = [];
+
+  for (const link of state.links) {
+    const sid = linkEndpointId(link.source);
+    const tid = linkEndpointId(link.target);
+    if (!sid || !tid || sid === tid) continue;
+    if (!candidateIds.has(sid) || !candidateIds.has(tid)) continue;
+    const similarity = Number(link.similarity || 0);
+    if (similarity < state.discoverThreshold) continue;
+    scopedLinks.push({ source: sid, target: tid, similarity });
+    if (!adjacency.has(sid)) adjacency.set(sid, new Set());
+    if (!adjacency.has(tid)) adjacency.set(tid, new Set());
+    adjacency.get(sid).add(tid);
+    adjacency.get(tid).add(sid);
+  }
+
+  const groupedIds = new Set();
+  const visited = new Set();
+  const groups = [];
+
+  for (const startId of adjacency.keys()) {
+    if (visited.has(startId)) continue;
+    const stack = [startId];
+    const nodeIds = [];
+    while (stack.length) {
+      const current = stack.pop();
+      if (visited.has(current)) continue;
+      visited.add(current);
+      nodeIds.push(current);
+      const neighbors = adjacency.get(current) || new Set();
+      neighbors.forEach((nextId) => {
+        if (!visited.has(nextId)) stack.push(nextId);
+      });
+    }
+    if (nodeIds.length < 2) continue;
+    nodeIds.forEach((id) => groupedIds.add(id));
+
+    const nodeSet = new Set(nodeIds);
+    const groupLinks = scopedLinks.filter((link) => nodeSet.has(link.source) && nodeSet.has(link.target));
+    const pairCount = groupLinks.length;
+    const possiblePairs = (nodeIds.length * (nodeIds.length - 1)) / 2;
+    const density = possiblePairs > 0 ? pairCount / possiblePairs : 0;
+    const sims = groupLinks.map((link) => Number(link.similarity || 0));
+    const avgSimilarity = sims.length ? sims.reduce((a, b) => a + b, 0) / sims.length : 0;
+    const cohesion = clamp(avgSimilarity * (0.55 + (0.45 * density)), 0, 1);
+    const dominance = nodeIds.length * (0.55 + (0.45 * avgSimilarity)) * (0.6 + (0.4 * density));
+    groups.push({
+      nodeIds: nodeIds.sort(),
+      nodeIdSet: nodeSet,
+      pairCount,
+      density,
+      avgSimilarity,
+      cohesion,
+      dominance,
+    });
+  }
+
+  groups.sort((a, b) => {
+    if (b.dominance !== a.dominance) return b.dominance - a.dominance;
+    if (b.nodeIds.length !== a.nodeIds.length) return b.nodeIds.length - a.nodeIds.length;
+    return b.cohesion - a.cohesion;
+  });
+
+  const singles = candidates
+    .filter((node) => !groupedIds.has(node.id))
+    .sort(compareThemeNodes);
+
+  return { groups, singles };
+}
+
+function renderDiscoverCard(node) {
+  const decision = getDiscoverDecision(node.id);
+  const card = document.createElement("article");
+  card.className = `keeper-card${decision === "keeper" ? " keeper" : ""}${decision === "loser" ? " loser" : ""}`;
+
+  const img = document.createElement("img");
+  img.alt = "";
+  setImageWithFallback(img, node);
+  card.appendChild(img);
+
+  const body = document.createElement("div");
+  body.className = "keeper-card-body";
+
+  const title = document.createElement("div");
+  title.className = "keeper-card-title";
+  title.textContent = truncate(node.title || node.id, 74);
+  body.appendChild(title);
+
+  const meta = document.createElement("div");
+  meta.className = "keeper-card-meta";
+  const decisionLabel = decision === "keeper"
+    ? "Marked keeper"
+    : decision === "loser"
+      ? "Marked loser"
+      : "Undecided";
+  meta.textContent = `${decisionLabel} · Similarity links ${node.neighbor_count} · Isolation ${node.isolation_score.toFixed(2)}`;
+  body.appendChild(meta);
+
+  const actions = document.createElement("div");
+  actions.className = "keeper-card-actions";
+
+  const keepBtn = document.createElement("button");
+  keepBtn.className = "keeper-card-btn";
+  keepBtn.textContent = decision === "keeper" ? "Keeper" : "Mark keeper";
+  keepBtn.disabled = decision === "keeper";
+  keepBtn.onclick = () => setDiscoverDecision(node.id, "keeper", "Marked as keeper.");
+  actions.appendChild(keepBtn);
+
+  const loseBtn = document.createElement("button");
+  loseBtn.className = "keeper-card-btn danger";
+  loseBtn.textContent = decision === "loser" ? "Loser" : "Mark loser";
+  loseBtn.disabled = decision === "loser";
+  loseBtn.onclick = () => setDiscoverDecision(node.id, "loser", "Marked as loser.");
+  actions.appendChild(loseBtn);
+
+  if (decision) {
+    const clearBtn = document.createElement("button");
+    clearBtn.className = "keeper-card-btn";
+    clearBtn.textContent = "Clear";
+    clearBtn.onclick = () => setDiscoverDecision(node.id, "", "Cleared pick for this item.");
+    actions.appendChild(clearBtn);
+  }
+
+  const detailBtn = document.createElement("button");
+  detailBtn.className = "keeper-card-btn";
+  detailBtn.textContent = "Details";
+  detailBtn.onclick = () => showDetail(node);
+  actions.appendChild(detailBtn);
+
+  body.appendChild(actions);
+  card.appendChild(body);
+  return card;
+}
+
+function renderDiscoverReview(panel) {
+  if (!panel) return;
+  panel.style.display = "block";
+  panel.innerHTML = "";
+  const collectionName = cleanCollectionLabel(currentReviewCollectionName());
+  const nearbyHint = state.collectionId && state.hasNearbyContext
+    ? ` Nearby context is ${state.showNearbyContext ? "included" : "hidden"}.`
+    : "";
+
+  const intro = document.createElement("div");
+  intro.className = "keeper-intro";
+  intro.textContent = `Collection review: ${collectionName || "All items"}. Themes are ordered strongest to weakest by dominance. Browse top-down to pick representative keepers.${nearbyHint}`;
+  panel.appendChild(intro);
+
+  const counts = discoverDecisionCounts();
+  const summary = document.createElement("div");
+  summary.className = "keeper-intro";
+  summary.textContent = `Picks: ${counts.keepers} keepers, ${counts.losers} losers, ${counts.undecided} undecided. Graph badges: K keeper, L loser, ? undecided.`;
+  panel.appendChild(summary);
+
+  const candidates = getDiscoverCandidateNodes();
+  if (!candidates.length) {
+    const empty = document.createElement("div");
+    empty.className = "keeper-empty";
+    empty.textContent = "No items match the current filters.";
+    panel.appendChild(empty);
+    return;
+  }
+
+  const { groups, singles } = buildDiscoverGroups();
+  const maxCards = 240;
+  let renderedCards = 0;
+
+  groups.forEach((group, idx) => {
+    if (renderedCards >= maxCards) return;
+    const section = document.createElement("section");
+    section.className = "keeper-group";
+
+    const head = document.createElement("div");
+    head.className = "keeper-group-head";
+
+    const title = document.createElement("div");
+    title.className = "keeper-group-title";
+    title.textContent = `Theme ${idx + 1} · ${group.nodeIds.length} items`;
+    head.appendChild(title);
+
+    const meta = document.createElement("div");
+    meta.className = "keeper-group-meta";
+    meta.textContent = `Dominance ${group.dominance.toFixed(2)} · Cohesion ${group.cohesion.toFixed(2)} · Density ${(group.density * 100).toFixed(0)}%`;
+    head.appendChild(meta);
+    section.appendChild(head);
+
+    const cards = document.createElement("div");
+    cards.className = "keeper-cards";
+    const groupNodes = group.nodeIds
+      .map((id) => state.nodeById.get(id))
+      .filter(Boolean)
+      .sort(compareThemeNodes);
+
+    for (const node of groupNodes) {
+      if (renderedCards >= maxCards) break;
+      cards.appendChild(renderDiscoverCard(node));
+      renderedCards += 1;
+    }
+    section.appendChild(cards);
+    panel.appendChild(section);
+  });
+
+  if (renderedCards < maxCards && singles.length) {
+    const section = document.createElement("section");
+    section.className = "keeper-group";
+
+    const head = document.createElement("div");
+    head.className = "keeper-group-head";
+
+    const title = document.createElement("div");
+    title.className = "keeper-group-title";
+    title.textContent = `Loose items · ${singles.length}`;
+    head.appendChild(title);
+
+    const meta = document.createElement("div");
+    meta.className = "keeper-group-meta";
+    meta.textContent = "No strong theme link at current similarity threshold";
+    head.appendChild(meta);
+    section.appendChild(head);
+
+    const cards = document.createElement("div");
+    cards.className = "keeper-cards";
+    for (const node of singles) {
+      if (renderedCards >= maxCards) break;
+      cards.appendChild(renderDiscoverCard(node));
+      renderedCards += 1;
+    }
+    section.appendChild(cards);
+    panel.appendChild(section);
+  }
+
+  if (renderedCards < candidates.length) {
+    const note = document.createElement("div");
+    note.className = "keeper-intro";
+    note.textContent = `Showing top ${renderedCards} items to keep the review responsive. Narrow filters or search to inspect the rest.`;
+    panel.appendChild(note);
+  }
+}
+
+function renderReviewPanel() {
+  const panel = document.getElementById("review-panel");
+  if (!panel) return;
+  if (state.viewMode === "graph") {
+    panel.style.display = "none";
+    panel.innerHTML = "";
+    return;
+  }
+  if (state.mode === "discover") {
+    renderDiscoverReview(panel);
+    return;
+  }
+  if (state.mode === "duplicates") {
+    renderKeeperReview(panel);
+    return;
+  }
+  if (state.mode === "outliers") {
+    renderOutlierReview(panel);
+    return;
+  }
+  panel.style.display = "block";
+  panel.innerHTML = "";
+}
+
 function initialize(data) {
   state.raw = data || {};
-  state.nodes = (data.nodes || []).map((node) => ({
-    ...node,
-    isolation_score: Number(node.isolation_score || 0),
-    bridge_score: Number(node.bridge_score || 0),
-    neighbor_count: Number(node.neighbor_count || 0),
-    is_outlier: Boolean(node.is_outlier),
-    _removed: false,
-  }));
+  state.apiBase = sanitizeApiBase(data.meta && data.meta.api_base);
+  if (!state.apiBase && typeof window !== "undefined" && window.location) {
+    const proto = String(window.location.protocol || "");
+    if (proto === "http:" || proto === "https:") {
+      state.apiBase = sanitizeApiBase(window.location.origin);
+    }
+  }
+  state.collectionId = String((data.meta && data.meta.collection_id) || "").trim();
+  state.focusCollectionName = String((data.meta && data.meta.collection_name) || "").trim();
+  const includeNeighbors = Number((data.meta && data.meta.include_neighbors) || 0);
+
+  state.nodes = (data.nodes || []).map((node) => {
+    const collectionIds = Array.isArray(node.collection_ids)
+      ? node.collection_ids.map((id) => String(id))
+      : [];
+    const inFocusFromPayload = Boolean(node.in_focus_collection);
+    const inFocusFallback = Boolean(state.collectionId && collectionIds.includes(state.collectionId));
+    const inFocusCollection = state.collectionId ? (inFocusFromPayload || inFocusFallback) : false;
+    const nearbyFromPayload = Boolean(node.is_nearby_context);
+    const nearbyFallback = Boolean(state.collectionId && includeNeighbors > 0 && !inFocusCollection);
+    const isNearbyContext = state.collectionId ? (nearbyFromPayload || nearbyFallback) : false;
+
+    return {
+      ...node,
+      collection_ids: collectionIds,
+      isolation_score: Number(node.isolation_score || 0),
+      bridge_score: Number(node.bridge_score || 0),
+      neighbor_count: Number(node.neighbor_count || 0),
+      is_outlier: Boolean(node.is_outlier),
+      in_focus_collection: inFocusCollection,
+      is_nearby_context: isNearbyContext,
+      _removed: false,
+    };
+  });
+
+  if (state.collectionId && !state.focusCollectionName) {
+    for (const node of state.nodes) {
+      const ids = Array.isArray(node.collection_ids) ? node.collection_ids : [];
+      const idx = ids.indexOf(state.collectionId);
+      if (idx < 0) continue;
+      const names = nodeCollectionNames(node);
+      const inferredName = String(names[idx] || "").trim();
+      if (inferredName) {
+        state.focusCollectionName = inferredName;
+        break;
+      }
+    }
+  }
+
+  state.hasNearbyContext = state.nodes.some((node) => node.is_nearby_context);
+  state.showNearbyContext = false;
+
   state.nodeById = new Map(state.nodes.map((node) => [node.id, node]));
   state.links = (data.links || [])
     .filter((link) => state.nodeById.has(link.source) && state.nodeById.has(link.target))
-    .map((link) => ({
-      source: link.source,
-      target: link.target,
-      similarity: Number(link.similarity || 0),
-    }));
-  state.apiBase = sanitizeApiBase(data.meta && data.meta.api_base);
-  state.collectionId = String((data.meta && data.meta.collection_id) || "").trim();
+    .map((link) => {
+      const sourceNode = state.nodeById.get(link.source);
+      const targetNode = state.nodeById.get(link.target);
+      const similarity = Number(link.similarity || 0);
+      const sourceCluster = sourceNode ? sourceNode.cluster : 0;
+      const targetCluster = targetNode ? targetNode.cluster : 0;
+      const isBridge = sourceCluster !== targetCluster;
+      return {
+        source: link.source,
+        target: link.target,
+        similarity,
+        sourceCluster,
+        targetCluster,
+        isBridge,
+        isWeakBridge: isBridge && similarity < state.weakBridgeThreshold,
+      };
+    });
+  state.pendingDeleteIds = new Set();
+  state.outlierKeptIds = new Set();
+  state.duplicateGroupIndex = 0;
+  state.duplicateLosersByGroup = new Map();
+  state.nodes.forEach((node) => {
+    node._previewCandidates = imageCandidates(node);
+    node._previewIdx = 0;
+    node._previewUrl = node._previewCandidates.length ? node._previewCandidates[0] : "";
+  });
   state.selectedNode = null;
 
   const scoreList = state.nodes.map((node) => node.isolation_score).sort((a, b) => a - b);
@@ -675,15 +2521,52 @@ function initialize(data) {
   const slider = document.getElementById("outlier-slider");
   slider.value = state.outlierThreshold.toFixed(2);
   document.getElementById("outlier-value").textContent = slider.value;
+  const discoverSlider = document.getElementById("discover-slider");
+  discoverSlider.value = state.discoverThreshold.toFixed(2);
+  renderDiscoverThresholdLabel();
+  const dupSlider = document.getElementById("duplicate-slider");
+  dupSlider.value = state.duplicateThreshold.toFixed(2);
+  document.getElementById("duplicate-value").textContent = dupSlider.value;
+  const dupCohesionSlider = document.getElementById("duplicate-cohesion-slider");
+  dupCohesionSlider.value = state.duplicateMinCohesion.toFixed(2);
+  document.getElementById("duplicate-cohesion-value").textContent = dupCohesionSlider.value;
 
-  const collectionSet = new Set();
+  const collectionCounts = new Map();
   state.nodes.forEach((node) => {
-    const colls = (node.collections && node.collections.length) ? node.collections : ["Uncategorized"];
-    colls.forEach((name) => collectionSet.add(name));
+    nodeCollectionNames(node).forEach((name) => {
+      collectionCounts.set(name, (collectionCounts.get(name) || 0) + 1);
+    });
   });
-  state.allCollections = [...collectionSet].sort();
-  state.activeCollections = new Set(state.allCollections);
+  state.allCollections = [...collectionCounts.keys()].sort();
+  if (state.collectionId) {
+    const focusName = state.focusCollectionName || state.collectionId;
+    state.reviewCollections = [focusName];
+    state.reviewCollectionCounts = new Map([[focusName, countFocusNodes()]]);
+    state.reviewCollectionIndex = 0;
+    state.activeCollections = new Set([focusName]);
+  } else {
+    const reviewEntries = [...collectionCounts.entries()]
+      .filter(([name]) => name !== "Uncategorized")
+      .sort((a, b) => {
+        if (b[1] !== a[1]) return b[1] - a[1];
+        return String(a[0]).localeCompare(String(b[0]));
+      });
+    if (!reviewEntries.length && collectionCounts.has("Uncategorized")) {
+      reviewEntries.push(["Uncategorized", collectionCounts.get("Uncategorized") || 0]);
+    }
+    state.reviewCollections = reviewEntries.map(([name]) => name);
+    state.reviewCollectionCounts = new Map(collectionCounts);
+    state.reviewCollectionIndex = 0;
+    state.activeCollections = state.reviewCollections.length
+      ? new Set([state.reviewCollections[0]])
+      : new Set(state.allCollections);
+  }
+  renderCollectionReviewControls();
+  renderNearbyToggle();
   state.colorScale = d3.scaleOrdinal().domain(state.allCollections).range(PALETTE);
+
+  rebuildDuplicateStats();
+  rebuildDuplicateGroups();
 
   const outlierCount = state.nodes.filter((node) => node.is_outlier).length;
   const clusterCount = new Set(state.nodes.map((node) => node.cluster)).size;
@@ -692,6 +2575,9 @@ function initialize(data) {
   document.getElementById("stat-clusters").textContent = String(clusterCount);
   document.getElementById("stat-outliers").textContent = String(outlierCount);
   setMetaNote(data.meta || {});
+  renderBridgeToggleLabel();
+  renderDuplicateGroupControls();
+  updateLayoutOffsets();
 
   buildLegend();
   buildGraph();
@@ -712,7 +2598,7 @@ function buildLegend() {
     item.className = "legend-item";
     item.innerHTML = `
       <span class="legend-dot" style="background:${state.colorScale(name)}"></span>
-      <span>${name.replace(/^CB:\s*/, "")}</span>
+      <span>${cleanCollectionLabel(name)}</span>
       <span class="legend-count">${count}</span>
     `;
     item.onclick = () => {
@@ -732,6 +2618,7 @@ function buildLegend() {
 function buildGraph() {
   state.width = window.innerWidth;
   state.height = window.innerHeight;
+  buildClusterAnchors();
 
   const svg = d3.select("#graph")
     .attr("width", state.width)
@@ -750,9 +2637,9 @@ function buildGraph() {
   const linkSel = linkLayer.selectAll("line")
     .data(state.links)
     .join("line")
-    .attr("stroke", "#2a3d5f")
-    .attr("stroke-width", (d) => Math.max(0.4, d.similarity * 1.8))
-    .attr("opacity", 0.09);
+    .attr("stroke", (d) => (d.isBridge ? "#6f95c4" : "#9fc3ef"))
+    .attr("stroke-width", (d) => Math.max(0.9, Number(d.similarity || 0) * 2.4))
+    .attr("opacity", (d) => 0.14 + Math.min(0.2, Number(d.similarity || 0) * 0.16));
 
   const nodeSel = nodeLayer.selectAll("g")
     .data(state.nodes)
@@ -760,25 +2647,99 @@ function buildGraph() {
     .attr("class", "node-group")
     .call(dragBehavior());
 
-  nodeSel.append("circle")
-    .attr("class", "node-ring")
-    .attr("r", (d) => nodeRadius(d) + 2.3)
+  nodeSel.append("rect")
+    .attr("class", "node-surface")
+    .attr("x", (d) => -nodeVisualSize(d) / 2)
+    .attr("y", (d) => -nodeVisualSize(d) / 2)
+    .attr("width", (d) => nodeVisualSize(d))
+    .attr("height", (d) => nodeVisualSize(d))
+    .attr("rx", 5)
+    .attr("ry", 5)
+    .attr("fill", (d) => state.colorScale(primaryCollection(d)))
+    .attr("opacity", 0.28);
+
+  nodeSel.append("image")
+    .attr("class", "node-thumb")
+    .attr("x", (d) => -nodeVisualSize(d) / 2)
+    .attr("y", (d) => -nodeVisualSize(d) / 2)
+    .attr("width", (d) => nodeVisualSize(d))
+    .attr("height", (d) => nodeVisualSize(d))
+    .attr("preserveAspectRatio", "xMidYMid slice")
+    .attr("href", (d) => d._previewUrl || "")
+    .attr("opacity", (d) => d._previewUrl ? 0.98 : 0);
+
+  nodeSel.selectAll(".node-thumb").each(function(d) {
+    const imageEl = this;
+    const urls = Array.isArray(d._previewCandidates) ? d._previewCandidates : [];
+    let idx = Number(d._previewIdx || 0);
+    const setCandidate = (nextIdx) => {
+      idx = nextIdx;
+      d._previewIdx = nextIdx;
+      d._previewUrl = urls[nextIdx] || "";
+      d3.select(imageEl)
+        .attr("href", d._previewUrl || "")
+        .attr("opacity", d._previewUrl ? 0.98 : 0);
+    };
+    if (!urls.length) {
+      d._previewUrl = "";
+      d3.select(imageEl).attr("href", "").attr("opacity", 0);
+      return;
+    }
+    imageEl.onerror = () => {
+      const nextIdx = idx + 1;
+      if (nextIdx >= urls.length) {
+        d._previewUrl = "";
+        d3.select(imageEl).attr("href", "").attr("opacity", 0);
+        return;
+      }
+      setCandidate(nextIdx);
+    };
+    imageEl.onload = () => {
+      d3.select(imageEl).attr("opacity", 0.98);
+    };
+    if (!d._previewUrl) setCandidate(0);
+  });
+
+  nodeSel.append("rect")
+    .attr("class", "node-frame")
+    .attr("x", (d) => -nodeVisualSize(d) / 2)
+    .attr("y", (d) => -nodeVisualSize(d) / 2)
+    .attr("width", (d) => nodeVisualSize(d))
+    .attr("height", (d) => nodeVisualSize(d))
+    .attr("rx", 5)
+    .attr("ry", 5)
     .attr("fill", "none")
     .attr("stroke", "#334a69")
     .attr("stroke-width", 1.4)
-    .attr("opacity", 0.7);
-
-  nodeSel.append("circle")
-    .attr("class", "node-core")
-    .attr("r", (d) => nodeRadius(d))
-    .attr("fill", (d) => state.colorScale(primaryCollection(d)))
-    .attr("stroke", "#0f1829")
-    .attr("stroke-width", 1.2)
     .attr("opacity", 0.9);
+
+  nodeSel.append("rect")
+    .attr("class", "node-decision-pill")
+    .attr("x", (d) => nodeVisualSize(d) / 2 - 13)
+    .attr("y", (d) => -nodeVisualSize(d) / 2 + 2)
+    .attr("width", 11)
+    .attr("height", 11)
+    .attr("rx", 3)
+    .attr("ry", 3)
+    .attr("fill", "#d9a93e")
+    .attr("stroke", "#7a5d26")
+    .attr("stroke-width", 1.1)
+    .attr("opacity", 0);
+
+  nodeSel.append("text")
+    .attr("class", "node-decision-symbol")
+    .attr("x", (d) => nodeVisualSize(d) / 2 - 7.5)
+    .attr("y", (d) => -nodeVisualSize(d) / 2 + 10.4)
+    .attr("text-anchor", "middle")
+    .attr("font-size", "8px")
+    .attr("font-weight", "700")
+    .attr("fill", "#fff7df")
+    .attr("opacity", 0)
+    .text("?");
 
   nodeSel.filter((d) => d.is_centroid)
     .append("text")
-    .attr("dy", (d) => nodeRadius(d) + 12)
+    .attr("dy", (d) => nodeVisualSize(d) / 2 + 12)
     .attr("text-anchor", "middle")
     .attr("font-size", "10px")
     .attr("fill", "#8ca3c2")
@@ -795,12 +2756,32 @@ function buildGraph() {
       "link",
       d3.forceLink(state.links)
         .id((d) => d.id)
-        .distance((d) => 90 / Math.max(0.15, d.similarity || 0.2))
-        .strength((d) => Math.min(0.8, Math.max(0.08, d.similarity || 0.2)))
+        .distance((d) => {
+          const base = 90 / Math.max(0.15, d.similarity || 0.2);
+          return d.isBridge ? base * 1.65 : base;
+        })
+        .strength((d) => {
+          const base = Math.min(0.8, Math.max(0.1, (d.similarity || 0.2) * 0.72));
+          return d.isBridge ? base * 0.3 : base;
+        })
     )
-    .force("charge", d3.forceManyBody().strength(-120).distanceMax(360))
+    .force("charge", d3.forceManyBody().strength(-190).distanceMax(430))
     .force("center", d3.forceCenter(state.width / 2, state.height / 2))
-    .force("collide", d3.forceCollide().radius((d) => nodeRadius(d) + 4))
+    .force("collide", d3.forceCollide().radius((d) => nodeVisualSize(d) / 2 + 8))
+    .force(
+      "cluster-x",
+      d3.forceX((d) => {
+        const anchor = state.clusterAnchors.get(d.cluster);
+        return anchor ? anchor.x : state.width / 2;
+      }).strength(state.clusterAnchorStrength)
+    )
+    .force(
+      "cluster-y",
+      d3.forceY((d) => {
+        const anchor = state.clusterAnchors.get(d.cluster);
+        return anchor ? anchor.y : state.height / 2;
+      }).strength(state.clusterAnchorStrength)
+    )
     .force("x", d3.forceX(state.width / 2).strength(0.03))
     .force("y", d3.forceY(state.height / 2).strength(0.03))
     .alphaDecay(0.018)
@@ -844,6 +2825,59 @@ function fitToGraph() {
   );
 }
 
+function fitToNodes(nodes, duration = 500) {
+  if (!state.svg || !state.zoomBehavior || !nodes.length) return;
+  if (!nodes.some((node) => Number.isFinite(node.x) && Number.isFinite(node.y))) return;
+
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  nodes.forEach((node) => {
+    const x = Number.isFinite(node.x) ? node.x : state.width / 2;
+    const y = Number.isFinite(node.y) ? node.y : state.height / 2;
+    const r = nodeVisualSize(node) / 2;
+    minX = Math.min(minX, x - r);
+    minY = Math.min(minY, y - r);
+    maxX = Math.max(maxX, x + r);
+    maxY = Math.max(maxY, y + r);
+  });
+
+  const width = Math.max(24, maxX - minX);
+  const height = Math.max(24, maxY - minY);
+  const pad = 120;
+  const scale = Math.min(
+    state.width / (width + pad * 2),
+    state.height / (height + pad * 2),
+    2.2
+  );
+  const tx = state.width / 2 - (minX + width / 2) * scale;
+  const ty = state.height / 2 - (minY + height / 2) * scale;
+  const zoomTransform = d3.zoomIdentity.translate(tx, ty).scale(scale);
+  if (duration > 0) {
+    state.svg.transition().duration(duration).call(state.zoomBehavior.transform, zoomTransform);
+  } else {
+    state.svg.call(state.zoomBehavior.transform, zoomTransform);
+  }
+}
+
+function scheduleFocusFit(visibleIds, force = false) {
+  if (state.viewMode !== "graph") return;
+  const ids = [...visibleIds].sort();
+  const signature = `${state.mode}|${state.reviewCollectionIndex}|${state.showNearbyContext ? 1 : 0}|${state.search}|${ids.join(",")}`;
+  if (!force && signature === state.lastFocusSignature) return;
+  state.lastFocusSignature = signature;
+  if (state.focusFitTimer) {
+    clearTimeout(state.focusFitTimer);
+    state.focusFitTimer = null;
+  }
+  state.focusFitTimer = setTimeout(() => {
+    const focusedNodes = state.nodes.filter((node) => visibleIds.has(node.id) && !node._removed);
+    fitToNodes(focusedNodes, 420);
+    state.focusFitTimer = null;
+  }, 90);
+}
+
 function dragBehavior() {
   return d3.drag()
     .on("start", (event, d) => {
@@ -881,13 +2915,22 @@ function nodeMatchesSearch(node, query) {
 }
 
 function nodeMatchesCollection(node) {
-  const colls = (node.collections && node.collections.length) ? node.collections : ["Uncategorized"];
-  return colls.some((name) => state.activeCollections.has(name));
+  return nodeIsInCollectionScope(node);
 }
 
 function nodeMatchesMode(node) {
-  if (state.mode !== "outliers") return true;
-  return node.isolation_score >= state.outlierThreshold;
+  if (state.mode === "outliers") {
+    return node.isolation_score >= state.outlierThreshold && !state.outlierKeptIds.has(node.id);
+  }
+  if (state.mode === "duplicates") {
+    if (state.duplicateShowAll) {
+      return state.duplicateVisibleNodeIds.has(node.id);
+    }
+    const group = getCurrentDuplicateGroup();
+    if (!group) return false;
+    return group.nodeIdSet.has(node.id);
+  }
+  return true;
 }
 
 function nodeIsVisible(node) {
@@ -899,14 +2942,59 @@ function updateVisibility() {
   if (!state.nodeLayer || !state.linkLayer) return;
 
   const visibleIds = new Set(state.nodes.filter(nodeIsVisible).map((node) => node.id));
+  const dupGroup = state.mode === "duplicates" ? getCurrentDuplicateGroup() : null;
+  const dupKeeperId = dupGroup ? getDuplicateKeeperId(dupGroup) : "";
+  const dupLoserIds = dupGroup ? new Set(getDuplicateLoserIds(dupGroup)) : new Set();
 
   state.nodeLayer.selectAll(".node-group")
     .attr("opacity", (d) => visibleIds.has(d.id) ? 1 : 0.06)
     .attr("pointer-events", (d) => visibleIds.has(d.id) ? "auto" : "none");
 
-  state.nodeLayer.selectAll(".node-ring")
+  state.nodeLayer.selectAll(".node-thumb")
+    .attr("opacity", (d) => {
+      if (!d._previewUrl) return 0;
+      if (!visibleIds.has(d.id)) return 0.08;
+      if (state.mode === "discover" && visibleIds.has(d.id)) {
+        const decision = getDiscoverDecision(d.id);
+        if (decision === "loser") return 0.24;
+        if (decision === "keeper") return 1.0;
+      }
+      if (state.mode === "duplicates" && dupGroup) {
+        if (dupLoserIds.has(d.id) || state.pendingDeleteIds.has(d.id)) return 0.22;
+        if (d.id === dupKeeperId) return 1.0;
+        return 0.62;
+      }
+      return 0.98;
+    });
+
+  state.nodeLayer.selectAll(".node-surface")
+    .attr("opacity", (d) => {
+      if (!visibleIds.has(d.id)) return 0.2;
+      if (state.mode === "discover" && visibleIds.has(d.id)) {
+        const decision = getDiscoverDecision(d.id);
+        if (decision === "loser") return 0.58;
+        if (decision === "keeper") return 0.12;
+      }
+      if (state.mode === "duplicates" && dupGroup) {
+        if (dupLoserIds.has(d.id) || state.pendingDeleteIds.has(d.id)) return 0.56;
+        if (d.id === dupKeeperId) return 0.14;
+        return 0.3;
+      }
+      return 0.28;
+    });
+
+  state.nodeLayer.selectAll(".node-frame")
     .attr("stroke", (d) => {
       if (state.selectedNode && state.selectedNode.id === d.id) return "#f3fbff";
+      if (state.mode === "discover" && visibleIds.has(d.id)) {
+        const decision = getDiscoverDecision(d.id);
+        return discoverDecisionVisual(decision).color;
+      }
+      if (state.mode === "duplicates" && visibleIds.has(d.id)) {
+        if (dupLoserIds.has(d.id) || state.pendingDeleteIds.has(d.id)) return "#ef4444";
+        if (d.id === dupKeeperId) return "#34d399";
+        return "#5c708e";
+      }
       if (state.mode === "outliers" && visibleIds.has(d.id)) {
         return d.is_outlier ? "#f97316" : "#3a5275";
       }
@@ -914,25 +3002,212 @@ function updateVisibility() {
     })
     .attr("stroke-width", (d) => {
       if (state.selectedNode && state.selectedNode.id === d.id) return 2.8;
+      if (state.mode === "discover" && visibleIds.has(d.id)) {
+        const decision = getDiscoverDecision(d.id);
+        if (decision === "keeper" || decision === "loser") return 2.6;
+        return 2.0;
+      }
+      if (state.mode === "duplicates" && visibleIds.has(d.id)) {
+        if (dupLoserIds.has(d.id) || state.pendingDeleteIds.has(d.id)) return 2.6;
+        if (d.id === dupKeeperId) return 2.8;
+        return 1.6;
+      }
       if (state.mode === "outliers" && visibleIds.has(d.id) && d.is_outlier) return 2.4;
       return 1.4;
     });
 
+  state.nodeLayer.selectAll(".node-decision-pill")
+    .attr("fill", (d) => graphDecisionVisualForNode(d, visibleIds, dupGroup, dupKeeperId, dupLoserIds).color)
+    .attr("stroke", (d) => graphDecisionVisualForNode(d, visibleIds, dupGroup, dupKeeperId, dupLoserIds).stroke)
+    .attr("opacity", (d) => graphDecisionVisualForNode(d, visibleIds, dupGroup, dupKeeperId, dupLoserIds).show ? 0.95 : 0);
+
+  state.nodeLayer.selectAll(".node-decision-symbol")
+    .text((d) => graphDecisionVisualForNode(d, visibleIds, dupGroup, dupKeeperId, dupLoserIds).symbol)
+    .attr("opacity", (d) => graphDecisionVisualForNode(d, visibleIds, dupGroup, dupKeeperId, dupLoserIds).show ? 1 : 0);
+
   state.linkLayer.selectAll("line")
+    .attr("stroke", (d) => {
+      if (state.mode === "discover") {
+        const similarity = Number(d.similarity || 0);
+        if (similarity >= state.discoverThreshold) {
+          return d.isBridge ? "#7ea9dd" : "#b3d8ff";
+        }
+        return "#2c3f5b";
+      }
+      if (state.mode === "duplicates") {
+        return isStrictDuplicateLink(d) ? "#f4c05e" : "#3f5a7d";
+      }
+      return d.isBridge ? "#6f95c4" : "#9fc3ef";
+    })
+    .attr("stroke-width", (d) => {
+      if (state.mode === "discover") {
+        const similarity = Number(d.similarity || 0);
+        if (similarity >= state.discoverThreshold) {
+          return Math.max(1.1, similarity * 2.8);
+        }
+        return 0.7;
+      }
+      if (state.mode === "duplicates") {
+        if (isStrictDuplicateLink(d)) {
+          return Math.max(1.6, Number(d.similarity || 0) * 3.1);
+        }
+        return 0.9;
+      }
+      const similarity = Number(d.similarity || 0);
+      const base = Math.max(0.9, similarity * 2.4);
+      if (!state.showWeakBridges && d.isWeakBridge) return base * 0.6;
+      if (d.isBridge) return base * 0.88;
+      return base;
+    })
     .attr("opacity", (d) => {
       const sid = linkEndpointId(d.source);
       const tid = linkEndpointId(d.target);
       const visible = visibleIds.has(sid) && visibleIds.has(tid);
-      if (!visible) return 0.01;
-      return state.mode === "outliers" ? 0.12 : 0.09;
+      if (!visible) return 0.02;
+      if (state.mode === "discover") {
+        const similarity = Number(d.similarity || 0);
+        if (similarity >= state.discoverThreshold) {
+          const simBoost = Math.min(0.28, similarity * 0.18);
+          const bridgePenalty = d.isBridge ? 0.05 : 0;
+          return 0.22 + simBoost - bridgePenalty;
+        }
+        return 0.015;
+      }
+      if (state.mode === "duplicates") {
+        return isStrictDuplicateLink(d) ? 0.78 : 0.06;
+      }
+      if (!state.showWeakBridges && d.isWeakBridge) return 0;
+      const simBoost = Math.min(0.16, Number(d.similarity || 0) * 0.12);
+      const bridgePenalty = d.isBridge ? 0.04 : 0;
+      const base = (state.mode === "outliers" ? 0.2 : 0.16) - bridgePenalty;
+      return base + simBoost;
     });
+
+  if (state.mode === "discover") {
+    renderDiscoverThresholdLabel(visibleIds);
+  }
+  renderBridgeToggleLabel(visibleIds);
+  scheduleFocusFit(visibleIds);
+
+  renderReviewPanel();
 }
 
 function applyMode() {
+  const isDiscoverMode = state.mode === "discover";
+  const isDuplicateMode = state.mode === "duplicates";
+  const isOutlierMode = state.mode === "outliers";
+  const isGridView = state.viewMode === "grid";
+  const isGraphView = state.viewMode === "graph";
+  const isReviewMode = isGridView;
   document.getElementById("mode-discover").classList.toggle("active", state.mode === "discover");
-  document.getElementById("mode-outliers").classList.toggle("active", state.mode === "outliers");
-  document.getElementById("outlier-controls").style.display = state.mode === "outliers" ? "inline-flex" : "none";
+  document.getElementById("mode-outliers").classList.toggle("active", isOutlierMode);
+  document.getElementById("mode-duplicates").classList.toggle("active", isDuplicateMode);
+  document.getElementById("discover-controls").style.display =
+    (isDiscoverMode && isGraphView) ? "inline-flex" : "none";
+  renderViewControls();
+  document.getElementById("outlier-controls").style.display = isOutlierMode ? "inline-flex" : "none";
+  document.getElementById("duplicate-controls").style.display = isDuplicateMode ? "inline-flex" : "none";
+  const bridgeBtn = document.getElementById("toggle-bridge-links");
+  const canShowBridgeToggle = isGraphView && !isDuplicateMode;
+  bridgeBtn.disabled = !canShowBridgeToggle;
+  bridgeBtn.style.display = canShowBridgeToggle ? "inline-block" : "none";
+  renderNearbyToggle();
+  document.getElementById("legend").style.display = "none";
+  document.getElementById("meta-note").style.display = "block";
+  document.getElementById("graph").style.pointerEvents = isReviewMode ? "none" : "auto";
+  document.getElementById("graph").style.opacity = isReviewMode ? "0.16" : "1";
+  renderDuplicateGroupControls();
+  renderReviewPanel();
+  updateLayoutOffsets();
   updateVisibility();
+}
+
+function moveDuplicateGroup(delta) {
+  if (!state.duplicateGroups.length) return;
+  state.duplicateGroupIndex = Math.max(
+    0,
+    Math.min(state.duplicateGroupIndex + delta, state.duplicateGroups.length - 1)
+  );
+  state.selectedNode = null;
+  document.getElementById("detail").classList.remove("open");
+  document.getElementById("action-status").textContent = "";
+  renderDuplicateGroupControls();
+  renderReviewPanel();
+  updateVisibility();
+}
+
+function queueCurrentGroupLosers() {
+  const group = getCurrentDuplicateGroup();
+  if (!group) return;
+  const losers = getGroupLoserIds(group);
+  const statusEl = document.getElementById("action-status");
+  if (!losers.length) {
+    statusEl.textContent = "No losers marked for this group yet.";
+    return;
+  }
+  losers.forEach((id) => state.pendingDeleteIds.add(id));
+  statusEl.textContent = `Queued ${losers.length} loser item(s) from this group.`;
+  renderDuplicateGroupControls();
+  updateVisibility();
+}
+
+async function applyDeletionBatch(assetIds, label) {
+  if (!assetIds.length) return;
+  const statusEl = document.getElementById("action-status");
+  if (state.apiBase && state.collectionId) {
+    statusEl.textContent = `Deleting ${assetIds.length} queued item(s) from collection...`;
+    const url = `${state.apiBase}/api/collections/${encodeURIComponent(state.collectionId)}/items/remove`;
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asset_ids: assetIds }),
+      });
+      const payload = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(payload.error || `HTTP ${resp.status}`);
+      }
+      assetIds.forEach((id) => {
+        const node = state.nodeById.get(id);
+        if (node) node._removed = true;
+        state.pendingDeleteIds.delete(id);
+      });
+      statusEl.textContent = `${label}: removed ${assetIds.length} item(s) from collection.`;
+    } catch (err) {
+      statusEl.textContent = `${label} failed: ${err.message}`;
+      return;
+    }
+  } else {
+    assetIds.forEach((id) => {
+      const node = state.nodeById.get(id);
+      if (node) node._removed = true;
+      state.pendingDeleteIds.delete(id);
+    });
+    statusEl.textContent = `${label}: applied as session-only hide (no DB writes configured).`;
+  }
+  rebuildDuplicateStats();
+  rebuildDuplicateGroups();
+  renderDuplicateGroupControls();
+  renderNearbyToggle();
+  setMetaNote(state.raw ? (state.raw.meta || {}) : {});
+  assetIds.forEach((id) => state.discoverDecisionById.delete(id));
+  updateVisibility();
+}
+
+async function applyCurrentGroupLosers() {
+  const group = getCurrentDuplicateGroup();
+  if (!group) return;
+  const losers = getGroupLoserIds(group);
+  if (!losers.length) {
+    document.getElementById("action-status").textContent = "No losers marked for this group.";
+    return;
+  }
+  await applyDeletionBatch(losers, "Group delete");
+}
+
+async function applyQueuedLosers() {
+  const ids = [...state.pendingDeleteIds];
+  await applyDeletionBatch(ids, "Queued delete");
 }
 
 function showTooltip(event, node) {
@@ -940,7 +3215,7 @@ function showTooltip(event, node) {
   setImageWithFallback(document.getElementById("tt-image"), node);
   document.getElementById("tt-title").textContent = node.title || node.id;
   document.getElementById("tt-sub").textContent =
-    `${(node.collections || ["Uncategorized"]).join(", ").replace(/CB:\s*/g, "")} | isolation ${node.isolation_score.toFixed(2)}`;
+    `${nodeCollectionNames(node).map((name) => cleanCollectionLabel(name)).join(", ")} | isolation ${node.isolation_score.toFixed(2)}`;
   const tags = document.getElementById("tt-tags");
   tags.innerHTML = "";
   (node.labels || []).slice(0, 8).forEach((label) => {
@@ -985,8 +3260,25 @@ function showDetail(node) {
     document.getElementById("det-source").textContent = "Source: no openable source URL";
   }
 
-  document.getElementById("det-metrics").textContent =
+  let metricsText =
     `Isolation ${node.isolation_score.toFixed(2)} | Bridge ${node.bridge_score.toFixed(2)} | Neighbors ${node.neighbor_count}`;
+  if (state.mode === "discover") {
+    const decision = getDiscoverDecision(node.id);
+    metricsText += decision ? ` | Discover pick: ${decision}` : " | Discover pick: undecided";
+  } else if (state.mode === "duplicates") {
+    const group = getCurrentDuplicateGroup();
+    if (group && group.nodeIdSet.has(node.id)) {
+      const keeperId = getDuplicateKeeperId(group);
+      const loserSet = new Set(getDuplicateLoserIds(group));
+      const role = node.id === keeperId ? "keeper" : loserSet.has(node.id) ? "loser" : "candidate";
+      metricsText += ` | Dup role: ${role}`;
+      metricsText += ` | Group cohesion ${group.cohesion.toFixed(2)}`;
+    }
+  } else if (state.mode === "outliers") {
+    const kept = state.outlierKeptIds.has(node.id);
+    metricsText += kept ? " | Outlier decision: keep" : " | Outlier candidate";
+  }
+  document.getElementById("det-metrics").textContent = metricsText;
   document.getElementById("det-summary").textContent = node.summary || "No summary available.";
 
   const tagsEl = document.getElementById("det-tags");
@@ -1016,7 +3308,8 @@ function showDetail(node) {
     const other = state.nodeById.get(otherId);
     if (!other) return;
     const li = document.createElement("li");
-    li.textContent = `${truncate(other.title || other.id, 42)} - ${(link.similarity * 100).toFixed(0)}%`;
+    const dupTag = isStrictDuplicateLink(link) ? " [dup]" : "";
+    li.textContent = `${truncate(other.title || other.id, 42)} - ${(link.similarity * 100).toFixed(0)}%${dupTag}`;
     li.onclick = () => showDetail(other);
     neighborsEl.appendChild(li);
   });
@@ -1029,9 +3322,59 @@ function showDetail(node) {
   }
 
   const removeBtn = document.getElementById("remove-btn");
-  const canRemove = Boolean(state.collectionId && state.apiBase);
-  removeBtn.style.display = canRemove ? "inline-block" : "none";
-  removeBtn.disabled = false;
+  const keeperBtn = document.getElementById("set-keeper-btn");
+  const loserBtn = document.getElementById("set-loser-btn");
+  if (state.mode === "discover") {
+    const decision = getDiscoverDecision(node.id);
+    keeperBtn.style.display = "inline-block";
+    keeperBtn.textContent = decision === "keeper" ? "Marked keeper" : "Mark as keeper";
+    keeperBtn.disabled = decision === "keeper";
+    loserBtn.style.display = "inline-block";
+    loserBtn.textContent = decision === "loser" ? "Marked loser" : "Mark as loser";
+    loserBtn.disabled = decision === "loser";
+    removeBtn.style.display = "none";
+    removeBtn.disabled = true;
+  } else if (state.mode === "duplicates") {
+    const group = getCurrentDuplicateGroup();
+    const inGroup = Boolean(group && group.nodeIdSet.has(node.id));
+    if (inGroup) {
+      const keeperId = getDuplicateKeeperId(group);
+      const isKeeper = node.id === keeperId;
+      const loserSet = new Set(getDuplicateLoserIds(group));
+      const isLoser = loserSet.has(node.id);
+      keeperBtn.style.display = "inline-block";
+      keeperBtn.textContent = isKeeper ? "Current keeper" : "Mark as keeper";
+      keeperBtn.disabled = isKeeper;
+      loserBtn.style.display = isKeeper ? "none" : "inline-block";
+      loserBtn.textContent = isLoser ? "Unmark loser" : "Mark as loser";
+      loserBtn.disabled = false;
+      removeBtn.style.display = "none";
+      removeBtn.disabled = true;
+    } else {
+      keeperBtn.style.display = "none";
+      loserBtn.style.display = "none";
+      removeBtn.style.display = "none";
+    }
+  } else if (state.mode === "outliers") {
+    const kept = state.outlierKeptIds.has(node.id);
+    keeperBtn.style.display = "inline-block";
+    keeperBtn.textContent = kept ? "Already kept" : "Mark keep";
+    keeperBtn.disabled = kept;
+    loserBtn.style.display = "none";
+    loserBtn.disabled = true;
+    removeBtn.style.display = "none";
+    removeBtn.disabled = true;
+  } else {
+    keeperBtn.style.display = "none";
+    loserBtn.style.display = "none";
+    loserBtn.disabled = true;
+    const canRemove = Boolean(state.collectionId);
+    removeBtn.style.display = canRemove ? "inline-block" : "none";
+    removeBtn.textContent = state.apiBase
+      ? "Remove from this collection"
+      : "Fake remove (session only)";
+    removeBtn.disabled = false;
+  }
 
   updateVisibility();
 }
@@ -1044,30 +3387,94 @@ function closeDetail() {
 }
 
 async function removeSelectedFromCollection() {
-  if (!state.selectedNode || !state.collectionId || !state.apiBase) return;
+  if (!state.selectedNode) return;
   const btn = document.getElementById("remove-btn");
   btn.disabled = true;
   const statusEl = document.getElementById("action-status");
-  statusEl.textContent = "Removing...";
+
+  if (state.mode === "duplicates" || state.mode === "outliers") {
+    statusEl.textContent = "Keeper-first mode: choose keepers in the review panel.";
+    btn.disabled = false;
+    return;
+  }
+
+  if (!state.collectionId) {
+    statusEl.textContent = "No collection scope is active.";
+    btn.disabled = false;
+    return;
+  }
+
+  statusEl.textContent = state.apiBase ? "Removing..." : "Hiding for this session...";
   try {
-    const url = `${state.apiBase}/api/collections/${encodeURIComponent(state.collectionId)}/items/remove`;
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ asset_ids: [state.selectedNode.id] }),
-    });
-    const payload = await resp.json().catch(() => ({}));
-    if (!resp.ok) {
-      throw new Error(payload.error || `HTTP ${resp.status}`);
+    if (state.apiBase) {
+      const url = `${state.apiBase}/api/collections/${encodeURIComponent(state.collectionId)}/items/remove`;
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asset_ids: [state.selectedNode.id] }),
+      });
+      const payload = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(payload.error || `HTTP ${resp.status}`);
+      }
+      state.selectedNode._removed = true;
+      statusEl.textContent = "Removed from collection and hidden from this view.";
+    } else {
+      state.selectedNode._removed = true;
+      statusEl.textContent = "Hidden from this session only. Export again or refresh to restore.";
     }
-    state.selectedNode._removed = true;
-    statusEl.textContent = "Removed from collection and hidden from this view.";
+    state.discoverDecisionById.delete(state.selectedNode.id);
+    renderNearbyToggle();
+    setMetaNote(state.raw ? (state.raw.meta || {}) : {});
     updateVisibility();
   } catch (err) {
     statusEl.textContent = `Remove failed: ${err.message}`;
   } finally {
     btn.disabled = false;
   }
+}
+
+function setSelectedAsKeeper() {
+  if (!state.selectedNode) return;
+  if (state.mode === "discover") {
+    setDiscoverDecision(state.selectedNode.id, "keeper", "Marked as keeper.");
+    showDetail(state.selectedNode);
+    return;
+  }
+  if (state.mode === "outliers") {
+    markOutlierKeep(state.selectedNode.id, "Marked as keep; removed from outlier candidates.");
+    showDetail(state.selectedNode);
+    return;
+  }
+  if (state.mode !== "duplicates") return;
+  const group = getCurrentDuplicateGroup();
+  if (!group || !group.nodeIdSet.has(state.selectedNode.id)) return;
+  setDuplicateGroupKeeper(group, state.selectedNode.id, "Keeper updated for this duplicate group.");
+  showDetail(state.selectedNode);
+}
+
+function setSelectedAsLoser() {
+  if (!state.selectedNode) return;
+  if (state.mode === "discover") {
+    setDiscoverDecision(state.selectedNode.id, "loser", "Marked as loser.");
+    showDetail(state.selectedNode);
+    return;
+  }
+  if (state.mode !== "duplicates") return;
+  const group = getCurrentDuplicateGroup();
+  if (!group || !group.nodeIdSet.has(state.selectedNode.id)) return;
+  const keeperId = getDuplicateKeeperId(group);
+  if (state.selectedNode.id === keeperId) {
+    document.getElementById("action-status").textContent = "Current keeper cannot be marked as loser.";
+    return;
+  }
+  const losers = new Set(getDuplicateLoserIds(group));
+  if (losers.has(state.selectedNode.id)) {
+    clearDuplicateGroupLoser(group, state.selectedNode.id, "Returned to candidates.");
+  } else {
+    setDuplicateGroupLoser(group, state.selectedNode.id, "Marked as loser.");
+  }
+  showDetail(state.selectedNode);
 }
 
 function openSourceForSelected() {
@@ -1083,6 +3490,53 @@ function openSourceForSelected() {
 function updateFallbackActions() {
   const showFallback = Boolean(state.collectionId && !state.apiBase);
   document.getElementById("fallback-actions").style.display = showFallback ? "block" : "none";
+}
+
+function downloadKeeperPicks() {
+  if (!state.duplicateGroups.length) return;
+  const collectionName = currentReviewCollectionName();
+  const groups = state.duplicateGroups.map((group, idx) => {
+    const keeperId = getDuplicateKeeperId(group);
+    const loserIds = getDuplicateLoserIds(group);
+    const members = group.nodeIds.map((id) => {
+      const node = state.nodeById.get(id);
+      return {
+        id,
+        title: node ? (node.title || "") : "",
+      };
+    });
+    const keeperNode = state.nodeById.get(keeperId);
+    return {
+      group_index: idx + 1,
+      group_id: group.id,
+      size: group.nodeIds.length,
+      dominance: Number(group.dominance.toFixed(4)),
+      cohesion: Number(group.cohesion.toFixed(4)),
+      density: Number(group.density.toFixed(4)),
+      keeper_id: keeperId,
+      keeper_title: keeperNode ? (keeperNode.title || "") : "",
+      loser_ids: loserIds,
+      members,
+    };
+  });
+
+  const payload = {
+    generated_at: new Date().toISOString(),
+    collection_name: collectionName,
+    similarity_threshold: Number(state.duplicateThreshold.toFixed(2)),
+    cohesion_threshold: Number(state.duplicateMinCohesion.toFixed(2)),
+    groups,
+  };
+
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "duplicate_keepers.json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function downloadRemoveCandidates() {
@@ -1117,8 +3571,14 @@ function downloadRemoveCandidates() {
 
 async function tryAutoLoad() {
   const status = document.getElementById("load-status");
+  const params = new URLSearchParams(window.location.search || "");
+  const dataParam = (params.get("data") || "").trim();
+  const autoUrl = dataParam || "cluster_data.json";
+  if (dataParam) {
+    status.textContent = `Trying automatic load from ${dataParam}...`;
+  }
   try {
-    const response = await fetch("cluster_data.json", { cache: "no-store" });
+    const response = await fetch(autoUrl, { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     initialize(data);
@@ -1157,10 +3617,107 @@ document.getElementById("mode-outliers").addEventListener("click", () => {
   applyMode();
 });
 
+document.getElementById("mode-duplicates").addEventListener("click", () => {
+  state.mode = "duplicates";
+  applyMode();
+});
+
+document.getElementById("view-grid").addEventListener("click", () => {
+  state.viewMode = "grid";
+  if (state.focusFitTimer) {
+    clearTimeout(state.focusFitTimer);
+    state.focusFitTimer = null;
+  }
+  applyMode();
+});
+
+document.getElementById("view-graph").addEventListener("click", () => {
+  state.viewMode = "graph";
+  state.lastFocusSignature = "";
+  applyMode();
+});
+
+document.getElementById("collection-prev").addEventListener("click", () => {
+  setReviewCollectionIndex(state.reviewCollectionIndex - 1);
+});
+
+document.getElementById("collection-next").addEventListener("click", () => {
+  setReviewCollectionIndex(state.reviewCollectionIndex + 1);
+});
+
+document.getElementById("collection-select").addEventListener("change", (event) => {
+  const idx = Number(event.target.value || 0);
+  setReviewCollectionIndex(Number.isFinite(idx) ? idx : 0);
+});
+
+document.getElementById("toggle-nearby").addEventListener("click", () => {
+  if (!state.hasNearbyContext) return;
+  state.showNearbyContext = !state.showNearbyContext;
+  state.selectedNode = null;
+  document.getElementById("detail").classList.remove("open");
+  document.getElementById("action-status").textContent = "";
+  state.duplicateGroupIndex = 0;
+  state.duplicateShowAll = false;
+  rebuildDuplicateStats();
+  rebuildDuplicateGroups();
+  renderNearbyToggle();
+  setMetaNote(state.raw ? (state.raw.meta || {}) : {});
+  updateLayoutOffsets();
+  updateVisibility();
+});
+
+document.getElementById("dup-prev").addEventListener("click", () => moveDuplicateGroup(-1));
+document.getElementById("dup-next").addEventListener("click", () => moveDuplicateGroup(1));
+document.getElementById("dup-toggle-scope").addEventListener("click", () => {
+  state.duplicateShowAll = !state.duplicateShowAll;
+  renderDuplicateGroupControls();
+  renderReviewPanel();
+  if (state.mode === "duplicates") updateVisibility();
+});
+document.getElementById("dup-download-keepers").addEventListener("click", downloadKeeperPicks);
+document.getElementById("dup-queue-group").addEventListener("click", queueCurrentGroupLosers);
+document.getElementById("dup-apply-group").addEventListener("click", applyCurrentGroupLosers);
+document.getElementById("dup-apply-all").addEventListener("click", applyQueuedLosers);
+
+document.getElementById("discover-slider").addEventListener("input", (event) => {
+  state.discoverThreshold = clamp(Number(event.target.value || 0.78), 0.65, 0.95);
+  renderDiscoverThresholdLabel();
+  if (state.mode === "discover") updateVisibility();
+});
+document.getElementById("discover-reset").addEventListener("click", resetDiscoverDecisions);
+document.getElementById("discover-download").addEventListener("click", downloadDiscoverDecisions);
+
 document.getElementById("outlier-slider").addEventListener("input", (event) => {
   state.outlierThreshold = clamp(Number(event.target.value || 0), 0, 1);
   document.getElementById("outlier-value").textContent = state.outlierThreshold.toFixed(2);
+  renderReviewPanel();
   if (state.mode === "outliers") updateVisibility();
+});
+
+document.getElementById("outlier-reset-keeps").addEventListener("click", resetOutlierKeeps);
+document.getElementById("outlier-download-keeps").addEventListener("click", downloadOutlierKeeps);
+
+document.getElementById("duplicate-slider").addEventListener("input", (event) => {
+  state.duplicateThreshold = clamp(Number(event.target.value || 0.92), 0.8, 1.0);
+  document.getElementById("duplicate-value").textContent = state.duplicateThreshold.toFixed(2);
+  rebuildDuplicateStats();
+  rebuildDuplicateGroups();
+  renderReviewPanel();
+  if (state.mode === "duplicates") updateVisibility();
+});
+
+document.getElementById("duplicate-cohesion-slider").addEventListener("input", (event) => {
+  state.duplicateMinCohesion = clamp(Number(event.target.value || 0.75), 0.6, 0.98);
+  document.getElementById("duplicate-cohesion-value").textContent = state.duplicateMinCohesion.toFixed(2);
+  rebuildDuplicateGroups();
+  renderReviewPanel();
+  if (state.mode === "duplicates") updateVisibility();
+});
+
+document.getElementById("toggle-bridge-links").addEventListener("click", () => {
+  state.showWeakBridges = !state.showWeakBridges;
+  renderBridgeToggleLabel();
+  updateVisibility();
 });
 
 document.getElementById("search").addEventListener("input", (event) => {
@@ -1169,15 +3726,33 @@ document.getElementById("search").addEventListener("input", (event) => {
 });
 
 document.getElementById("remove-btn").addEventListener("click", removeSelectedFromCollection);
+document.getElementById("set-keeper-btn").addEventListener("click", setSelectedAsKeeper);
+document.getElementById("set-loser-btn").addEventListener("click", setSelectedAsLoser);
 document.getElementById("open-source-btn").addEventListener("click", openSourceForSelected);
 document.getElementById("download-candidates").addEventListener("click", downloadRemoveCandidates);
 
 window.addEventListener("resize", () => {
+  updateLayoutOffsets();
   if (!state.svg || !state.simulation) return;
   state.width = window.innerWidth;
   state.height = window.innerHeight;
+  buildClusterAnchors();
   state.svg.attr("width", state.width).attr("height", state.height);
   state.simulation.force("center", d3.forceCenter(state.width / 2, state.height / 2));
+  state.simulation.force(
+    "cluster-x",
+    d3.forceX((d) => {
+      const anchor = state.clusterAnchors.get(d.cluster);
+      return anchor ? anchor.x : state.width / 2;
+    }).strength(state.clusterAnchorStrength)
+  );
+  state.simulation.force(
+    "cluster-y",
+    d3.forceY((d) => {
+      const anchor = state.clusterAnchors.get(d.cluster);
+      return anchor ? anchor.y : state.height / 2;
+    }).strength(state.clusterAnchorStrength)
+  );
   state.simulation.alpha(0.12).restart();
 });
 

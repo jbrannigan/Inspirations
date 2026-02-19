@@ -34,7 +34,9 @@ class TestPinterestImport(unittest.TestCase):
                 import_pinterest_crawler_zip(db, zip_path)
                 import_pinterest_crawler_zip(db, zip_path)
                 n = db.query_value("select count(*) from assets where source='pinterest'")
+                kind = db.query_value("select content_kind from assets where source='pinterest' and source_ref like 'https://www.pinterest.com/pin/123/%'")
             self.assertEqual(n, 1)
+            self.assertEqual(kind, "pin")
 
 
 if __name__ == "__main__":
