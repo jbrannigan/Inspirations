@@ -16,13 +16,43 @@
         </div>
       </div>
       <div class="actions">
-        <input id="search" placeholder='Search tags or type semantic query with sem: (e.g., sem: warm oak kitchen)' />
+        <div class="searchPanel">
+          <div class="searchInputRow">
+            <input id="search" placeholder="Search ideas (e.g., warm oak kitchen)" />
+            <div class="searchHelpWrap">
+              <button
+                id="searchHelp"
+                class="searchHelp"
+                type="button"
+                aria-label="Advanced search help"
+                aria-controls="searchHelpTooltip"
+                aria-expanded="false"
+              >
+                ?
+              </button>
+              <div id="searchHelpTooltip" class="searchHelpTooltip" role="tooltip">
+                Advanced search: type <code>sem:</code> before your phrase to find visually similar items.
+                Example: <code>sem: warm oak kitchen</code>
+              </div>
+            </div>
+          </div>
+          <div id="canvasNarrative" class="muted">The canvas is loading…</div>
+          <div class="mobileTools" aria-label="Mobile canvas tools">
+            <button id="openLeftSidebar" type="button">Filters</button>
+            <button id="openRightSidebar" type="button">Tray</button>
+          </div>
+        </div>
+        <button id="addScanPdf" class="topActionBtn" type="button">Add Scan PDF</button>
         <a href="/app/admin.html" class="adminNav">Admin</a>
       </div>
     </header>
 
     <div class="layout three">
-      <aside class="sidebar">
+      <aside id="leftSidebar" class="sidebar sidebarLeft">
+        <div class="mobileDrawerHeader">
+          <strong>Filters & Collections</strong>
+          <button id="closeLeftSidebar" type="button">Close</button>
+        </div>
         <div class="section">
           <div class="sectionTitle">Filters</div>
           <div class="list" id="filters">
@@ -43,35 +73,82 @@
       <main class="content">
         <div class="toolbar">
           <div class="toolbarMeta">
-            <div id="canvasContext" class="canvasContext">Canvas: Loading...</div>
             <div id="stats" class="muted">Loading...</div>
+            <div class="row trayQuickActions">
+              <button id="toggleLabelMode" type="button">AI Tags: Any</button>
+              <button id="createFromTrayTop" disabled>Create Collection</button>
+              <button id="addTrayToCollectionTop" disabled>Add Tray to Collection</button>
+              <button id="clearTrayTop" disabled>Clear Tray</button>
+            </div>
           </div>
           <div class="row">
             <button id="selectAll">Select All</button>
+            <button id="addSelectedToCollection" class="primaryAction" disabled>Add Selected to Collection</button>
             <button id="addSelected" disabled>Add Selected to Tray</button>
-            <button id="addSelectedToCollection" disabled>Add Selected to Collection</button>
             <button id="removeSelectedFromCollection" disabled>Remove Selected from Collection</button>
-            <button id="addFiltered" disabled>Add Filtered to Tray</button>
+            <button id="removeSelectedFromTray" disabled>Remove Selected from Tray</button>
+            <button id="addFiltered" disabled>Add Filtered</button>
             <button id="clearSelection" disabled>Clear Selection</button>
+            <button id="showTrayCanvas">Show Tray Canvas</button>
             <button id="showAll">Show All</button>
           </div>
         </div>
         <div id="grid" class="grid"></div>
+        <div class="row" style="margin-top: 10px">
+          <button id="loadMore" hidden>Load More</button>
+        </div>
       </main>
 
-      <aside class="sidebar">
+      <aside id="rightSidebar" class="sidebar sidebarRight">
+        <div class="mobileDrawerHeader">
+          <strong>Curate Tray</strong>
+          <button id="closeRightSidebar" type="button">Close</button>
+        </div>
         <div class="section">
           <div class="sectionTitle">Curate Tray</div>
           <div class="muted" id="trayCount">0 items</div>
-          <div id="tray" class="list" style="margin-top: 8px"></div>
           <div class="row" style="margin-top: 8px; flex-wrap: wrap">
             <button id="createFromTray" disabled>Create Collection</button>
             <button id="addTrayToCollection" disabled>Add Tray to Collection</button>
             <button id="clearTray" disabled>Clear Tray</button>
           </div>
-          <div class="muted" style="margin-top: 6px">Tray is your “shopping cart”. Add items from any filter, then create a new collection or add to an existing one.</div>
+          <div id="tray" class="list" style="margin-top: 8px"></div>
+          <div class="muted" style="margin-top: 6px">
+            Tray is your “shopping cart” for what you want to share. Use “Show Tray Canvas” to curate visually.
+            In the tray list, tap an item to preview it and use Remove to take it out.
+          </div>
         </div>
       </aside>
+    </div>
+
+    <button id="mobileOverlay" class="mobileOverlay" type="button" aria-label="Close side panels"></button>
+
+    <div id="scanImportModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="scanImportTitle">
+      <div class="modalContent scanImportContent">
+        <div class="modalHeader">
+          <div>
+            <div id="scanImportTitle" class="modalTitle">Import Scan PDF</div>
+            <div class="muted">Upload one PDF and choose extraction options.</div>
+          </div>
+          <button id="closeScanImport" type="button">Close</button>
+        </div>
+        <div class="scanImportBody">
+          <input id="scanPdfInput" type="file" accept=".pdf,application/pdf" />
+          <label class="scanOptionRow">
+            <input id="scanDetectDelimiters" type="checkbox" checked />
+            <span>Detect blank separator pages for multi-page document splitting</span>
+          </label>
+          <label class="scanOptionRow">
+            <input id="scanUseFormParser" type="checkbox" />
+            <span>Use Form Parser (experimental structured extraction)</span>
+          </label>
+          <div class="muted">Backfill for older scans is nice to have. This applies to new uploads only.</div>
+          <div class="scanImportActions">
+            <button id="cancelScanImport" type="button">Cancel</button>
+            <button id="runScanImport" type="button" disabled>Import</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div id="modal" class="modal hidden">
@@ -81,7 +158,11 @@
             <div id="modalTitle" class="modalTitle"></div>
             <div id="modalMeta" class="muted"></div>
           </div>
-          <button id="closeModal">Close</button>
+          <div class="row modalActions">
+            <button id="hideAssetBtn" type="button">Hide</button>
+            <button id="printAssetBtn" type="button">Print</button>
+            <button id="closeModal">Close</button>
+          </div>
         </div>
         <div class="modalBody">
           <div class="imageStage" id="imageStage">

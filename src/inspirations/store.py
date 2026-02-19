@@ -11,6 +11,10 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _csv_values(raw: str) -> list[str]:
+    return [s.strip() for s in (raw or "").split(",") if s.strip()]
+
+
 def list_assets(
     db: Db,
     *,
@@ -18,7 +22,12 @@ def list_assets(
     source: str = "",
     board: str = "",
     label: str = "",
+    label_mode: str = "any",
+    media_status: str = "",
+    content_kind: str = "",
+    creator: str = "",
     collection_id: str = "",
+    include_hidden: bool = False,
     limit: int = 200,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
@@ -35,26 +44,75 @@ def list_assets(
         params.extend(boards)
     if label:
         labels = [s.strip() for s in label.split(",") if s.strip()]
-        joins.append("left join asset_labels al on al.asset_id = a.id")
-        clauses.append("al.label in (%s)" % ",".join(["?"] * len(labels)))
-        params.extend(labels)
+        if labels:
+            if (label_mode or "").lower() == "all":
+                placeholders = ",".join(["?"] * len(labels))
+                clauses.append(
+                    f"""
+                    a.id in (
+                      select asset_id
+                      from asset_labels
+                      where label in ({placeholders})
+                      group by asset_id
+                      having count(distinct label) = ?
+                    )
+                    """
+                )
+                params.extend(labels)
+                params.append(len(set(labels)))
+            else:
+                joins.append("left join asset_labels al on al.asset_id = a.id")
+                clauses.append("al.label in (%s)" % ",".join(["?"] * len(labels)))
+                params.extend(labels)
+    if media_status:
+        statuses = [s.strip() for s in media_status.split(",") if s.strip()]
+        clauses.append("a.media_status in (%s)" % ",".join(["?"] * len(statuses)))
+        params.extend(statuses)
+    if content_kind:
+        kinds = [s.strip() for s in content_kind.split(",") if s.strip()]
+        clauses.append("a.content_kind in (%s)" % ",".join(["?"] * len(kinds)))
+        params.extend(kinds)
+    if creator:
+        creators = [s.strip() for s in creator.split(",") if s.strip()]
+        clauses.append("a.creator_name in (%s)" % ",".join(["?"] * len(creators)))
+        params.extend(creators)
     if q:
         if not any(j.startswith("left join asset_labels") for j in joins):
             joins.append("left join asset_labels al on al.asset_id = a.id")
         clauses.append(
-            "(a.title like ? or a.description like ? or a.board like ? or a.source_ref like ? or a.notes like ? or a.ai_summary like ? or al.label like ?)"
+            """
+            (
+              a.title like ?
+              or a.description like ?
+              or a.board like ?
+              or a.source_ref like ?
+              or a.notes like ?
+              or a.ai_summary like ?
+              or a.creator_name like ?
+              or a.source_domain like ?
+              or a.source_name like ?
+              or al.label like ?
+            )
+            """
         )
         qv = f"%{q}%"
-        params += [qv, qv, qv, qv, qv, qv, qv]
+        params += [qv, qv, qv, qv, qv, qv, qv, qv, qv, qv]
     if collection_id:
         joins.append("join collection_items ci on ci.asset_id = a.id")
         clauses.append("ci.collection_id = ?")
         params.append(collection_id)
+    hidden_collection_id = db.query_value("select id from collections where lower(name)='hidden' limit 1")
+    if hidden_collection_id and not include_hidden and collection_id != hidden_collection_id:
+        clauses.append(
+            "a.id not in (select asset_id from collection_items where collection_id = ?)"
+        )
+        params.append(hidden_collection_id)
     where = "where " + " and ".join(clauses) if clauses else ""
     join_sql = "\n    " + "\n    ".join(joins) if joins else ""
 
     sql = f"""
     select distinct a.id, a.source, a.source_ref, a.title, a.description, a.board, a.notes,
+           a.media_status, a.content_kind, a.creator_name, a.source_domain, a.source_name,
            coalesce(
              (select ai.summary from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1),
              a.ai_summary
@@ -98,7 +156,7 @@ def list_assets(
     return [dict(r) for r in rows]
 
 
-def list_facets(db: Db) -> dict[str, Any]:
+def list_facets(db: Db, *, source: str = "", media_status: str = "") -> dict[str, Any]:
     sources = db.query("select source, count(*) as n from assets group by source order by n desc")
     boards = db.query(
         "select board, count(*) as n from assets where board is not null and board != '' group by board order by n desc limit 50"
@@ -106,10 +164,69 @@ def list_facets(db: Db) -> dict[str, Any]:
     labels = db.query(
         "select label, count(*) as n from asset_labels group by label order by n desc limit 50"
     )
+    media_statuses = db.query(
+        """
+        select media_status, count(*) as n
+        from assets
+        where media_status is not null and media_status != ''
+        group by media_status
+        order by n desc
+        """
+    )
+    content_kinds = db.query(
+        """
+        select content_kind, count(*) as n
+        from assets
+        where content_kind is not null and content_kind != ''
+        group by content_kind
+        order by n desc
+        limit 50
+        """
+    )
+    creators = db.query(
+        """
+        select creator_name, count(*) as n
+        from assets
+        where creator_name is not null and creator_name != ''
+        group by creator_name
+        order by n desc
+        limit 100
+        """
+    )
+
+    context_clauses = ["content_kind is not null", "content_kind != ''"]
+    context_params: list[Any] = []
+    if source:
+        selected_sources = _csv_values(source)
+        if selected_sources:
+            context_clauses.append("source in (%s)" % ",".join(["?"] * len(selected_sources)))
+            context_params.extend(selected_sources)
+    if media_status:
+        statuses = _csv_values(media_status)
+        if statuses:
+            context_clauses.append("media_status in (%s)" % ",".join(["?"] * len(statuses)))
+            context_params.extend(statuses)
+    context_where = " and ".join(context_clauses)
+    content_kinds_context = db.query(
+        f"""
+        select content_kind, count(*) as n
+        from assets
+        where {context_where}
+        group by content_kind
+        order by n desc
+        limit 50
+        """,
+        tuple(context_params),
+    )
+
     return {
         "sources": [dict(r) for r in sources],
         "boards": [dict(r) for r in boards],
         "labels": [dict(r) for r in labels],
+        "media_statuses": [dict(r) for r in media_statuses],
+        "content_kinds": [dict(r) for r in content_kinds],
+        "content_kinds_context": [dict(r) for r in content_kinds_context],
+        "creators": [dict(r) for r in creators],
     }
 
 

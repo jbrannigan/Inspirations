@@ -8,12 +8,15 @@ import secrets
 import sqlite3
 import time
 from datetime import datetime, timezone
+from email.parser import BytesParser
+from email.policy import default as email_policy_default
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .ai import DEFAULT_GEMINI_EMBEDDING_MODEL, run_similarity_search
 from .db import Db, ensure_schema
+from .importers.scans import import_scans_inbox
 from .store import (
     add_items_to_collection,
     create_annotation,
@@ -37,9 +40,23 @@ from .store import (
     update_annotation,
     update_asset_notes,
 )
+from .thumbnails import generate_thumbnails
 
 
 MAX_BODY = 2_000_000
+MAX_UPLOAD_BODY = 350_000_000
+DEFAULT_ASSETS_PAGE_SIZE = 240
+
+
+def _parse_bool_param(raw: str, *, default: bool = False) -> bool:
+    text = (raw or "").strip().lower()
+    if not text:
+        return default
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def _json_body(handler: BaseHTTPRequestHandler) -> dict:
@@ -50,10 +67,46 @@ def _json_body(handler: BaseHTTPRequestHandler) -> dict:
     return json.loads(raw.decode("utf-8") or "{}")
 
 
+def _multipart_form(handler: BaseHTTPRequestHandler, *, max_body: int) -> tuple[dict[str, str], dict[str, dict[str, object]]]:
+    content_type = (handler.headers.get("Content-Type") or "").strip()
+    if not content_type.lower().startswith("multipart/form-data"):
+        raise ValueError("Content-Type must be multipart/form-data")
+    length = int(handler.headers.get("Content-Length", "0") or "0")
+    if length <= 0:
+        raise ValueError("Body required")
+    if length > max_body:
+        raise ValueError("Body too large")
+    raw = handler.rfile.read(length)
+    wrapped = b"Content-Type: " + content_type.encode("utf-8") + b"\r\nMIME-Version: 1.0\r\n\r\n" + raw
+    message = BytesParser(policy=email_policy_default).parsebytes(wrapped)
+    if not message.is_multipart():
+        raise ValueError("Invalid multipart body")
+    fields: dict[str, str] = {}
+    files: dict[str, dict[str, object]] = {}
+    for part in message.iter_parts():
+        name = (part.get_param("name", header="content-disposition") or "").strip()
+        if not name:
+            continue
+        filename = part.get_filename()
+        payload = part.get_payload(decode=True) or b""
+        if filename is None:
+            charset = part.get_content_charset() or "utf-8"
+            fields[name] = payload.decode(charset, errors="replace")
+            continue
+        files[name] = {
+            "filename": filename,
+            "content_type": part.get_content_type(),
+            "data": payload,
+        }
+    return fields, files
+
+
 def _send(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
     data = json.dumps(payload).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
+    # API responses should always be fresh to avoid stale UI state.
+    handler.send_header("Cache-Control", "no-store")
     handler.send_header("Content-Length", str(len(data)))
     handler.end_headers()
     handler.wfile.write(data)
@@ -84,8 +137,13 @@ class ApiHandler(BaseHTTPRequestHandler):
                 source=q.get("source", [""])[0],
                 board=q.get("board", [""])[0],
                 label=q.get("label", [""])[0],
+                label_mode=q.get("label_mode", ["any"])[0],
+                media_status=q.get("media_status", [""])[0],
+                content_kind=q.get("content_kind", [""])[0],
+                creator=q.get("creator", [""])[0],
                 collection_id=q.get("collection_id", [""])[0],
-                limit=int(q.get("limit", ["200"])[0]),
+                include_hidden=_parse_bool_param(q.get("include_hidden", [""])[0], default=False),
+                limit=int(q.get("limit", [str(DEFAULT_ASSETS_PAGE_SIZE)])[0]),
                 offset=int(q.get("offset", ["0"])[0]),
             )
             return _send(self, 200, {"assets": assets})
@@ -139,7 +197,12 @@ class ApiHandler(BaseHTTPRequestHandler):
             return _send(self, 200, {"collections": cols})
 
         if parsed.path == "/api/facets":
-            facets = self._with_db(list_facets)
+            q = parse_qs(parsed.query)
+            facets = self._with_db(
+                list_facets,
+                source=q.get("source", [""])[0],
+                media_status=q.get("media_status", [""])[0],
+            )
             return _send(self, 200, {"facets": facets})
 
         if parsed.path == "/api/tray":
@@ -162,6 +225,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/import/scans":
+            return self._handle_scan_pdf_upload()
         try:
             body = _json_body(self)
         except Exception as e:
@@ -271,6 +336,28 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._with_db(set_collection_order, collection_id=m.group(1), asset_ids=asset_ids)
             return _send(self, 200, {"ok": True})
 
+        m = re.match(r"^/api/assets/([^/]+)/hide$", parsed.path)
+        if m:
+            asset_id = m.group(1)
+            cols = self._with_db(list_collections)
+            hidden = None
+            for c in cols:
+                if (c.get("name") or "").strip().lower() == "hidden":
+                    hidden = c
+                    break
+            if not hidden:
+                hidden = self._with_db(
+                    create_collection,
+                    name="Hidden",
+                    description="Items hidden from the main canvas",
+                )
+            self._with_db(add_items_to_collection, collection_id=hidden["id"], asset_ids=[asset_id])
+            return _send(
+                self,
+                200,
+                {"ok": True, "hidden_collection_id": hidden["id"], "hidden_collection_name": hidden["name"]},
+            )
+
         if parsed.path == "/api/annotations":
             asset_id = (body.get("asset_id") or "").strip()
             x = body.get("x")
@@ -281,6 +368,78 @@ class ApiHandler(BaseHTTPRequestHandler):
             return _send(self, 201, {"annotation": ann})
 
         self.send_error(404)
+
+    def _handle_scan_pdf_upload(self) -> None:
+        try:
+            fields, files = _multipart_form(self, max_body=MAX_UPLOAD_BODY)
+        except Exception as e:
+            return _send(self, 400, {"error": str(e)})
+
+        split_on_delimiters_raw = str(fields.get("split_on_delimiters") or "1").strip().lower()
+        split_on_delimiters = split_on_delimiters_raw not in {"0", "false", "off", "no"}
+        use_form_parser_raw = str(fields.get("use_form_parser") or "0").strip().lower()
+        use_form_parser = use_form_parser_raw in {"1", "true", "on", "yes"}
+
+        upload = files.get("file") or {}
+        filename = str(upload.get("filename") or "").strip()
+        data = upload.get("data") or b""
+        if not filename:
+            return _send(self, 400, {"error": "file required"})
+        if not filename.lower().endswith(".pdf"):
+            return _send(self, 400, {"error": "file must be a .pdf"})
+        if not isinstance(data, (bytes, bytearray)) or not data:
+            return _send(self, 400, {"error": "uploaded file is empty"})
+
+        cleaned_name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename).name).strip("._")
+        if not cleaned_name:
+            cleaned_name = "scan_upload.pdf"
+        if not cleaned_name.lower().endswith(".pdf"):
+            cleaned_name = f"{cleaned_name}.pdf"
+
+        uploads_root = self._imports_root() / "scans" / "inbox" / "uploads"
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+        batch_dir = uploads_root / f"{stamp}-{secrets.token_hex(4)}"
+        batch_dir.mkdir(parents=True, exist_ok=True)
+        uploaded_path = batch_dir / cleaned_name
+        uploaded_path.write_bytes(bytes(data))
+
+        try:
+            import_report = self._with_db(
+                import_scans_inbox,
+                inbox_dir=batch_dir,
+                store_dir=Path(self.server.store_dir).resolve(),
+                format="jpg",
+                limit=0,
+                max_pages=0,
+                renderer="auto",
+                split_on_delimiters=split_on_delimiters,
+            )
+            thumbs_report = self._with_db(
+                generate_thumbnails,
+                store_dir=Path(self.server.store_dir).resolve(),
+                source="scan",
+                size=512,
+                limit=0,
+                tool="auto",
+            )
+        except Exception as e:
+            return _send(self, 500, {"error": f"scan import failed: {e}"})
+
+        return _send(
+            self,
+            200,
+            {
+                "ok": True,
+                "uploaded_file": str(uploaded_path),
+                "upload_size_bytes": len(data),
+                "options": {
+                    "split_on_delimiters": split_on_delimiters,
+                    "use_form_parser": use_form_parser,
+                },
+                "import": import_report,
+                "thumbs": thumbs_report,
+            },
+        )
 
     def do_PUT(self) -> None:
         parsed = urlparse(self.path)
@@ -342,6 +501,12 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def _admin_password_file(self) -> Path:
         return Path(self.server.db_path).resolve().parent / "admin_password.txt"
+
+    def _imports_root(self) -> Path:
+        configured = getattr(self.server, "imports_dir", None)
+        if configured:
+            return Path(configured).resolve()
+        return Path(self.server.app_dir).resolve().parent / "imports"
 
     def _admin_password(self) -> str:
         env_pw = (os.environ.get("INSPIRATIONS_ADMIN_PASSWORD") or "").strip()
@@ -428,6 +593,8 @@ class ApiHandler(BaseHTTPRequestHandler):
         data = target.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", mime)
+        # Frontend assets change frequently during local iteration.
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -483,6 +650,7 @@ def run_server(*, host: str, port: int, db_path: Path, app_dir: Path, store_dir:
     server.db_path = db_path
     server.app_dir = app_dir
     server.store_dir = store_dir
+    server.imports_dir = app_dir.resolve().parent / "imports"
     server.admin_tokens = {}
     print(f"Serving on http://{host}:{port}")
     server.serve_forever()

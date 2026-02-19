@@ -1,0 +1,1189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Inspirations - Cluster Explorer</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: #0b1220;
+    color: #dbe6f3;
+    overflow: hidden;
+    height: 100vh;
+  }
+
+  #topbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    border-bottom: 1px solid #1f2a3f;
+    background: rgba(11, 18, 32, 0.93);
+    backdrop-filter: blur(8px);
+  }
+
+  #topbar h1 {
+    font-size: 15px;
+    font-weight: 650;
+    color: #f6fbff;
+    white-space: nowrap;
+  }
+
+  .sep {
+    width: 1px;
+    height: 20px;
+    background: #2a3954;
+  }
+
+  .stat {
+    font-size: 12px;
+    color: #95a7be;
+    white-space: nowrap;
+  }
+
+  .stat b {
+    color: #e8f0f8;
+  }
+
+  #mode-controls {
+    display: inline-flex;
+    border: 1px solid #24344f;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .mode-btn {
+    border: none;
+    border-right: 1px solid #24344f;
+    background: #121c30;
+    color: #9fb1c8;
+    font-size: 12px;
+    padding: 6px 10px;
+    cursor: pointer;
+  }
+
+  .mode-btn:last-child {
+    border-right: none;
+  }
+
+  .mode-btn.active {
+    background: #20324f;
+    color: #f4fbff;
+  }
+
+  #outlier-controls {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: #9fb1c8;
+    white-space: nowrap;
+  }
+
+  #outlier-slider {
+    width: 160px;
+  }
+
+  #search {
+    margin-left: auto;
+    width: 280px;
+    max-width: 34vw;
+    border: 1px solid #304464;
+    background: #101a2c;
+    color: #e4eff8;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 13px;
+    outline: none;
+  }
+
+  #search:focus {
+    border-color: #4f88cc;
+  }
+
+  #search::placeholder {
+    color: #6f86a2;
+  }
+
+  #meta-note {
+    position: fixed;
+    top: 50px;
+    left: 16px;
+    right: 348px;
+    z-index: 95;
+    font-size: 12px;
+    color: #8ea3be;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #legend {
+    position: fixed;
+    top: 70px;
+    left: 14px;
+    z-index: 90;
+    width: 240px;
+    max-height: calc(100vh - 88px);
+    overflow-y: auto;
+    padding: 12px;
+    border: 1px solid #1f2a3f;
+    border-radius: 10px;
+    background: rgba(11, 18, 32, 0.9);
+    backdrop-filter: blur(6px);
+  }
+
+  #legend h3 {
+    font-size: 11px;
+    color: #6f86a2;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #c7d6e6;
+    padding: 5px 0;
+    cursor: pointer;
+  }
+
+  .legend-item:hover {
+    color: #f4fbff;
+  }
+
+  .legend-item.muted {
+    opacity: 0.28;
+  }
+
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .legend-count {
+    margin-left: auto;
+    color: #6f86a2;
+    font-size: 10px;
+  }
+
+  #graph {
+    width: 100vw;
+    height: 100vh;
+  }
+
+  #tooltip {
+    position: fixed;
+    z-index: 210;
+    width: 300px;
+    pointer-events: none;
+    display: none;
+    border: 1px solid #2a3d5f;
+    border-radius: 10px;
+    background: rgba(11, 18, 32, 0.96);
+    box-shadow: 0 14px 30px rgba(0, 0, 0, 0.45);
+    overflow: hidden;
+  }
+
+  #tooltip img {
+    width: 100%;
+    height: 170px;
+    object-fit: cover;
+    border-bottom: 1px solid #21334f;
+  }
+
+  .tt-body {
+    padding: 10px 12px;
+  }
+
+  .tt-title {
+    color: #eef7ff;
+    font-size: 13px;
+    font-weight: 650;
+    line-height: 1.35;
+    margin-bottom: 5px;
+  }
+
+  .tt-sub {
+    color: #86a5ca;
+    font-size: 11px;
+    margin-bottom: 7px;
+  }
+
+  .tt-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+
+  .tt-tag {
+    font-size: 10px;
+    color: #95acc9;
+    background: #17263d;
+    border: 1px solid #253753;
+    border-radius: 6px;
+    padding: 2px 6px;
+  }
+
+  #detail {
+    position: fixed;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 340px;
+    z-index: 120;
+    transform: translateX(100%);
+    transition: transform 0.25s ease;
+    background: rgba(11, 18, 32, 0.98);
+    border-left: 1px solid #1f2a3f;
+    overflow-y: auto;
+  }
+
+  #detail.open {
+    transform: translateX(0);
+  }
+
+  #detail-image {
+    width: 100%;
+    height: 220px;
+    object-fit: cover;
+    border-bottom: 1px solid #20324e;
+  }
+
+  .det-body {
+    padding: 14px;
+  }
+
+  .det-close {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 30px;
+    height: 30px;
+    border: 1px solid #2b3d5d;
+    border-radius: 999px;
+    background: rgba(10, 18, 30, 0.9);
+    color: #a8bad1;
+    font-size: 16px;
+    cursor: pointer;
+  }
+
+  .det-title {
+    font-size: 16px;
+    color: #f5fbff;
+    font-weight: 700;
+    margin-bottom: 6px;
+    line-height: 1.35;
+  }
+
+  .det-line {
+    font-size: 12px;
+    color: #a5bad3;
+    margin-bottom: 4px;
+    line-height: 1.4;
+  }
+
+  .det-line a {
+    color: #7cb4ff;
+  }
+
+  .det-section {
+    margin-top: 12px;
+    margin-bottom: 6px;
+    font-size: 11px;
+    color: #7389a6;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .det-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .det-tag {
+    font-size: 11px;
+    color: #a9c0dd;
+    background: #17263d;
+    border: 1px solid #283a58;
+    border-radius: 7px;
+    padding: 3px 8px;
+  }
+
+  .det-summary {
+    font-size: 12px;
+    color: #bfd0e3;
+    line-height: 1.5;
+  }
+
+  .det-neighbors {
+    list-style: none;
+    margin-top: 6px;
+  }
+
+  .det-neighbors li {
+    font-size: 12px;
+    color: #c1d2e8;
+    border-bottom: 1px solid #1f2d45;
+    padding: 7px 2px;
+    cursor: pointer;
+  }
+
+  .det-neighbors li:hover {
+    color: #78b0ff;
+  }
+
+  .det-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .action-btn {
+    border: 1px solid #2d4263;
+    background: #14243a;
+    color: #e7f3ff;
+    font-size: 12px;
+    border-radius: 8px;
+    padding: 7px 10px;
+    cursor: pointer;
+  }
+
+  .action-btn:hover {
+    background: #1b3251;
+  }
+
+  .action-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  #action-status {
+    margin-top: 8px;
+    font-size: 11px;
+    color: #8fb0d8;
+  }
+
+  #loadscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 500;
+    background: #0b1220;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 12px;
+    padding: 20px;
+    text-align: center;
+  }
+
+  #loadscreen h2 {
+    color: #eff8ff;
+    font-size: 22px;
+  }
+
+  #loadscreen p {
+    color: #9ab0cb;
+    max-width: 520px;
+    line-height: 1.5;
+    font-size: 14px;
+  }
+
+  #loadscreen label {
+    border: 1px solid #32527d;
+    background: #1f3a61;
+    color: #f4fbff;
+    border-radius: 9px;
+    padding: 10px 18px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  #loadscreen input[type="file"] {
+    display: none;
+  }
+
+  #load-status {
+    color: #7f97b6;
+    font-size: 12px;
+  }
+
+  #fallback-actions {
+    display: none;
+    margin-top: 8px;
+  }
+
+  #download-candidates {
+    border: 1px solid #385982;
+    background: #1b304d;
+    color: #ddecff;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  #download-candidates:hover {
+    background: #27426a;
+  }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <h1>Inspirations - Cluster Explorer</h1>
+  <div class="sep"></div>
+  <span class="stat"><b id="stat-nodes">0</b> items</span>
+  <span class="stat"><b id="stat-links">0</b> links</span>
+  <span class="stat"><b id="stat-clusters">0</b> clusters</span>
+  <span class="stat"><b id="stat-outliers">0</b> outliers</span>
+  <div class="sep"></div>
+  <div id="mode-controls">
+    <button id="mode-discover" class="mode-btn active">Discover</button>
+    <button id="mode-outliers" class="mode-btn">Outliers</button>
+  </div>
+  <div id="outlier-controls">
+    <span>Isolation >= <b id="outlier-value">0.70</b></span>
+    <input id="outlier-slider" type="range" min="0" max="1" step="0.01" value="0.70" />
+  </div>
+  <input id="search" type="text" placeholder="Search title, labels, or board" />
+</div>
+
+<div id="meta-note">Waiting for cluster data.</div>
+
+<div id="legend">
+  <h3>Collections</h3>
+  <div id="legend-items"></div>
+  <div id="fallback-actions">
+    <button id="download-candidates">Download remove_candidates.json</button>
+  </div>
+</div>
+
+<svg id="graph"></svg>
+
+<div id="tooltip">
+  <img id="tt-image" alt="" />
+  <div class="tt-body">
+    <div id="tt-title" class="tt-title"></div>
+    <div id="tt-sub" class="tt-sub"></div>
+    <div id="tt-tags" class="tt-tags"></div>
+  </div>
+</div>
+
+<aside id="detail">
+  <button class="det-close" onclick="closeDetail()">x</button>
+  <img id="detail-image" alt="" />
+  <div class="det-body">
+    <div id="det-title" class="det-title"></div>
+    <div id="det-board" class="det-line"></div>
+    <div id="det-source" class="det-line"></div>
+    <div id="det-collections" class="det-line"></div>
+    <div class="det-section">Metrics</div>
+    <div id="det-metrics" class="det-line"></div>
+    <div class="det-section">Summary</div>
+    <div id="det-summary" class="det-summary"></div>
+    <div class="det-section">Labels</div>
+    <div id="det-tags" class="det-tags"></div>
+    <div class="det-section">Actions</div>
+    <div class="det-actions">
+      <button id="remove-btn" class="action-btn" style="display:none;">Remove from this collection</button>
+      <button id="open-source-btn" class="action-btn">Open source</button>
+    </div>
+    <div id="action-status"></div>
+    <div class="det-section">Nearest neighbors</div>
+    <ul id="det-neighbors" class="det-neighbors"></ul>
+  </div>
+</aside>
+
+<div id="loadscreen">
+  <h2>Cluster Explorer</h2>
+  <p>
+    This view works best when served over HTTP via <code>python3 tools/serve_explorer.py</code>.
+    Direct <code>file://</code> opening does not support automatic data loading.
+  </p>
+  <label>
+    Choose cluster_data.json
+    <input id="file-input" type="file" accept=".json,application/json" />
+  </label>
+  <div id="load-status">Trying automatic load from /cluster_data.json...</div>
+</div>
+
+<script>
+const state = {
+  raw: null,
+  nodes: [],
+  links: [],
+  nodeById: new Map(),
+  simulation: null,
+  svg: null,
+  graphRoot: null,
+  linkLayer: null,
+  nodeLayer: null,
+  zoomBehavior: null,
+  width: window.innerWidth,
+  height: window.innerHeight,
+  allCollections: [],
+  activeCollections: new Set(),
+  colorScale: null,
+  mode: "discover",
+  outlierThreshold: 0.7,
+  search: "",
+  selectedNode: null,
+  apiBase: "",
+  collectionId: "",
+};
+
+const PALETTE = [
+  "#3b82f6", "#ef4444", "#10b981", "#f59e0b", "#8b5cf6",
+  "#ec4899", "#06b6d4", "#f97316", "#84cc16", "#6366f1",
+  "#14b8a6", "#e11d48", "#a855f7", "#0ea5e9", "#c026d3",
+  "#22d3ee", "#fb923c", "#4ade80", "#c084fc", "#f43f5e"
+];
+
+function sanitizeApiBase(raw) {
+  return String(raw || "").trim().replace(/\/+$/, "");
+}
+
+function toStoreUrl(localPath) {
+  const raw = String(localPath || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("/")) return raw;
+  if (raw.startsWith("store/")) return `/${raw}`;
+  return "";
+}
+
+function imageCandidates(node) {
+  const candidates = [];
+  if (state.apiBase) {
+    candidates.push(`${state.apiBase}/media/${encodeURIComponent(node.id)}?kind=thumb`);
+  }
+  if (node.thumb_url_local) {
+    candidates.push(toStoreUrl(node.thumb_url_local));
+  }
+  if (state.apiBase) {
+    candidates.push(`${state.apiBase}/media/${encodeURIComponent(node.id)}?kind=original`);
+  }
+  if (node.image_url_local) {
+    candidates.push(toStoreUrl(node.image_url_local));
+  }
+  if (node.image_url_remote) {
+    candidates.push(node.image_url_remote);
+  }
+  return [...new Set(candidates.filter(Boolean))];
+}
+
+function setImageWithFallback(imgEl, node) {
+  const urls = imageCandidates(node);
+  if (!urls.length) {
+    imgEl.style.display = "none";
+    imgEl.removeAttribute("src");
+    return;
+  }
+  let idx = 0;
+  imgEl.style.display = "block";
+  imgEl.onload = () => {};
+  imgEl.onerror = () => {
+    idx += 1;
+    if (idx >= urls.length) {
+      imgEl.style.display = "none";
+      imgEl.removeAttribute("src");
+      return;
+    }
+    imgEl.src = urls[idx];
+  };
+  imgEl.src = urls[idx];
+}
+
+function primaryCollection(node) {
+  const colls = node.collections || [];
+  return colls.length ? colls[0] : "Uncategorized";
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function truncate(text, limit) {
+  const t = String(text || "");
+  if (t.length <= limit) return t;
+  return `${t.slice(0, limit)}...`;
+}
+
+function nodeRadius(node) {
+  const base = node.is_centroid ? 10 : 6;
+  return base + Math.min((Number(node.neighbor_count || 0) * 0.35), 4);
+}
+
+function setMetaNote(meta) {
+  const details = [];
+  if (meta && meta.source_db) details.push(`DB: ${meta.source_db}`);
+  if (meta && meta.collection_id) details.push(`Collection focus: ${meta.collection_id}`);
+  if (meta && Number(meta.include_neighbors) > 0) details.push(`Neighbors: ${meta.include_neighbors}`);
+  if (meta && meta.exported_at) details.push(`Exported: ${meta.exported_at}`);
+  document.getElementById("meta-note").textContent = details.length
+    ? details.join(" | ")
+    : "Cluster data loaded.";
+}
+
+function initialize(data) {
+  state.raw = data || {};
+  state.nodes = (data.nodes || []).map((node) => ({
+    ...node,
+    isolation_score: Number(node.isolation_score || 0),
+    bridge_score: Number(node.bridge_score || 0),
+    neighbor_count: Number(node.neighbor_count || 0),
+    is_outlier: Boolean(node.is_outlier),
+    _removed: false,
+  }));
+  state.nodeById = new Map(state.nodes.map((node) => [node.id, node]));
+  state.links = (data.links || [])
+    .filter((link) => state.nodeById.has(link.source) && state.nodeById.has(link.target))
+    .map((link) => ({
+      source: link.source,
+      target: link.target,
+      similarity: Number(link.similarity || 0),
+    }));
+  state.apiBase = sanitizeApiBase(data.meta && data.meta.api_base);
+  state.collectionId = String((data.meta && data.meta.collection_id) || "").trim();
+  state.selectedNode = null;
+
+  const scoreList = state.nodes.map((node) => node.isolation_score).sort((a, b) => a - b);
+  if (scoreList.length) {
+    const idx = Math.floor(scoreList.length * 0.9);
+    state.outlierThreshold = clamp(scoreList[idx] || 0.7, 0, 1);
+  } else {
+    state.outlierThreshold = 0.7;
+  }
+
+  const slider = document.getElementById("outlier-slider");
+  slider.value = state.outlierThreshold.toFixed(2);
+  document.getElementById("outlier-value").textContent = slider.value;
+
+  const collectionSet = new Set();
+  state.nodes.forEach((node) => {
+    const colls = (node.collections && node.collections.length) ? node.collections : ["Uncategorized"];
+    colls.forEach((name) => collectionSet.add(name));
+  });
+  state.allCollections = [...collectionSet].sort();
+  state.activeCollections = new Set(state.allCollections);
+  state.colorScale = d3.scaleOrdinal().domain(state.allCollections).range(PALETTE);
+
+  const outlierCount = state.nodes.filter((node) => node.is_outlier).length;
+  const clusterCount = new Set(state.nodes.map((node) => node.cluster)).size;
+  document.getElementById("stat-nodes").textContent = String(state.nodes.length);
+  document.getElementById("stat-links").textContent = String(state.links.length);
+  document.getElementById("stat-clusters").textContent = String(clusterCount);
+  document.getElementById("stat-outliers").textContent = String(outlierCount);
+  setMetaNote(data.meta || {});
+
+  buildLegend();
+  buildGraph();
+  applyMode();
+  updateFallbackActions();
+  document.getElementById("loadscreen").style.display = "none";
+}
+
+function buildLegend() {
+  const container = document.getElementById("legend-items");
+  container.innerHTML = "";
+  state.allCollections.forEach((name) => {
+    const count = state.nodes.filter((node) => {
+      const colls = (node.collections && node.collections.length) ? node.collections : ["Uncategorized"];
+      return colls.includes(name);
+    }).length;
+    const item = document.createElement("div");
+    item.className = "legend-item";
+    item.innerHTML = `
+      <span class="legend-dot" style="background:${state.colorScale(name)}"></span>
+      <span>${name.replace(/^CB:\s*/, "")}</span>
+      <span class="legend-count">${count}</span>
+    `;
+    item.onclick = () => {
+      if (state.activeCollections.has(name)) {
+        state.activeCollections.delete(name);
+        item.classList.add("muted");
+      } else {
+        state.activeCollections.add(name);
+        item.classList.remove("muted");
+      }
+      updateVisibility();
+    };
+    container.appendChild(item);
+  });
+}
+
+function buildGraph() {
+  state.width = window.innerWidth;
+  state.height = window.innerHeight;
+
+  const svg = d3.select("#graph")
+    .attr("width", state.width)
+    .attr("height", state.height);
+  svg.selectAll("*").remove();
+
+  const graphRoot = svg.append("g");
+  const linkLayer = graphRoot.append("g");
+  const nodeLayer = graphRoot.append("g");
+
+  const zoom = d3.zoom()
+    .scaleExtent([0.1, 8])
+    .on("zoom", (event) => graphRoot.attr("transform", event.transform));
+  svg.call(zoom);
+
+  const linkSel = linkLayer.selectAll("line")
+    .data(state.links)
+    .join("line")
+    .attr("stroke", "#2a3d5f")
+    .attr("stroke-width", (d) => Math.max(0.4, d.similarity * 1.8))
+    .attr("opacity", 0.09);
+
+  const nodeSel = nodeLayer.selectAll("g")
+    .data(state.nodes)
+    .join("g")
+    .attr("class", "node-group")
+    .call(dragBehavior());
+
+  nodeSel.append("circle")
+    .attr("class", "node-ring")
+    .attr("r", (d) => nodeRadius(d) + 2.3)
+    .attr("fill", "none")
+    .attr("stroke", "#334a69")
+    .attr("stroke-width", 1.4)
+    .attr("opacity", 0.7);
+
+  nodeSel.append("circle")
+    .attr("class", "node-core")
+    .attr("r", (d) => nodeRadius(d))
+    .attr("fill", (d) => state.colorScale(primaryCollection(d)))
+    .attr("stroke", "#0f1829")
+    .attr("stroke-width", 1.2)
+    .attr("opacity", 0.9);
+
+  nodeSel.filter((d) => d.is_centroid)
+    .append("text")
+    .attr("dy", (d) => nodeRadius(d) + 12)
+    .attr("text-anchor", "middle")
+    .attr("font-size", "10px")
+    .attr("fill", "#8ca3c2")
+    .text((d) => truncate(d.title || d.id, 24));
+
+  nodeSel
+    .on("mouseover", showTooltip)
+    .on("mousemove", moveTooltip)
+    .on("mouseout", hideTooltip)
+    .on("click", (_, d) => showDetail(d));
+
+  state.simulation = d3.forceSimulation(state.nodes)
+    .force(
+      "link",
+      d3.forceLink(state.links)
+        .id((d) => d.id)
+        .distance((d) => 90 / Math.max(0.15, d.similarity || 0.2))
+        .strength((d) => Math.min(0.8, Math.max(0.08, d.similarity || 0.2)))
+    )
+    .force("charge", d3.forceManyBody().strength(-120).distanceMax(360))
+    .force("center", d3.forceCenter(state.width / 2, state.height / 2))
+    .force("collide", d3.forceCollide().radius((d) => nodeRadius(d) + 4))
+    .force("x", d3.forceX(state.width / 2).strength(0.03))
+    .force("y", d3.forceY(state.height / 2).strength(0.03))
+    .alphaDecay(0.018)
+    .on("tick", () => {
+      linkSel
+        .attr("x1", (d) => d.source.x)
+        .attr("y1", (d) => d.source.y)
+        .attr("x2", (d) => d.target.x)
+        .attr("y2", (d) => d.target.y);
+
+      nodeSel.attr("transform", (d) => `translate(${d.x},${d.y})`);
+    });
+
+  state.svg = svg;
+  state.graphRoot = graphRoot;
+  state.linkLayer = linkLayer;
+  state.nodeLayer = nodeLayer;
+  state.zoomBehavior = zoom;
+
+  setTimeout(() => fitToGraph(), 1200);
+  updateVisibility();
+}
+
+function fitToGraph() {
+  if (!state.graphRoot || !state.svg || !state.zoomBehavior) return;
+  const node = state.graphRoot.node();
+  if (!node) return;
+  const bbox = node.getBBox();
+  if (!bbox || bbox.width <= 0 || bbox.height <= 0) return;
+
+  const scale = Math.min(
+    state.width / (bbox.width + 180),
+    state.height / (bbox.height + 180),
+    1.4
+  );
+  const tx = state.width / 2 - (bbox.x + bbox.width / 2) * scale;
+  const ty = state.height / 2 - (bbox.y + bbox.height / 2) * scale;
+  state.svg.transition().duration(700).call(
+    state.zoomBehavior.transform,
+    d3.zoomIdentity.translate(tx, ty).scale(scale)
+  );
+}
+
+function dragBehavior() {
+  return d3.drag()
+    .on("start", (event, d) => {
+      if (!event.active) state.simulation.alphaTarget(0.3).restart();
+      d.fx = d.x;
+      d.fy = d.y;
+    })
+    .on("drag", (event, d) => {
+      d.fx = event.x;
+      d.fy = event.y;
+    })
+    .on("end", (event, d) => {
+      if (!event.active) state.simulation.alphaTarget(0);
+      d.fx = null;
+      d.fy = null;
+    });
+}
+
+function linkEndpointId(endpoint) {
+  if (!endpoint) return "";
+  if (typeof endpoint === "string") return endpoint;
+  return endpoint.id || "";
+}
+
+function nodeMatchesSearch(node, query) {
+  if (!query) return true;
+  const fields = [
+    node.title || "",
+    node.board || "",
+    node.summary || "",
+    ...(node.labels || []),
+    ...((node.collections && node.collections.length) ? node.collections : ["Uncategorized"]),
+  ];
+  return fields.join(" ").toLowerCase().includes(query);
+}
+
+function nodeMatchesCollection(node) {
+  const colls = (node.collections && node.collections.length) ? node.collections : ["Uncategorized"];
+  return colls.some((name) => state.activeCollections.has(name));
+}
+
+function nodeMatchesMode(node) {
+  if (state.mode !== "outliers") return true;
+  return node.isolation_score >= state.outlierThreshold;
+}
+
+function nodeIsVisible(node) {
+  if (node._removed) return false;
+  return nodeMatchesCollection(node) && nodeMatchesSearch(node, state.search) && nodeMatchesMode(node);
+}
+
+function updateVisibility() {
+  if (!state.nodeLayer || !state.linkLayer) return;
+
+  const visibleIds = new Set(state.nodes.filter(nodeIsVisible).map((node) => node.id));
+
+  state.nodeLayer.selectAll(".node-group")
+    .attr("opacity", (d) => visibleIds.has(d.id) ? 1 : 0.06)
+    .attr("pointer-events", (d) => visibleIds.has(d.id) ? "auto" : "none");
+
+  state.nodeLayer.selectAll(".node-ring")
+    .attr("stroke", (d) => {
+      if (state.selectedNode && state.selectedNode.id === d.id) return "#f3fbff";
+      if (state.mode === "outliers" && visibleIds.has(d.id)) {
+        return d.is_outlier ? "#f97316" : "#3a5275";
+      }
+      return "#334a69";
+    })
+    .attr("stroke-width", (d) => {
+      if (state.selectedNode && state.selectedNode.id === d.id) return 2.8;
+      if (state.mode === "outliers" && visibleIds.has(d.id) && d.is_outlier) return 2.4;
+      return 1.4;
+    });
+
+  state.linkLayer.selectAll("line")
+    .attr("opacity", (d) => {
+      const sid = linkEndpointId(d.source);
+      const tid = linkEndpointId(d.target);
+      const visible = visibleIds.has(sid) && visibleIds.has(tid);
+      if (!visible) return 0.01;
+      return state.mode === "outliers" ? 0.12 : 0.09;
+    });
+}
+
+function applyMode() {
+  document.getElementById("mode-discover").classList.toggle("active", state.mode === "discover");
+  document.getElementById("mode-outliers").classList.toggle("active", state.mode === "outliers");
+  document.getElementById("outlier-controls").style.display = state.mode === "outliers" ? "inline-flex" : "none";
+  updateVisibility();
+}
+
+function showTooltip(event, node) {
+  const tooltip = document.getElementById("tooltip");
+  setImageWithFallback(document.getElementById("tt-image"), node);
+  document.getElementById("tt-title").textContent = node.title || node.id;
+  document.getElementById("tt-sub").textContent =
+    `${(node.collections || ["Uncategorized"]).join(", ").replace(/CB:\s*/g, "")} | isolation ${node.isolation_score.toFixed(2)}`;
+  const tags = document.getElementById("tt-tags");
+  tags.innerHTML = "";
+  (node.labels || []).slice(0, 8).forEach((label) => {
+    const el = document.createElement("span");
+    el.className = "tt-tag";
+    el.textContent = label;
+    tags.appendChild(el);
+  });
+  tooltip.style.display = "block";
+  moveTooltip(event);
+}
+
+function moveTooltip(event) {
+  const tooltip = document.getElementById("tooltip");
+  let x = event.clientX + 14;
+  let y = event.clientY + 14;
+  if (x + 320 > window.innerWidth) x = event.clientX - 320;
+  if (y + 260 > window.innerHeight) y = event.clientY - 260;
+  tooltip.style.left = `${x}px`;
+  tooltip.style.top = `${y}px`;
+}
+
+function hideTooltip() {
+  document.getElementById("tooltip").style.display = "none";
+}
+
+function showDetail(node) {
+  state.selectedNode = node;
+  document.getElementById("detail").classList.add("open");
+  document.getElementById("action-status").textContent = "";
+  setImageWithFallback(document.getElementById("detail-image"), node);
+
+  document.getElementById("det-title").textContent = node.title || node.id;
+  document.getElementById("det-board").textContent = node.board ? `Board: ${node.board}` : "Board: n/a";
+  document.getElementById("det-collections").textContent = `Collections: ${(node.collections || ["Uncategorized"]).join(", ")}`;
+
+  const sourceUrl = String(node.source_url || "").trim();
+  if (sourceUrl) {
+    document.getElementById("det-source").innerHTML =
+      `Source: <a href="${sourceUrl}" target="_blank" rel="noopener noreferrer">${truncate(sourceUrl, 55)}</a>`;
+  } else {
+    document.getElementById("det-source").textContent = "Source: no openable source URL";
+  }
+
+  document.getElementById("det-metrics").textContent =
+    `Isolation ${node.isolation_score.toFixed(2)} | Bridge ${node.bridge_score.toFixed(2)} | Neighbors ${node.neighbor_count}`;
+  document.getElementById("det-summary").textContent = node.summary || "No summary available.";
+
+  const tagsEl = document.getElementById("det-tags");
+  tagsEl.innerHTML = "";
+  (node.labels || []).forEach((label) => {
+    const el = document.createElement("span");
+    el.className = "det-tag";
+    el.textContent = label;
+    tagsEl.appendChild(el);
+  });
+  if (!tagsEl.children.length) {
+    const el = document.createElement("span");
+    el.className = "det-tag";
+    el.textContent = "No labels";
+    tagsEl.appendChild(el);
+  }
+
+  const neighborsEl = document.getElementById("det-neighbors");
+  neighborsEl.innerHTML = "";
+  const links = state.links
+    .filter((link) => linkEndpointId(link.source) === node.id || linkEndpointId(link.target) === node.id)
+    .sort((a, b) => Number(b.similarity || 0) - Number(a.similarity || 0))
+    .slice(0, 10);
+
+  links.forEach((link) => {
+    const otherId = linkEndpointId(link.source) === node.id ? linkEndpointId(link.target) : linkEndpointId(link.source);
+    const other = state.nodeById.get(otherId);
+    if (!other) return;
+    const li = document.createElement("li");
+    li.textContent = `${truncate(other.title || other.id, 42)} - ${(link.similarity * 100).toFixed(0)}%`;
+    li.onclick = () => showDetail(other);
+    neighborsEl.appendChild(li);
+  });
+
+  if (!neighborsEl.children.length) {
+    const li = document.createElement("li");
+    li.textContent = "No connected neighbors in this export.";
+    li.style.cursor = "default";
+    neighborsEl.appendChild(li);
+  }
+
+  const removeBtn = document.getElementById("remove-btn");
+  const canRemove = Boolean(state.collectionId && state.apiBase);
+  removeBtn.style.display = canRemove ? "inline-block" : "none";
+  removeBtn.disabled = false;
+
+  updateVisibility();
+}
+
+function closeDetail() {
+  state.selectedNode = null;
+  document.getElementById("detail").classList.remove("open");
+  document.getElementById("action-status").textContent = "";
+  updateVisibility();
+}
+
+async function removeSelectedFromCollection() {
+  if (!state.selectedNode || !state.collectionId || !state.apiBase) return;
+  const btn = document.getElementById("remove-btn");
+  btn.disabled = true;
+  const statusEl = document.getElementById("action-status");
+  statusEl.textContent = "Removing...";
+  try {
+    const url = `${state.apiBase}/api/collections/${encodeURIComponent(state.collectionId)}/items/remove`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ asset_ids: [state.selectedNode.id] }),
+    });
+    const payload = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      throw new Error(payload.error || `HTTP ${resp.status}`);
+    }
+    state.selectedNode._removed = true;
+    statusEl.textContent = "Removed from collection and hidden from this view.";
+    updateVisibility();
+  } catch (err) {
+    statusEl.textContent = `Remove failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function openSourceForSelected() {
+  if (!state.selectedNode) return;
+  const url = String(state.selectedNode.source_url || "").trim();
+  if (!url) {
+    document.getElementById("action-status").textContent = "This item has no openable source URL.";
+    return;
+  }
+  window.open(url, "_blank", "noopener");
+}
+
+function updateFallbackActions() {
+  const showFallback = Boolean(state.collectionId && !state.apiBase);
+  document.getElementById("fallback-actions").style.display = showFallback ? "block" : "none";
+}
+
+function downloadRemoveCandidates() {
+  if (!state.collectionId) return;
+  const candidates = state.nodes
+    .filter((node) => !node._removed && node.isolation_score >= state.outlierThreshold)
+    .sort((a, b) => b.isolation_score - a.isolation_score)
+    .map((node) => ({
+      id: node.id,
+      title: node.title || "",
+      isolation_score: Number(node.isolation_score.toFixed(4)),
+      bridge_score: Number(node.bridge_score.toFixed(4)),
+      source_url: node.source_url || "",
+    }));
+
+  const payload = {
+    collection_id: state.collectionId,
+    threshold: Number(state.outlierThreshold.toFixed(2)),
+    generated_at: new Date().toISOString(),
+    candidates,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `remove_candidates_${state.collectionId}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function tryAutoLoad() {
+  const status = document.getElementById("load-status");
+  try {
+    const response = await fetch("cluster_data.json", { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    initialize(data);
+    return true;
+  } catch (err) {
+    status.textContent = `Automatic load unavailable: ${err.message}`;
+    return false;
+  }
+}
+
+function loadFromFile(file) {
+  const reader = new FileReader();
+  reader.onload = (event) => {
+    try {
+      const data = JSON.parse(event.target.result);
+      initialize(data);
+    } catch (err) {
+      document.getElementById("load-status").textContent = `Failed to parse JSON: ${err.message}`;
+    }
+  };
+  reader.readAsText(file);
+}
+
+document.getElementById("file-input").addEventListener("change", (event) => {
+  const file = event.target.files && event.target.files[0];
+  if (file) loadFromFile(file);
+});
+
+document.getElementById("mode-discover").addEventListener("click", () => {
+  state.mode = "discover";
+  applyMode();
+});
+
+document.getElementById("mode-outliers").addEventListener("click", () => {
+  state.mode = "outliers";
+  applyMode();
+});
+
+document.getElementById("outlier-slider").addEventListener("input", (event) => {
+  state.outlierThreshold = clamp(Number(event.target.value || 0), 0, 1);
+  document.getElementById("outlier-value").textContent = state.outlierThreshold.toFixed(2);
+  if (state.mode === "outliers") updateVisibility();
+});
+
+document.getElementById("search").addEventListener("input", (event) => {
+  state.search = String(event.target.value || "").trim().toLowerCase();
+  updateVisibility();
+});
+
+document.getElementById("remove-btn").addEventListener("click", removeSelectedFromCollection);
+document.getElementById("open-source-btn").addEventListener("click", openSourceForSelected);
+document.getElementById("download-candidates").addEventListener("click", downloadRemoveCandidates);
+
+window.addEventListener("resize", () => {
+  if (!state.svg || !state.simulation) return;
+  state.width = window.innerWidth;
+  state.height = window.innerHeight;
+  state.svg.attr("width", state.width).attr("height", state.height);
+  state.simulation.force("center", d3.forceCenter(state.width / 2, state.height / 2));
+  state.simulation.alpha(0.12).restart();
+});
+
+window.closeDetail = closeDetail;
+
+tryAutoLoad();
+</script>
+</body>
+</html>

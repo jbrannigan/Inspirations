@@ -62,6 +62,7 @@ class TestServerApi(unittest.TestCase):
         self.server.db_path = self.db_path
         self.server.app_dir = self.app_dir
         self.server.store_dir = self.store_dir
+        self.server.imports_dir = self.tmp_path / "imports"
         self.server.admin_tokens = {}
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -84,17 +85,32 @@ class TestServerApi(unittest.TestCase):
         self.thread.join(timeout=2)
         self._tmp.cleanup()
 
-    def _request(self, path: str, *, method: str = "GET", payload: dict | None = None, headers: dict | None = None):
+    def _request(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        payload: dict | None = None,
+        raw_data: bytes | None = None,
+        headers: dict | None = None,
+        return_headers: bool = False,
+    ):
         req_headers = dict(headers or {})
         data = None
+        if payload is not None and raw_data is not None:
+            raise ValueError("payload and raw_data are mutually exclusive")
         if payload is not None:
             data = json.dumps(payload).encode("utf-8")
             req_headers.setdefault("Content-Type", "application/json")
+        elif raw_data is not None:
+            data = raw_data
         req = urllib.request.Request(f"{self.base_url}{path}", method=method, data=data, headers=req_headers)
         try:
             with urllib.request.urlopen(req, timeout=5) as resp:
                 raw = resp.read().decode("utf-8")
                 body = json.loads(raw) if raw else {}
+                if return_headers:
+                    return resp.status, body, dict(resp.headers.items())
                 return resp.status, body
         except urllib.error.HTTPError as e:
             try:
@@ -103,6 +119,8 @@ class TestServerApi(unittest.TestCase):
                     body = json.loads(raw) if raw else {}
                 except json.JSONDecodeError:
                     body = {"error": raw}
+                if return_headers:
+                    return e.code, body, dict((e.headers or {}).items())
                 return e.code, body
             finally:
                 e.close()
@@ -202,6 +220,151 @@ class TestServerApi(unittest.TestCase):
             status, body = self._request("/api/search/similar?q=oak&semantic_weight=fast")
         self.assertEqual(status, 400)
         self.assertEqual(body.get("error"), "semantic_weight must be number")
+
+    def test_assets_endpoint_supports_media_status_filter(self):
+        status, body = self._request("/api/assets?media_status=metadata_only")
+        self.assertEqual(status, 200)
+        self.assertEqual([a["id"] for a in body["assets"]], ["a2"])
+
+    def test_assets_endpoint_supports_label_mode_all(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into asset_labels (id, asset_id, label, confidence, source, model, run_id, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                """,
+                ("l1", "a1", "oak", 0.8, "ai", "test", "r1"),
+            )
+            db.exec(
+                """
+                insert into asset_labels (id, asset_id, label, confidence, source, model, run_id, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                """,
+                ("l2", "a1", "white", 0.7, "ai", "test", "r1"),
+            )
+            db.exec(
+                """
+                insert into asset_labels (id, asset_id, label, confidence, source, model, run_id, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                """,
+                ("l3", "a2", "oak", 0.9, "ai", "test", "r1"),
+            )
+
+        status, body = self._request("/api/assets?label=oak,white&label_mode=all")
+        self.assertEqual(status, 200)
+        self.assertEqual([a["id"] for a in body["assets"]], ["a1"])
+
+    def test_hide_asset_moves_to_hidden_collection_and_excludes_from_main_canvas(self):
+        status, body = self._request("/api/assets/a2/hide", method="POST", payload={})
+        self.assertEqual(status, 200)
+        hidden_id = body.get("hidden_collection_id")
+        self.assertTrue(hidden_id)
+
+        status, body = self._request("/api/assets")
+        self.assertEqual(status, 200)
+        self.assertEqual([a["id"] for a in body["assets"]], ["a1"])
+
+        status, body = self._request(f"/api/assets?collection_id={hidden_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual([a["id"] for a in body["assets"]], ["a2"])
+
+    def test_facets_endpoint_contextualizes_content_kinds(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into assets
+                  (id, source, source_ref, title, imported_at, media_status, content_kind)
+                values (?, ?, ?, ?, datetime('now'), ?, ?)
+                """,
+                ("p1", "pinterest", "pin://3", "Pin", "image", "pin"),
+            )
+            db.exec(
+                """
+                insert into assets
+                  (id, source, source_ref, title, imported_at, media_status, content_kind)
+                values (?, ?, ?, ?, datetime('now'), ?, ?)
+                """,
+                ("f1", "facebook", "facebook://saved/f1", "FB post", "metadata_only", "post"),
+            )
+
+        status, body = self._request("/api/facets?source=pinterest&media_status=image")
+        self.assertEqual(status, 200)
+        facets = body.get("facets", {})
+        all_kinds = {r["content_kind"] for r in facets.get("content_kinds", [])}
+        context_kinds = {r["content_kind"] for r in facets.get("content_kinds_context", [])}
+        self.assertIn("post", all_kinds)
+        self.assertIn("pin", all_kinds)
+        self.assertEqual(context_kinds, {"pin"})
+
+    def test_server_disables_caching_for_app_and_api(self):
+        status, body, headers = self._request("/api/collections", return_headers=True)
+        self.assertEqual(status, 200)
+        self.assertIn("collections", body)
+        self.assertEqual(headers.get("Cache-Control"), "no-store")
+
+        req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.headers.get("Cache-Control"), "no-store")
+
+    def test_scan_pdf_upload_runs_import_and_thumbs(self):
+        boundary = "----insp-test-boundary"
+        pdf_data = b"%PDF-1.4\nmock\n%%EOF\n"
+        body = (
+            (
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="split_on_delimiters"\r\n\r\n'
+                "0\r\n"
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="use_form_parser"\r\n\r\n'
+                "1\r\n"
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="file"; filename="batch.pdf"\r\n'
+                "Content-Type: application/pdf\r\n\r\n"
+            ).encode("utf-8")
+            + pdf_data
+            + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        )
+        fake_import = {
+            "source": "scan",
+            "created_assets": 3,
+            "delimiter_pages_skipped": 1,
+            "detected_documents": 2,
+            "errors": [],
+        }
+        fake_thumbs = {"tool": "sips", "attempted": 3, "generated": 3, "errors": []}
+        with (
+            mock.patch("inspirations.server.import_scans_inbox", return_value=fake_import) as mocked_import,
+            mock.patch("inspirations.server.generate_thumbnails", return_value=fake_thumbs) as mocked_thumbs,
+        ):
+            status, payload = self._request(
+                "/api/import/scans",
+                method="POST",
+                raw_data=body,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload.get("ok"))
+        self.assertEqual(payload.get("upload_size_bytes"), len(pdf_data))
+        self.assertFalse(payload.get("options", {}).get("split_on_delimiters", True))
+        self.assertTrue(payload.get("options", {}).get("use_form_parser"))
+        self.assertEqual(payload.get("import", {}).get("created_assets"), 3)
+        self.assertEqual(payload.get("thumbs", {}).get("generated"), 3)
+
+        uploaded_file = Path(payload.get("uploaded_file", ""))
+        self.assertTrue(uploaded_file.exists())
+        self.assertIn("/imports/scans/inbox/uploads/", str(uploaded_file).replace("\\", "/"))
+
+        self.assertTrue(mocked_import.called)
+        self.assertTrue(mocked_thumbs.called)
+        import_kwargs = mocked_import.call_args.kwargs
+        self.assertEqual(import_kwargs.get("format"), "jpg")
+        self.assertEqual(import_kwargs.get("renderer"), "auto")
+        self.assertEqual(import_kwargs.get("max_pages"), 0)
+        self.assertFalse(import_kwargs.get("split_on_delimiters"))
 
 
 if __name__ == "__main__":
