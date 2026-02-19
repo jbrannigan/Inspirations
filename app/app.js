@@ -37,6 +37,9 @@ const state = {
   filterOpen: { sources: true },
   filtersExpanded: false,
   gridZoom: localStorage.getItem("gridZoom") || "m",
+  modalScanPages: null,     // array of asset IDs for the open scan doc's pages
+  modalScanPageIndex: 0,    // which page is currently shown in the modal
+  viewBoardName: "",        // board currently single-selected for Review (like viewCollectionId)
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -576,6 +579,7 @@ function openMobilePanel(side) {
 async function selectCollection(collectionId) {
   state.activeCollectionId = collectionId || "";
   state.viewCollectionId = collectionId || "";
+  state.viewBoardName = "";
   renderCollections();
   setStats();
   closeMobilePanels();
@@ -616,9 +620,16 @@ function setStats() {
   $("#addFiltered").disabled = state.assets.length === 0 || trayMode;
   $("#clearSelection").disabled = state.selected.size === 0;
   if (reviewBtn) {
-    reviewBtn.disabled = !viewCollection || trayMode;
-    reviewBtn.textContent = viewCollection ? `Review "${viewCollection.name}"` : "Review Collection";
-    reviewBtn.classList.toggle("primaryAction", !!viewCollection && !trayMode);
+    const canReview = (viewCollection || state.viewBoardName) && !trayMode;
+    reviewBtn.disabled = !canReview;
+    if (viewCollection) {
+      reviewBtn.textContent = `Review "${viewCollection.name}"`;
+    } else if (state.viewBoardName) {
+      reviewBtn.textContent = `Review "${state.viewBoardName}"`;
+    } else {
+      reviewBtn.textContent = "Review Collection";
+    }
+    reviewBtn.classList.toggle("primaryAction", !!canReview);
   }
   $("#showTrayCanvas").textContent = trayMode ? "Tray Canvas On" : "Show Tray Canvas";
   $("#showTrayCanvas").disabled = !trayMode && state.tray.length === 0;
@@ -679,8 +690,16 @@ function renderGroups() {
       el.className = `listItem groupItem${isActive ? " on" : ""}`;
       el.innerHTML = `<div class="groupItemRow"><span class="groupItemName">${escapeHtml(it.board)}</span><span class="groupItemCount">${it.n}</span></div>`;
       el.onclick = async () => {
-        if (state.boards.has(it.board)) state.boards.delete(it.board);
-        else state.boards.add(it.board);
+        if (state.viewBoardName === it.board) {
+          // Deselect
+          state.viewBoardName = "";
+          state.boards.delete(it.board);
+        } else {
+          state.viewBoardName = it.board;
+          state.boards.clear();
+          state.boards.add(it.board);
+        }
+        setStats();
         renderGroups();
         await loadAssets();
       };
@@ -761,6 +780,8 @@ function renderGrid() {
     const el = document.createElement("div");
     el.className = `card ${state.selected.has(a.id) ? "selected" : ""} ${state.expanded.has(a.id) ? "expanded" : ""}`;
     el.dataset.id = a.id;
+    const isMutliScan = a.source === "scan" && Number(a.scan_doc_pages || 0) > 1;
+    const memberIds = isMutliScan ? (a.scan_group_member_ids || []) : [];
     const preview = previewForAsset(a);
     const img = preview.url;
     const ai = a.ai;
@@ -797,6 +818,11 @@ function renderGrid() {
         }
         <div class="badge">${a.source}</div>
         <label class="selectBox"><input type="checkbox" ${state.selected.has(a.id) ? "checked" : ""} /></label>
+        ${isMutliScan && memberIds.length > 1 ? `<div class="scanPageNav">
+          <button class="scanPagePrev" aria-label="Previous page" disabled>‹</button>
+          <span class="scanPageIndicator">1 / ${memberIds.length}</span>
+          <button class="scanPageNext" aria-label="Next page">›</button>
+        </div>` : ""}
       </div>
       <div class="cardBody">
         <div class="cardTitle">${escapeHtml(displayTitle(a))}</div>
@@ -865,10 +891,34 @@ function renderGrid() {
       toggleSelect(a.id);
       updateCardState(a.id);
     });
-    el.querySelector("[data-annotate]").addEventListener("click", (e) => {
-      e.stopPropagation();
-      openModal(a);
-    });
+    if (isMutliScan && memberIds.length > 1) {
+      let cardPageIndex = 0;
+      const prevBtn = el.querySelector(".scanPagePrev");
+      const nextBtn = el.querySelector(".scanPageNext");
+      const indicator = el.querySelector(".scanPageIndicator");
+      const thumbImg = el.querySelector(".thumb img");
+      const navPage = (delta) => {
+        const newIdx = Math.max(0, Math.min(memberIds.length - 1, cardPageIndex + delta));
+        if (newIdx === cardPageIndex) return;
+        cardPageIndex = newIdx;
+        if (thumbImg) thumbImg.src = `/media/${memberIds[cardPageIndex]}?kind=thumb`;
+        if (indicator) indicator.textContent = `${cardPageIndex + 1} / ${memberIds.length}`;
+        if (prevBtn) prevBtn.disabled = cardPageIndex === 0;
+        if (nextBtn) nextBtn.disabled = cardPageIndex === memberIds.length - 1;
+      };
+      if (prevBtn) prevBtn.addEventListener("click", (e) => { e.stopPropagation(); navPage(-1); });
+      if (nextBtn) nextBtn.addEventListener("click", (e) => { e.stopPropagation(); navPage(1); });
+      el.querySelector("[data-annotate]").addEventListener("click", (e) => {
+        e.stopPropagation();
+        const siblingSourceRef = (a.source_ref || "").replace(/#p\d+$/, "") + `#p${cardPageIndex + 1}`;
+        openModal({ ...a, id: memberIds[cardPageIndex], source_ref: siblingSourceRef });
+      });
+    } else {
+      el.querySelector("[data-annotate]").addEventListener("click", (e) => {
+        e.stopPropagation();
+        openModal(a);
+      });
+    }
     const sourceLinkEl = el.querySelector(".sourceRefInline");
     if (sourceLinkEl) {
       sourceLinkEl.addEventListener("click", (e) => {
@@ -1156,20 +1206,33 @@ async function openModal(asset) {
   // Source link in notes area
   $("#assetNotes").value = asset.notes || "";
   const link = $("#sourceLink");
-  if (asset.source_ref) {
+  if (asset.source === "scan") {
+    // Parse page number from scan://sha#pN
+    const pageMatch = (asset.source_ref || "").match(/#p(\d+)$/);
+    const pageFragment = pageMatch ? `#page=${pageMatch[1]}` : "";
+    link.href = `/media/${asset.id}?kind=pdf${pageFragment}`;
+    link.textContent = "Open PDF";
+  } else if (isHttpUrl(asset.source_ref)) {
     link.href = asset.source_ref;
+    link.textContent = "Open original";
+  } else if (asset.stored_path) {
+    link.href = `/media/${asset.id}?kind=original`;
     link.textContent = "Open original";
   } else {
     link.href = "#";
     link.textContent = "No source";
   }
 
-  // View Source button: scan → original PDF, external source → source_ref, photo → stored file
+  // View Source button: scan → original PDF (with page), external → source_ref, photo → stored file
   const viewSourceBtn = $("#viewSourceBtn");
   if (viewSourceBtn) {
     let targetUrl = null;
+    let btnLabel = "View Source";
     if (asset.source === "scan") {
-      targetUrl = `/media/${asset.id}?kind=pdf`;
+      const pageMatch = (asset.source_ref || "").match(/#p(\d+)$/);
+      const pageFragment = pageMatch ? `#page=${pageMatch[1]}` : "";
+      targetUrl = `/media/${asset.id}?kind=pdf${pageFragment}`;
+      btnLabel = "View PDF";
     } else if (isHttpUrl(asset.source_ref)) {
       targetUrl = asset.source_ref;
     } else if (asset.stored_path) {
@@ -1177,14 +1240,77 @@ async function openModal(asset) {
     }
     if (targetUrl) {
       viewSourceBtn.style.display = "";
+      viewSourceBtn.textContent = btnLabel;
       viewSourceBtn.onclick = () => window.open(targetUrl, "_blank", "noopener");
     } else {
       viewSourceBtn.style.display = "none";
     }
   }
 
+  // Multipage scan navigation in modal
+  const imageStage = $("#imageStage");
+  const existingModalNav = imageStage && imageStage.querySelector(".modalScanNav");
+  if (existingModalNav) existingModalNav.remove();
+  const scanPages = asset.scan_group_member_ids || [];
+  if (asset.source === "scan" && scanPages.length > 1) {
+    const pageMatch = (asset.source_ref || "").match(/#p(\d+)$/);
+    state.modalScanPages = scanPages;
+    state.modalScanPageIndex = pageMatch ? parseInt(pageMatch[1], 10) - 1 : 0;
+    const navEl = document.createElement("div");
+    navEl.className = "modalScanNav";
+    navEl.innerHTML = `
+      <button class="modalScanPrev" aria-label="Previous page" ${state.modalScanPageIndex === 0 ? "disabled" : ""}>‹</button>
+      <span class="modalScanIndicator">Page ${state.modalScanPageIndex + 1} of ${scanPages.length}</span>
+      <button class="modalScanNext" aria-label="Next page" ${state.modalScanPageIndex === scanPages.length - 1 ? "disabled" : ""}>›</button>
+    `;
+    navEl.querySelector(".modalScanPrev").onclick = () => _navModalScan(-1);
+    navEl.querySelector(".modalScanNext").onclick = () => _navModalScan(1);
+    if (imageStage) imageStage.appendChild(navEl);
+  } else {
+    state.modalScanPages = null;
+    state.modalScanPageIndex = 0;
+  }
+
   $("#modal").classList.remove("hidden");
   await loadAnnotations(asset.id);
+  renderAnnotations();
+  renderMarkers();
+}
+
+async function _navModalScan(delta) {
+  if (!state.modalScanPages) return;
+  const newIdx = Math.max(0, Math.min(state.modalScanPages.length - 1, state.modalScanPageIndex + delta));
+  if (newIdx === state.modalScanPageIndex) return;
+  state.modalScanPageIndex = newIdx;
+  const siblingId = state.modalScanPages[newIdx];
+  const curAsset = state.modalAsset;
+  const siblingSourceRef = (curAsset.source_ref || "").replace(/#p\d+$/, "") + `#p${newIdx + 1}`;
+  state.modalAsset = { ...curAsset, id: siblingId, source_ref: siblingSourceRef };
+
+  // Swap image to sibling thumbnail
+  const modalImage = $("#modalImage");
+  if (modalImage) {
+    modalImage.src = `/media/${siblingId}?kind=thumb`;
+    modalImage.style.display = "block";
+  }
+
+  // Update page indicator and prev/next disabled state
+  const indicator = document.querySelector(".modalScanIndicator");
+  if (indicator) indicator.textContent = `Page ${newIdx + 1} of ${state.modalScanPages.length}`;
+  const prevBtn = document.querySelector(".modalScanPrev");
+  const nextBtn = document.querySelector(".modalScanNext");
+  if (prevBtn) prevBtn.disabled = newIdx === 0;
+  if (nextBtn) nextBtn.disabled = newIdx === state.modalScanPages.length - 1;
+
+  // Update source link and view PDF button
+  const pageFragment = `#page=${newIdx + 1}`;
+  const pdfUrl = `/media/${siblingId}?kind=pdf${pageFragment}`;
+  const link = $("#sourceLink");
+  if (link) { link.href = pdfUrl; link.textContent = "Open PDF"; }
+  const viewSourceBtn = $("#viewSourceBtn");
+  if (viewSourceBtn) viewSourceBtn.onclick = () => window.open(pdfUrl, "_blank", "noopener");
+
+  await loadAnnotations(siblingId);
   renderAnnotations();
   renderMarkers();
 }
@@ -1527,6 +1653,12 @@ $("#showTrayCanvas").onclick = async () => {
 
 $("#reviewCollection").onclick = () => {
   const viewCollection = getViewCollection();
+  if (state.viewBoardName && !viewCollection) {
+    const dataUrl = `/api/cluster/review?board=${encodeURIComponent(state.viewBoardName)}&include_neighbors=0`;
+    const url = `/tools/cluster_explorer.html?data=${encodeURIComponent(dataUrl)}`;
+    window.open(url, "_blank");
+    return;
+  }
   if (!viewCollection) return;
   const dataUrl = `/api/cluster/review?collection_id=${encodeURIComponent(viewCollection.id)}&include_neighbors=0`;
   const url = `/tools/cluster_explorer.html?data=${encodeURIComponent(dataUrl)}`;
