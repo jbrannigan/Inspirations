@@ -44,10 +44,12 @@
   let _lassoStart = null;
   let _lassoEl = null;
 
-  // LOD thresholds (distance from camera to node)
-  const LOD_FAR = 18;
-  const LOD_MED = 10;
-  const LOD_CLOSE = 5;
+  // LOD thresholds (distance from camera to node).
+  // Data is normalized to ±5–10 units; camera starts at z=25, so the
+  // closest nodes are ~20 units away. These values must exceed that.
+  const LOD_FAR = 40;
+  const LOD_MED = 22;
+  const LOD_CLOSE = 12;
 
   // Texture cache
   const _texCache = {};
