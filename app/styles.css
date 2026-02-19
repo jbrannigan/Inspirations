@@ -312,7 +312,15 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .muted { color: var(--muted); font-size: 12px; }
 .modal { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(250,248,245,0.85); backdrop-filter: blur(8px); }
 .modal.hidden { display: none; }
-.modalContent { width: min(1100px, 92vw); background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 12px; box-shadow: var(--shadow-lg); }
+.modalContent { position: relative; width: min(1100px, 92vw); background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 12px; box-shadow: var(--shadow-lg); }
+.modalCloseX {
+  position: absolute; top: 12px; right: 12px; z-index: 10;
+  width: 36px; height: 36px;
+  font-size: 22px; line-height: 36px; text-align: center;
+  background: transparent; border: none; cursor: pointer;
+  color: var(--muted); border-radius: 8px;
+}
+.modalCloseX:hover { background: var(--surface-subtle); color: var(--text); }
 .modalHeader { display: flex; justify-content: space-between; align-items: center; }
 .modalTitle { font-size: var(--fs-md); font-weight: 650; }
 .modalBody { display: grid; grid-template-columns: 1.4fr 0.6fr; gap: 12px; margin-top: 10px; }
