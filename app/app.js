@@ -2411,7 +2411,11 @@ let _explorerInited = false;
 let _explorerLoading = false;
 
 async function switchToExplore() {
-  if (state.view === "explore") return;
+  // Guard: skip only if we're already in explore view AND the canvas is
+  // initialised. Without the _explorerInited check, a click that arrives
+  // before window.Explorer is ready (Three.js CDN still loading) would
+  // lock state.view to "explore" and make all subsequent clicks no-ops.
+  if (state.view === "explore" && _explorerInited) return;
   state.view = "explore";
 
   const grid = $("#grid");
