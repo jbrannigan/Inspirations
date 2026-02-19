@@ -7,6 +7,15 @@ Dated entries for every work session. Read this first when resuming.
 
 ---
 
+## 2026-02-19 — Explorer fixes: cluster spacing + [Review] toggle (PR #36)
+
+- Implemented `docs/EXPLORER_FIXES.md` in full
+- **Problem 1 — 3D clusters too close**: `explorer_layout.py` normalization scale 10→30 (±15 units base range); `explorer.js` LOD thresholds tripled (FAR 40→120, MED 22→65, CLOSE 12→35), camera z=25→75, far plane 1000→2000, spread slider max 3→5 and default 1.0→1.5; deleted 4 stale cached layout files
+- **Problem 2 — Both explorers accessible**: `index.html` adds `[Review]` to view toggle and removes old `#reviewCollection` toolbar button; `app.js` wires `#viewReview` to open `cluster_explorer.html` in a new window (collection-scoped if one is selected, all assets otherwise) without changing the active view; dead `reviewBtn` logic removed from `setStats()`
+- Validation: 104 tests passing, CI green on py3.11/3.12/3.13, lint clean
+
+---
+
 ## 2026-02-19 — Promote boards migration (PR #34)
 
 - Implemented `docs/PROMOTE_BOARDS_MIGRATION.md` in full
