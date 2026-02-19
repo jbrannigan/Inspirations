@@ -45,15 +45,7 @@ const EXTREME_ASPECT_RATIO_MAX = 1.8;
 const EXTREME_ASPECT_RATIO_MIN = 0.8;
 const ASSETS_PAGE_SIZE = 240;
 
-function escapeHtml(value) {
-  return (value || "")
-    .toString()
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
+const escapeHtml = Shared.escapeHtml;
 
 function asList(value) {
   if (!value) return [];
@@ -149,17 +141,7 @@ function renderTagSections(ai) {
     .join("");
 }
 
-async function api(path, opts = {}) {
-  const res = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...opts,
-  });
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(t || res.statusText);
-  }
-  return res.json();
-}
+const api = Shared.api;
 
 async function apiUpload(path, formData) {
   const res = await fetch(path, {
@@ -173,15 +155,7 @@ async function apiUpload(path, formData) {
   return res.json();
 }
 
-function formatApiError(err) {
-  const msg = `${(err && err.message) || err || "Request failed"}`.trim();
-  if (!msg) return "Request failed";
-  try {
-    const parsed = JSON.parse(msg);
-    if (parsed && typeof parsed.error === "string" && parsed.error.trim()) return parsed.error.trim();
-  } catch {}
-  return msg;
-}
+const formatApiError = Shared.formatApiError;
 
 function showFatalUiError(err) {
   const message = formatApiError(err);
@@ -302,7 +276,7 @@ function wireSingleFileDropZone(options) {
     const file = (event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0]) || null;
     if (!file) return;
     if (!options.accept(file)) {
-      if (options.invalidMessage) alert(options.invalidMessage);
+      if (options.invalidMessage) Shared.showToast(options.invalidMessage, { type: "error" });
       return;
     }
     setSingleFileSelection(input, file, options.stateKey);
@@ -547,8 +521,8 @@ function displayTitle(assetLike) {
   if (!title) return "(untitled)";
   if (source === "facebook") {
     title = title
-      .replace(/^leslie brannigan saved a (?:link|product|video)(?: from)?\s+/i, "")
-      .replace(/^leslie brannigan saved a (?:link|product|video)\.?$/i, "")
+      .replace(/^.{1,40}\s+saved a (?:link|product|video)(?: from)?\s+/i, "")
+      .replace(/^.{1,40}\s+saved a (?:link|product|video)\.?$/i, "")
       .trim();
     if (!title) {
       const host = sourceHost(
@@ -600,15 +574,21 @@ function setStats() {
   $("#stats").textContent = trayMode
     ? `${state.assets.length} tray item${state.assets.length === 1 ? "" : "s"} shown`
     : `${state.assets.length} items shown${destination}`;
+  const selectionBar = $("#selectionBar");
+  if (selectionBar) {
+    selectionBar.hidden = state.selected.size === 0;
+    const label = $("#selectionLabel");
+    if (label) label.textContent = `${state.selected.size} selected`;
+  }
   $("#addSelectedToCollection").textContent = activeCollection
-    ? `Add Selected to "${activeCollection.name}"`
+    ? `Add to "${activeCollection.name}"`
     : "Select Collection to Add";
   $("#addSelectedToCollection").disabled = state.selected.size === 0 || !activeCollection || trayMode;
-  $("#addSelected").textContent = activeCollection ? "Add Selected to Tray (Optional)" : "Add Selected to Tray";
+  $("#addSelected").textContent = activeCollection ? "Add to Tray (Optional)" : "Add to Tray";
   $("#addSelected").disabled = state.selected.size === 0 || trayMode;
   $("#removeSelectedFromCollection").textContent = viewCollection
-    ? `Remove Selected from "${viewCollection.name}"`
-    : "Remove Selected from Collection";
+    ? `Remove from "${viewCollection.name}"`
+    : "Remove from Collection";
   $("#removeSelectedFromCollection").disabled = state.selected.size === 0 || !viewCollection || trayMode;
   $("#removeSelectedFromTray").disabled = traySelectedCount === 0;
   $("#addFiltered").textContent = activeCollection ? `Add Filtered to "${activeCollection.name}"` : "Add Filtered to Tray";
@@ -672,18 +652,40 @@ function renderCollections() {
   }
 }
 
+function renderSkeletons(count) {
+  if (count === undefined) count = 12;
+  const wrap = $("#grid");
+  wrap.innerHTML = "";
+  for (let i = 0; i < count; i++) {
+    const el = document.createElement("div");
+    el.className = "skeleton-card";
+    el.innerHTML = '<div class="skeleton-thumb"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div>';
+    wrap.appendChild(el);
+  }
+}
+
 function renderGrid() {
   const wrap = $("#grid");
   wrap.innerHTML = "";
   if (!state.assets.length) {
-    const message = state.error ? `Unable to load items: ${state.error}` : "No items match current filters.";
-    wrap.innerHTML = `<div class="muted">${escapeHtml(message)}</div>`;
+    const isFiltered = state.q || state.sources.size || state.boards.size ||
+      state.labels.size || state.contentKinds.size || state.creators.size;
+    const message = state.error
+      ? `Unable to load items: ${escapeHtml(state.error)}`
+      : isFiltered ? "No items match your current filters." : "No items yet.";
+    const action = state.error ? ""
+      : isFiltered ? '<button class="miniBtn" id="emptyStateClear">Clear all filters</button>'
+      : "<p>Use the import buttons above to add your first items.</p>";
+    wrap.innerHTML = `<div class="empty-state"><div class="empty-state-message">${message}</div>${action}</div>`;
+    const clearBtn = wrap.querySelector("#emptyStateClear");
+    if (clearBtn) clearBtn.onclick = async () => { resetFiltersAndSearch(); await loadFacets({ seedDefaultMedia: false }); await loadAssets(); };
     setStats();
     return;
   }
   for (const a of state.assets) {
     const el = document.createElement("div");
     el.className = `card ${state.selected.has(a.id) ? "selected" : ""} ${state.expanded.has(a.id) ? "expanded" : ""}`;
+    el.dataset.id = a.id;
     const preview = previewForAsset(a);
     const img = preview.url;
     const ai = a.ai;
@@ -746,9 +748,12 @@ function renderGrid() {
               : ""
           }
           ${!ai ? '<div class="expandedRow muted">No AI tags available for this item.</div>' : ""}
+          ${ai ? `<div class="expandedRow muted">Model: ${escapeHtml(a.ai_model || a.ai_provider || "—")}</div>` : ""}
         </div>
         <div class="cardFooter">
-          <div>AI: ${escapeHtml(a.ai_model || a.ai_provider || "—")} • ${labelCount} tags</div>
+          ${labelCount > 0
+            ? `<div class="tag-status tagged">${labelCount} tags</div>`
+            : `<div class="tag-status untagged">Not tagged</div>`}
           <button class="miniBtn annotateBtn" data-annotate>Annotate</button>
         </div>
       </div>
@@ -783,7 +788,7 @@ function renderGrid() {
     checkbox.addEventListener("click", (e) => {
       e.stopPropagation();
       toggleSelect(a.id);
-      renderGrid();
+      updateCardState(a.id);
     });
     el.querySelector("[data-annotate]").addEventListener("click", (e) => {
       e.stopPropagation();
@@ -801,10 +806,20 @@ function renderGrid() {
     el.onclick = () => {
       if (state.expanded.has(a.id)) state.expanded.delete(a.id);
       else state.expanded.add(a.id);
-      renderGrid();
+      updateCardState(a.id);
     };
     wrap.appendChild(el);
   }
+  setStats();
+}
+
+function updateCardState(id) {
+  const el = document.querySelector(`.card[data-id="${id}"]`);
+  if (!el) return;
+  el.classList.toggle("selected", state.selected.has(id));
+  el.classList.toggle("expanded", state.expanded.has(id));
+  const cb = el.querySelector("input[type=checkbox]");
+  if (cb) cb.checked = state.selected.has(id);
   setStats();
 }
 
@@ -850,6 +865,7 @@ async function loadAssets(append = false) {
   const semanticQuery = state.canvasMode === "tray" ? "" : semanticQueryFromInput(state.q);
   state.semanticMode = state.canvasMode === "tray" ? false : !!semanticQuery;
   state.loadingAssets = true;
+  if (!append) renderSkeletons();
   updateLoadMoreButton();
   try {
     if (state.canvasMode === "tray") {
@@ -978,7 +994,7 @@ function printModalAsset(asset) {
           openPrintWindow.focus();
           openPrintWindow.print();
         } catch (err) {
-          alert(`Print failed: ${err && err.message ? err.message : err}`);
+          Shared.showToast(`Print failed: ${err && err.message ? err.message : err}`, { type: "error" });
         }
       }, 140);
       return;
@@ -1010,14 +1026,14 @@ function printModalAsset(asset) {
         frame.contentWindow.focus();
         frame.contentWindow.print();
       } catch (err) {
-        alert(`Print failed: ${err && err.message ? err.message : err}`);
+        Shared.showToast(`Print failed: ${err && err.message ? err.message : err}`, { type: "error" });
       } finally {
         cleanup();
       }
     }, 160);
   } catch (err) {
     cleanup();
-    alert(`Print failed: ${err && err.message ? err.message : err}`);
+    Shared.showToast(`Print failed: ${err && err.message ? err.message : err}`, { type: "error" });
   }
 }
 
@@ -1072,28 +1088,37 @@ async function hideModalAsset() {
   const asset = state.modalAsset;
   if (!asset) return;
   const memberIds = memberAssetIds(asset);
+  const assetTitle = displayTitle(asset);
   if (isViewingHiddenCollection()) {
     const hidden = getHiddenCollection();
     if (!hidden) return;
-    const ok = confirm(`Unhide "${displayTitle(asset)}" and return it to normal canvas results?`);
-    if (!ok) return;
     try {
       await api(`/api/collections/${encodeURIComponent(hidden.id)}/items/remove`, {
         method: "POST",
         body: JSON.stringify({ asset_ids: memberIds }),
       });
+      const hiddenId = hidden.id;
       closeModal();
       await loadCollections();
       await loadAssets();
+      Shared.showToast(`Unhid "${assetTitle}"`, {
+        type: "success",
+        actionLabel: "Undo",
+        onAction: async () => {
+          await api(`/api/collections/${encodeURIComponent(hiddenId)}/items`, {
+            method: "POST",
+            body: JSON.stringify({ asset_ids: memberIds }),
+          });
+          await loadCollections();
+          await loadAssets();
+          Shared.showToast("Restored to hidden.", { type: "info" });
+        },
+      });
     } catch (e) {
-      alert(`Unhide failed: ${formatApiError(e)}`);
+      Shared.showToast(`Unhide failed: ${formatApiError(e)}`, { type: "error" });
     }
     return;
   }
-  const ok = confirm(
-    `Hide "${displayTitle(asset)}" from the main canvas?\n\nThis does not delete it. It moves to the "Hidden" collection, where you can choose Unhide later.`
-  );
-  if (!ok) return;
   try {
     const firstId = memberIds[0];
     if (!firstId) return;
@@ -1111,8 +1136,22 @@ async function hideModalAsset() {
     closeModal();
     await loadCollections();
     await loadAssets();
+    Shared.showToast(`Hidden "${assetTitle}"`, {
+      type: "success",
+      actionLabel: "Undo",
+      onAction: async () => {
+        if (!hiddenCollectionId) return;
+        await api(`/api/collections/${encodeURIComponent(hiddenCollectionId)}/items/remove`, {
+          method: "POST",
+          body: JSON.stringify({ asset_ids: memberIds }),
+        });
+        await loadCollections();
+        await loadAssets();
+        Shared.showToast("Asset restored to canvas.", { type: "info" });
+      },
+    });
   } catch (e) {
-    alert(`Hide failed: ${formatApiError(e)}`);
+    Shared.showToast(`Hide failed: ${formatApiError(e)}`, { type: "error" });
   }
 }
 
@@ -1423,7 +1462,7 @@ $("#deleteCollection").onclick = async () => {
       await loadCollections();
       await loadAssets();
     } catch (e2) {
-      alert(`Delete failed: ${e2.message || e2}`);
+      Shared.showToast(`Delete failed: ${e2.message || e2}`, { type: "error" });
     }
   }
 };
@@ -1453,7 +1492,7 @@ $("#addSelectedToCollection").onclick = async () => {
     await loadCollections();
     await loadAssets();
   } catch (e) {
-    alert(`Add selected to collection failed: ${e.message || e}`);
+    Shared.showToast(`Add failed: ${e.message || e}`, { type: "error" });
   }
 };
 
@@ -1462,20 +1501,32 @@ $("#removeSelectedFromCollection").onclick = async () => {
   const ids = expandAssetIds(Array.from(state.selected));
   if (!ids.length) return;
   const col = getViewCollection();
-  const ok = confirm(
-    `Remove ${state.selected.size} selected item${state.selected.size === 1 ? "" : "s"} from "${col ? col.name : "this collection"}"?`
-  );
-  if (!ok) return;
+  const colId = state.viewCollectionId;
+  const colName = col ? col.name : "this collection";
+  const count = state.selected.size;
   try {
-    await api(`/api/collections/${state.viewCollectionId}/items/remove`, {
+    await api(`/api/collections/${colId}/items/remove`, {
       method: "POST",
       body: JSON.stringify({ asset_ids: ids }),
     });
     state.selected.clear();
     await loadCollections();
     await loadAssets();
+    Shared.showToast(`Removed ${count} item${count === 1 ? "" : "s"} from "${colName}"`, {
+      type: "success",
+      actionLabel: "Undo",
+      onAction: async () => {
+        await api(`/api/collections/${colId}/items`, {
+          method: "POST",
+          body: JSON.stringify({ asset_ids: ids }),
+        });
+        await loadCollections();
+        await loadAssets();
+        Shared.showToast("Restored items.", { type: "info" });
+      },
+    });
   } catch (e) {
-    alert(`Remove from collection failed: ${e.message || e}`);
+    Shared.showToast(`Remove failed: ${e.message || e}`, { type: "error" });
   }
 };
 
@@ -1616,6 +1667,13 @@ async function init() {
 }
 
 init();
+
+document.querySelectorAll('.toolbar .row').forEach(row => {
+  row.addEventListener('scroll', () => {
+    const atEnd = row.scrollLeft + row.clientWidth >= row.scrollWidth - 8;
+    row.classList.toggle('scrolled-end', atEnd);
+  });
+});
 
 function facetContextQueryString() {
   const source = encodeURIComponent(Array.from(state.sources).join(","));
@@ -1835,7 +1893,7 @@ async function importScanPdf(file, opts = {}) {
   if (!file) return;
   const name = `${file.name || ""}`.trim();
   if (!isPdfFile(file)) {
-    alert("Please choose a PDF file.");
+    Shared.showToast("Please choose a PDF file.", { type: "error" });
     return;
   }
   const useFormParser = !!opts.useFormParser;
@@ -1877,10 +1935,10 @@ async function importScanPdf(file, opts = {}) {
     if (!detectDelimiters) msg += " Delimiter detection was turned off.";
     if (errors > 0) msg += ` ${errors} import error${errors === 1 ? "" : "s"} were reported.`;
     if (useFormParser) msg += " Form Parser option was requested.";
-    alert(msg);
+    Shared.showToast(msg, { type: "success" });
     closeScanImportModal();
   } catch (e) {
-    alert(`Scan import failed: ${formatApiError(e)}`);
+    Shared.showToast(`Scan import failed: ${formatApiError(e)}`, { type: "error", duration: 8000 });
   } finally {
     state.scanImportBusy = false;
     setScanImportButtonState();
@@ -1931,7 +1989,7 @@ async function importPhoto(file) {
   const name = `${file.name || ""}`.trim();
   if (!name) return;
   if (!isImageFile(file)) {
-    alert("Please choose an image file.");
+    Shared.showToast("Please choose an image file.", { type: "error" });
     return;
   }
   state.photoImportBusy = true;
@@ -1952,10 +2010,10 @@ async function importPhoto(file) {
     await loadAssets();
     let msg = `Imported ${created} photo item${created === 1 ? "" : "s"} from "${name}".`;
     if (errors > 0) msg += ` ${errors} import error${errors === 1 ? "" : "s"} were reported.`;
-    alert(msg);
+    Shared.showToast(msg, { type: "success" });
     closePhotoImportModal();
   } catch (e) {
-    alert(`Photo import failed: ${formatApiError(e)}`);
+    Shared.showToast(`Photo import failed: ${formatApiError(e)}`, { type: "error", duration: 8000 });
   } finally {
     state.photoImportBusy = false;
     setPhotoImportButtonState();
@@ -1969,8 +2027,21 @@ async function importPhoto(file) {
 
 async function clearTray() {
   if (!state.tray.length) return;
+  const clearedIds = expandAssetIds(state.tray.map((x) => x.id));
   await api("/api/tray/clear", { method: "POST" });
   await loadTray();
+  Shared.showToast(`Cleared ${clearedIds.length} item${clearedIds.length === 1 ? "" : "s"} from tray`, {
+    type: "success",
+    actionLabel: "Undo",
+    onAction: async () => {
+      await api("/api/tray/add", {
+        method: "POST",
+        body: JSON.stringify({ asset_ids: clearedIds }),
+      });
+      await loadTray();
+      Shared.showToast("Tray restored.", { type: "info" });
+    },
+  });
 }
 
 async function createCollectionFromTray() {
@@ -2000,7 +2071,7 @@ async function addTrayToActiveCollection() {
     await loadTray();
     await loadAssets();
   } catch (e) {
-    alert(`Add to collection failed: ${e.message || e}`);
+    Shared.showToast(`Add to collection failed: ${e.message || e}`, { type: "error" });
   }
 }
 
@@ -2035,7 +2106,7 @@ if (addScanPdfBtn && scanPdfInput && runScanImportBtn) {
   scanPdfInput.addEventListener("change", () => {
     const file = (scanPdfInput.files && scanPdfInput.files[0]) || null;
     if (file && !isPdfFile(file)) {
-      alert("Please choose a PDF file.");
+      Shared.showToast("Please choose a PDF file.", { type: "error" });
       setSingleFileSelection(scanPdfInput, null, "scanImportFile");
       setScanImportButtonState();
       return;
@@ -2090,7 +2161,7 @@ if (addPhotosBtn && photoInput && runPhotoImportBtn) {
   photoInput.addEventListener("change", () => {
     const file = (photoInput.files && photoInput.files[0]) || null;
     if (file && !isImageFile(file)) {
-      alert("Please choose an image file.");
+      Shared.showToast("Please choose an image file.", { type: "error" });
       setSingleFileSelection(photoInput, null, "photoImportFile");
       setPhotoImportButtonState();
       return;
