@@ -87,16 +87,18 @@
       <main class="content">
         <div class="toolbar">
           <div class="toolbarMeta">
-            <div id="stats" class="muted">Loading...</div>
+            <div class="row toolbarTopRow">
+              <div id="stats" class="muted">Loading...</div>
+              <div class="viewToggle" id="viewToggle" role="group" aria-label="View mode">
+                <button type="button" id="viewGrid" class="active" aria-pressed="true">Grid</button>
+                <button type="button" id="viewExplore" aria-pressed="false">Explore</button>
+              </div>
+            </div>
             <div id="canvasControls" class="row toolbar-section">
               <button id="toggleLabelMode" type="button">AI Tags: Any</button>
               <button id="showAll">Show All</button>
               <button id="showTrayCanvas">Show Tray Canvas</button>
               <button id="reviewCollection" disabled>Review Collection</button>
-              <div class="viewToggle" id="viewToggle" role="group" aria-label="View mode">
-                <button type="button" id="viewGrid" class="active" aria-pressed="true">Grid</button>
-                <button type="button" id="viewExplore" aria-pressed="false">Explore</button>
-              </div>
               <div class="zoomControl" id="zoomControl" role="group" aria-label="Grid zoom">
                 <button type="button" data-zoom="s">S</button>
                 <button type="button" data-zoom="m">M</button>

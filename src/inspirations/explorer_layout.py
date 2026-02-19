@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import random
-import sqlite3
 from pathlib import Path
+
+from .db import Db
 
 
 CLUSTER_PALETTE = [
@@ -32,10 +33,10 @@ def _cache_key(asset_ids: list[str]) -> str:
 
 
 def _load_embeddings(
-    conn: sqlite3.Connection, collection_id: str | None
+    db: Db, collection_id: str | None
 ) -> tuple[list[str], list[list[float]]]:
     if collection_id:
-        rows = conn.execute(
+        rows = db.query(
             """
             select ae.asset_id, ae.vector_json
             from asset_embeddings ae
@@ -44,37 +45,37 @@ def _load_embeddings(
             order by ae.asset_id
             """,
             (collection_id,),
-        ).fetchall()
+        )
     else:
-        rows = conn.execute(
+        rows = db.query(
             "select asset_id, vector_json from asset_embeddings order by asset_id"
-        ).fetchall()
+        )
 
     ids: list[str] = []
     vectors: list[list[float]] = []
-    for asset_id, vector_json in rows:
+    for row in rows:
         try:
-            vec = json.loads(vector_json)
+            vec = json.loads(row["vector_json"])
         except Exception:
             continue
-        ids.append(asset_id)
+        ids.append(row["asset_id"])
         vectors.append(vec)
     return ids, vectors
 
 
-def _load_asset_meta(conn: sqlite3.Connection, asset_ids: list[str]) -> dict[str, dict]:
+def _load_asset_meta(db: Db, asset_ids: list[str]) -> dict[str, dict]:
     if not asset_ids:
         return {}
     placeholders = ",".join("?" * len(asset_ids))
-    rows = conn.execute(
+    rows = db.query(
         f"select id, title, thumb_path from assets where id in ({placeholders})",
-        asset_ids,
-    ).fetchall()
-    return {r[0]: {"title": r[1] or "", "thumb_path": r[2] or ""} for r in rows}
+        tuple(asset_ids),
+    )
+    return {r["id"]: {"title": r["title"] or "", "thumb_path": r["thumb_path"] or ""} for r in rows}
 
 
 def _load_cluster_labels(
-    conn: sqlite3.Connection, cluster_members: dict[int, list[str]]
+    db: Db, cluster_members: dict[int, list[str]]
 ) -> dict[int, str]:
     result: dict[int, str] = {}
     for cid, member_ids in cluster_members.items():
@@ -82,7 +83,7 @@ def _load_cluster_labels(
             result[cid] = f"Cluster {cid}"
             continue
         placeholders = ",".join("?" * len(member_ids))
-        rows = conn.execute(
+        rows = db.query(
             f"""
             select label, count(*) as cnt
             from asset_labels
@@ -91,10 +92,10 @@ def _load_cluster_labels(
             order by cnt desc
             limit 3
             """,
-            member_ids,
-        ).fetchall()
+            tuple(member_ids),
+        )
         if rows:
-            result[cid] = " / ".join(r[0] for r in rows)
+            result[cid] = " / ".join(r["label"] for r in rows)
         else:
             result[cid] = f"Cluster {cid}"
     return result
@@ -186,7 +187,7 @@ def _cluster_coords(coords: list[list[float]]) -> list[int]:
 
 
 def compute_layout(
-    conn: sqlite3.Connection,
+    db: Db,
     data_dir: Path,
     collection_id: str | None = None,
     method: str = "umap",
@@ -194,7 +195,7 @@ def compute_layout(
 ) -> dict:
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    ids, vectors = _load_embeddings(conn, collection_id)
+    ids, vectors = _load_embeddings(db, collection_id)
     if not ids:
         return {"nodes": [], "clusters": []}
 
@@ -224,8 +225,8 @@ def compute_layout(
     for idx, asset_id in enumerate(ids):
         cluster_members[labels[idx]].append(asset_id)
 
-    asset_meta = _load_asset_meta(conn, ids)
-    label_strings = _load_cluster_labels(conn, cluster_members)
+    asset_meta = _load_asset_meta(db, ids)
+    label_strings = _load_cluster_labels(db, cluster_members)
 
     nodes = []
     for idx, asset_id in enumerate(ids):
