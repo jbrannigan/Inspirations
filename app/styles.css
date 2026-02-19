@@ -215,6 +215,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .content { padding: 12px; overflow: auto; }
 .toolbar { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; gap: 8px; }
 .toolbarMeta { display: grid; gap: 6px; min-width: 0; }
+.toolbarTopRow { justify-content: space-between; }
 .trayQuickActions { flex-wrap: wrap; }
 .row { display: flex; gap: 8px; align-items: center; }
 .toolbar > .row {
