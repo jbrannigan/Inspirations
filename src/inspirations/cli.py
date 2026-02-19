@@ -18,11 +18,25 @@ from .ai import (
     run_gemini_text_embedder,
     run_similarity_search,
 )
+from .export import export_html_gallery, export_static_share_portal
 from .server import run_server
 
 
 def _p(p: str) -> Path:
     return Path(p).expanduser().resolve()
+
+
+def _csv_unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in values:
+        for part in str(raw or "").split(","):
+            value = part.strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            out.append(value)
+    return out
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -228,6 +242,41 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_export_html(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    out_path = _p(args.out)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = export_html_gallery(
+            db,
+            out_path=out_path,
+            source=args.source,
+            collection_id=args.collection_id,
+            limit=args.limit,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_export_portal(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    out_path = _p(args.out)
+    collection_ids = _csv_unique(list(args.collection_ids or []))
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = export_static_share_portal(
+            db,
+            out_path=out_path,
+            source=args.source,
+            collection_ids=collection_ids,
+            include_unassigned=args.include_unassigned,
+            limit=args.limit,
+            title=args.title,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="inspirations", description="Inspiration library utilities")
     p.set_defaults(func=lambda _: p.print_help() or 2)
@@ -349,6 +398,37 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--store", default="store", help="Store directory (originals/thumbs)")
     serve.add_argument("--reload", action="store_true", help="Auto-reload on file changes")
     serve.set_defaults(func=cmd_serve)
+
+    exp = sub.add_parser("export", help="Export artifacts")
+    exp.set_defaults(func=lambda _: exp.print_help() or 2)
+    exp_sub = exp.add_subparsers(dest="export_cmd")
+    exp_html = exp_sub.add_parser("html", help="Export a shareable HTML gallery")
+    exp_html.add_argument("--out", default="data/exports/gallery.html", help="Output .html path")
+    exp_html.add_argument("--source", default="", help="Optional source filter")
+    exp_html.add_argument("--collection-id", default="", help="Optional collection id filter")
+    exp_html.add_argument("--limit", type=int, default=0, help="Limit assets (0 = no limit)")
+    exp_html.set_defaults(func=cmd_export_html)
+    exp_portal = exp_sub.add_parser(
+        "portal",
+        help="Export a static share portal (browse-only, semantic search disabled)",
+    )
+    exp_portal.add_argument("--out", default="data/exports/portal.html", help="Output .html path")
+    exp_portal.add_argument("--title", default="Inspirations Share Portal", help="Portal title text")
+    exp_portal.add_argument("--source", default="", help="Optional source filter")
+    exp_portal.add_argument(
+        "--collection-id",
+        action="append",
+        dest="collection_ids",
+        default=[],
+        help="Optional collection id filter (repeat flag or pass comma-separated ids)",
+    )
+    exp_portal.add_argument(
+        "--include-unassigned",
+        action="store_true",
+        help="Include assets not in a collection (default exports collection-assigned items only)",
+    )
+    exp_portal.add_argument("--limit", type=int, default=0, help="Limit assets (0 = no limit)")
+    exp_portal.set_defaults(func=cmd_export_portal)
 
     return p
 

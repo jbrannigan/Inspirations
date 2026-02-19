@@ -243,6 +243,13 @@ def load_embeddings(conn: sqlite3.Connection, allowed_ids: set[str]) -> dict[str
     return embeddings
 
 
+def lookup_collection_name(conn: sqlite3.Connection, collection_id: str) -> str:
+    row = conn.execute("select name from collections where id=?", (collection_id,)).fetchone()
+    if not row:
+        return ""
+    return str(row["name"] or "").strip()
+
+
 def select_collection_scope(
     conn: sqlite3.Connection,
     *,
@@ -250,7 +257,7 @@ def select_collection_scope(
     embeddings: dict[str, list[float]],
     collection_id: str,
     include_neighbors: int,
-) -> list[str]:
+) -> tuple[list[str], set[str], set[str]]:
     selected_raw = {
         str(row["asset_id"])
         for row in conn.execute("select asset_id from collection_items where collection_id=?", (collection_id,))
@@ -259,16 +266,16 @@ def select_collection_scope(
 
     if not selected:
         print(f"Collection {collection_id} has no embedded image assets to export.")
-        return []
+        return [], set(), set()
 
+    selected_set = set(selected)
     if include_neighbors <= 0:
-        return selected
+        return selected, selected_set, set()
 
     valid_set = set(valid_ids)
-    selected_set = set(selected)
     candidates = [asset_id for asset_id in valid_ids if asset_id in valid_set and asset_id not in selected_set]
     if not candidates:
-        return selected
+        return selected, selected_set, set()
 
     np = try_import_numpy()
     best_scores: dict[str, float] = {}
@@ -300,7 +307,7 @@ def select_collection_scope(
 
     ranked = sorted(best_scores.items(), key=lambda item: item[1], reverse=True)
     neighbor_ids = [asset_id for asset_id, _ in ranked[:include_neighbors]]
-    return selected + neighbor_ids
+    return selected + neighbor_ids, selected_set, set(neighbor_ids)
 
 
 def compute_similarity_edges(
@@ -470,8 +477,13 @@ def export_clusters(
         vectors = [embeddings[asset_id] for asset_id in embedded_ids]
         assignments, centroids = cluster_vectors(vectors, embedded_ids, clusters)
 
+        focus_ids: set[str] = set()
+        nearby_ids: set[str] = set()
+        collection_name = ""
+
         if collection_id:
-            scoped_ids = select_collection_scope(
+            collection_name = lookup_collection_name(conn, collection_id)
+            scoped_ids, focus_ids, nearby_ids = select_collection_scope(
                 conn,
                 valid_ids=embedded_ids,
                 embeddings=embeddings,
@@ -532,6 +544,8 @@ def export_clusters(
                     "isolation_score": isolation_scores.get(asset_id, 1.0),
                     "bridge_score": bridge_scores.get(asset_id, 0.0),
                     "is_outlier": asset_id in outlier_ids,
+                    "in_focus_collection": asset_id in focus_ids,
+                    "is_nearby_context": asset_id in nearby_ids,
                 }
             )
 
@@ -546,7 +560,10 @@ def export_clusters(
                 "project_root": str(project_root.resolve()),
                 "api_base": api_base or "",
                 "collection_id": collection_id or "",
+                "collection_name": collection_name,
                 "include_neighbors": include_neighbors,
+                "focus_count": len(focus_ids),
+                "nearby_count": len(nearby_ids),
             },
             "nodes": nodes,
             "links": [

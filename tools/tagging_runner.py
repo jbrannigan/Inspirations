@@ -25,7 +25,7 @@ from inspirations.ai import (
     _now_iso,
 )
 
-DB_PATH = Path(os.environ.get("DB_PATH", "/Users/minime/Projects/Inspirations/data/inspirations.sqlite"))
+DB_PATH = Path(os.environ.get("DB_PATH", "data/inspirations.sqlite"))
 LOG_PATH = Path(os.environ.get("PROGRESS_LOG", "/tmp/inspirations_gemini_tag_progress.log"))
 MODEL = os.environ.get("MODEL", DEFAULT_GEMINI_MODEL)
 RECITATION_FALLBACK_MODEL = os.environ.get("RECITATION_FALLBACK_MODEL", "gemini-2.0-flash").strip()

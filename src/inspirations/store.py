@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 from .db import Db
+
+_SCAN_REF_RE = re.compile(r"^scan://([a-f0-9]{64})(?:#p(\d+))?$", re.IGNORECASE)
+_SCAN_DOC_RE = re.compile(r"\s-\sdoc\s+(\d+)(?:\s+p(\d+))?$", re.IGNORECASE)
+_SCAN_DOC_SUFFIX_RE = re.compile(r"\s-\sdoc\s+\d+(?:\s+p\d+)?\s*$", re.IGNORECASE)
 
 
 def _now_iso() -> str:
@@ -13,6 +18,189 @@ def _now_iso() -> str:
 
 def _csv_values(raw: str) -> list[str]:
     return [s.strip() for s in (raw or "").split(",") if s.strip()]
+
+
+def _scan_ref_parts(source_ref: str) -> tuple[str, int | None] | None:
+    m = _SCAN_REF_RE.match((source_ref or "").strip())
+    if not m:
+        return None
+    sha = str(m.group(1) or "").strip().lower()
+    page_idx = int(m.group(2)) if m.group(2) else None
+    return (sha, page_idx)
+
+
+def _scan_doc_parts(title: str) -> tuple[int | None, int | None]:
+    m = _SCAN_DOC_RE.search((title or "").strip())
+    if not m:
+        return (None, None)
+    doc_idx = int(m.group(1)) if m.group(1) else None
+    doc_page = int(m.group(2)) if m.group(2) else None
+    return (doc_idx, doc_page)
+
+
+def _scan_doc_key_from_values(source_ref: str, title: str) -> tuple[str, int] | None:
+    ref = _scan_ref_parts(source_ref)
+    if not ref:
+        return None
+    sha, _ = ref
+    doc_idx, _ = _scan_doc_parts(title)
+    return (sha, int(doc_idx or 1))
+
+
+def _scan_doc_page_from_values(source_ref: str, title: str) -> int:
+    _, title_page = _scan_doc_parts(title)
+    ref = _scan_ref_parts(source_ref)
+    ref_page = ref[1] if ref else None
+    return int(title_page or ref_page or 1)
+
+
+def _scan_doc_display_title(title: str) -> str:
+    text = (title or "").strip()
+    if not text:
+        return text
+    return _SCAN_DOC_SUFFIX_RE.sub("", text).strip()
+
+
+def _unique_ids(values: list[Any]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for value in values:
+        v = str(value or "").strip()
+        if not v or v in seen:
+            continue
+        seen.add(v)
+        out.append(v)
+    return out
+
+
+def _expand_scan_asset_ids(db: Db, asset_ids: list[str]) -> list[str]:
+    unique_input_ids = _unique_ids(asset_ids)
+    if not unique_input_ids:
+        return []
+
+    placeholders = ",".join(["?"] * len(unique_input_ids))
+    rows = db.query(
+        f"select id, source, source_ref, title from assets where id in ({placeholders})",
+        tuple(unique_input_ids),
+    )
+    row_by_id: dict[str, dict[str, Any]] = {
+        str(r["id"]): {
+            "id": str(r["id"]),
+            "source": str(r["source"] or ""),
+            "source_ref": str(r["source_ref"] or ""),
+            "title": str(r["title"] or ""),
+        }
+        for r in rows
+    }
+
+    expanded: list[str] = []
+    seen_expanded: set[str] = set()
+    scan_member_cache: dict[tuple[str, int], list[str]] = {}
+
+    for aid in unique_input_ids:
+        row = row_by_id.get(aid)
+        if not row:
+            continue
+        source = str(row.get("source") or "").strip().lower()
+        if source != "scan":
+            if aid not in seen_expanded:
+                seen_expanded.add(aid)
+                expanded.append(aid)
+            continue
+
+        key = _scan_doc_key_from_values(str(row.get("source_ref") or ""), str(row.get("title") or ""))
+        if not key:
+            if aid not in seen_expanded:
+                seen_expanded.add(aid)
+                expanded.append(aid)
+            continue
+
+        members = scan_member_cache.get(key)
+        if members is None:
+            sha, _ = key
+            candidates = db.query(
+                "select id, source_ref, title from assets where source='scan' and source_ref like ?",
+                (f"scan://{sha}%",),
+            )
+            members = _unique_ids(
+                [
+                    str(c["id"])
+                    for c in candidates
+                    if _scan_doc_key_from_values(str(c["source_ref"] or ""), str(c["title"] or "")) == key
+                ]
+            )
+            if not members:
+                members = [aid]
+            scan_member_cache[key] = members
+
+        for member_id in members:
+            if member_id in seen_expanded:
+                continue
+            seen_expanded.add(member_id)
+            expanded.append(member_id)
+    return expanded
+
+
+def _collapse_scan_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+
+    grouped: dict[tuple[Any, ...], dict[str, Any]] = {}
+    ordered_keys: list[tuple[Any, ...]] = []
+    for idx, row in enumerate(rows):
+        source = str(row.get("source") or "").strip().lower()
+        if source == "scan":
+            doc_key = _scan_doc_key_from_values(str(row.get("source_ref") or ""), str(row.get("title") or ""))
+            if doc_key:
+                key = ("scan_doc", doc_key[0], int(doc_key[1]))
+            else:
+                key = ("asset", str(row.get("id") or ""))
+        else:
+            key = ("asset", str(row.get("id") or ""))
+        if key not in grouped:
+            grouped[key] = {"rows": [], "first_idx": idx}
+            ordered_keys.append(key)
+        grouped[key]["rows"].append(row)
+
+    out: list[dict[str, Any]] = []
+    for key in ordered_keys:
+        bundle = grouped[key]
+        group_rows = bundle["rows"]
+        if key[0] != "scan_doc":
+            out.append(dict(group_rows[0]))
+            continue
+
+        sorted_rows = sorted(
+            group_rows,
+            key=lambda r: (
+                _scan_doc_page_from_values(str(r.get("source_ref") or ""), str(r.get("title") or "")),
+                str(r.get("id") or ""),
+            ),
+        )
+        rep = dict(sorted_rows[0])
+        member_ids = _unique_ids([str(r.get("id") or "") for r in sorted_rows])
+        rep["scan_group_member_ids"] = member_ids
+        rep["scan_group_id"] = f"scan-doc://{key[1]}#d{key[2]}"
+        rep["scan_doc_index"] = int(key[2])
+        rep["scan_doc_pages"] = len(member_ids)
+        rep["scan_doc_page"] = 1 if member_ids else None
+        display_title = _scan_doc_display_title(str(rep.get("title") or ""))
+        if display_title:
+            rep["title"] = display_title
+
+        if not str(rep.get("ai_summary") or "").strip():
+            for row in sorted_rows:
+                if str(row.get("ai_summary") or "").strip():
+                    rep["ai_summary"] = row.get("ai_summary")
+                    break
+        if not str(rep.get("notes") or "").strip():
+            for row in sorted_rows:
+                if str(row.get("notes") or "").strip():
+                    rep["notes"] = row.get("notes")
+                    break
+        out.append(rep)
+
+    return out
 
 
 def list_assets(
@@ -152,8 +340,8 @@ def list_assets(
     limit ? offset ?;
     """
     params += [limit, offset]
-    rows = db.query(sql, tuple(params))
-    return [dict(r) for r in rows]
+    rows = [dict(r) for r in db.query(sql, tuple(params))]
+    return _collapse_scan_rows(rows)
 
 
 def list_facets(db: Db, *, source: str = "", media_status: str = "") -> dict[str, Any]:
@@ -254,14 +442,15 @@ def create_collection(db: Db, *, name: str, description: str = "") -> dict[str, 
 
 
 def add_items_to_collection(db: Db, *, collection_id: str, asset_ids: list[str]) -> int:
-    if not asset_ids:
+    expanded_ids = _expand_scan_asset_ids(db, asset_ids)
+    if not expanded_ids:
         return 0
     pos = db.query_value(
         "select coalesce(max(position), 0) from collection_items where collection_id=?",
         (collection_id,),
     )
     rows = []
-    for i, aid in enumerate(asset_ids, start=1):
+    for i, aid in enumerate(expanded_ids, start=1):
         rows.append((collection_id, aid, int(pos) + i))
     db.executemany(
         "insert or ignore into collection_items (collection_id, asset_id, position) values (?, ?, ?)",
@@ -274,14 +463,8 @@ def add_items_to_collection(db: Db, *, collection_id: str, asset_ids: list[str])
 def remove_items_from_collection(db: Db, *, collection_id: str, asset_ids: list[str]) -> int:
     if not asset_ids:
         return 0
-    unique_ids: list[str] = []
-    seen: set[str] = set()
-    for aid in asset_ids:
-        aid_s = str(aid or "").strip()
-        if not aid_s or aid_s in seen:
-            continue
-        seen.add(aid_s)
-        unique_ids.append(aid_s)
+    expanded_ids = _expand_scan_asset_ids(db, asset_ids)
+    unique_ids = _unique_ids(expanded_ids)
     if not unique_ids:
         return 0
 
@@ -360,15 +543,16 @@ def list_tray(db: Db) -> list[dict[str, Any]]:
         order by t.added_at asc;
         """
     )
-    return [dict(r) for r in rows]
+    return _collapse_scan_rows([dict(r) for r in rows])
 
 
 def add_to_tray(db: Db, *, asset_ids: list[str]) -> int:
-    if not asset_ids:
+    expanded_ids = _expand_scan_asset_ids(db, asset_ids)
+    if not expanded_ids:
         return 0
     rows = []
     now = _now_iso()
-    for aid in asset_ids:
+    for aid in expanded_ids:
         rows.append((aid, now))
     db.executemany("insert or ignore into tray_items (asset_id, added_at) values (?, ?)", rows)
     return len(rows)
@@ -377,7 +561,8 @@ def add_to_tray(db: Db, *, asset_ids: list[str]) -> int:
 def remove_from_tray(db: Db, *, asset_ids: list[str]) -> None:
     if not asset_ids:
         return
-    for aid in asset_ids:
+    expanded_ids = _expand_scan_asset_ids(db, asset_ids)
+    for aid in expanded_ids:
         db.exec("delete from tray_items where asset_id=?", (aid,))
 
 

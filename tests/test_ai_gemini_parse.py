@@ -1,12 +1,20 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from inspirations.ai import (
+    _clean_scan_title_text,
     _extract_finish_reasons,
     _extract_json_object,
-    _has_finish_reason,
-    _no_json_error_message,
     _flatten_ai_labels,
+    _no_json_error_message,
+    _has_finish_reason,
+    _suggest_scan_title,
+    run_gemini_image_labeler,
 )
+from inspirations.db import Db, ensure_schema
 
 
 class TestGeminiParsing(unittest.TestCase):
@@ -50,6 +58,83 @@ class TestGeminiParsing(unittest.TestCase):
         msg = _no_json_error_message(resp)
         self.assertIn("RECITATION", msg)
         self.assertIn("No JSON object", msg)
+
+    def test_suggest_scan_title_preserves_doc_suffix(self):
+        payload = {"summary": "A scanned page showing warm oak kitchen cabinetry and brass sconces."}
+        out = _suggest_scan_title(payload, "Batch Import - doc 3 p2")
+        self.assertEqual(out, "Warm oak kitchen cabinetry and brass sconces - doc 3 p2")
+
+    def test_clean_scan_title_text_strips_boilerplate_and_shortens(self):
+        summary = (
+            "This image showcases various interior spaces including a sunlit sitting area, "
+            "a hallway with artwork, and a home library."
+        )
+        cleaned = _clean_scan_title_text(summary)
+        self.assertEqual(cleaned, "Various interior spaces including a sunlit sitting area")
+
+    def test_clean_scan_title_text_strips_displays_prefix(self):
+        summary = "This image displays a bathroom vanity with two large mirrors and brass lighting."
+        cleaned = _clean_scan_title_text(summary)
+        self.assertEqual(cleaned, "Bathroom vanity with two large mirrors and brass lighting")
+
+    def test_run_gemini_image_labeler_updates_scan_title(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            img_path = Path(td) / "scan.png"
+            img_path.write_bytes(b"fake-image")
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    """
+                    insert into assets
+                      (id, source, source_ref, title, imported_at, stored_path, thumb_path, media_status, content_kind)
+                    values (?, ?, ?, ?, datetime('now'), ?, ?, ?, ?)
+                    """,
+                    (
+                        "s1",
+                        "scan",
+                        "scan://abc#p2",
+                        "Leslie batch - doc 1 p2",
+                        str(img_path),
+                        str(img_path),
+                        "image",
+                        "scan",
+                    ),
+                )
+                payload = {
+                    "summary": "A magazine page featuring shaker cabinets and white quartz counters."
+                }
+                response = {
+                    "candidates": [
+                        {
+                            "content": {
+                                "parts": [
+                                    {"text": json.dumps(payload)},
+                                ]
+                            }
+                        }
+                    ]
+                }
+                with mock.patch(
+                    "inspirations.ai._maybe_retry_with_recitation_fallback",
+                    return_value=(response, "gemini-2.5-flash"),
+                ):
+                    report = run_gemini_image_labeler(
+                        db,
+                        api_key="fake",
+                        model="gemini-2.5-flash",
+                        source="scan",
+                        image_kind="original",
+                        preflight=False,
+                    )
+                self.assertEqual(report["labeled_assets"], 1)
+                title = db.query_value("select title from assets where id='s1'")
+                self.assertEqual(
+                    title,
+                    "Shaker cabinets and white quartz counters - doc 1 p2",
+                )
+                summary = db.query_value("select ai_summary from assets where id='s1'")
+                self.assertEqual(summary, payload["summary"])
 
 
 if __name__ == "__main__":

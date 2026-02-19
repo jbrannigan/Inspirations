@@ -6,6 +6,9 @@ import os
 import re
 import secrets
 import sqlite3
+import subprocess
+import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from email.parser import BytesParser
@@ -16,7 +19,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .ai import DEFAULT_GEMINI_EMBEDDING_MODEL, run_similarity_search
 from .db import Db, ensure_schema
-from .importers.scans import import_scans_inbox
+from .importers.scans import import_photos_inbox, import_scans_inbox
 from .store import (
     add_items_to_collection,
     create_annotation,
@@ -122,6 +125,12 @@ class ApiHandler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/app/"):
             rel = parsed.path[len("/app/") :]
             return self._serve_file(rel, _guess_mime(parsed.path))
+        if parsed.path.startswith("/store/"):
+            rel = parsed.path[len("/store/") :]
+            return self._serve_store_file(rel, _guess_mime(parsed.path))
+        if parsed.path == "/tools/cluster_explorer.html":
+            tool = self._project_root() / "tools" / "cluster_explorer.html"
+            return self._serve_path(tool, "text/html")
         m = re.match(r"^/media/([^/]+)$", parsed.path)
         if m:
             asset_id = m.group(1)
@@ -205,6 +214,45 @@ class ApiHandler(BaseHTTPRequestHandler):
             )
             return _send(self, 200, {"facets": facets})
 
+        if parsed.path == "/api/cluster/review":
+            q = parse_qs(parsed.query)
+            collection_id = (q.get("collection_id", [""])[0] or "").strip()
+            if not collection_id:
+                return _send(self, 400, {"error": "collection_id required"})
+            include_neighbors_raw = (q.get("include_neighbors", ["0"])[0] or "0").strip()
+            similarity_raw = (q.get("similarity_threshold", ["0.72"])[0] or "0.72").strip()
+            max_neighbors_raw = (q.get("max_neighbors", ["6"])[0] or "6").strip()
+            clusters = (q.get("clusters", ["auto"])[0] or "auto").strip()
+            try:
+                include_neighbors = max(0, int(include_neighbors_raw))
+            except ValueError:
+                return _send(self, 400, {"error": "include_neighbors must be integer"})
+            try:
+                similarity = float(similarity_raw)
+            except ValueError:
+                return _send(self, 400, {"error": "similarity_threshold must be number"})
+            try:
+                max_neighbors = max(1, int(max_neighbors_raw))
+            except ValueError:
+                return _send(self, 400, {"error": "max_neighbors must be integer"})
+            if clusters not in {"auto", "none"}:
+                try:
+                    int(clusters)
+                except ValueError:
+                    return _send(self, 400, {"error": 'clusters must be "auto", "none", or integer'})
+
+            try:
+                payload = self._export_cluster_review_payload(
+                    collection_id=collection_id,
+                    include_neighbors=include_neighbors,
+                    similarity_threshold=similarity,
+                    max_neighbors=max_neighbors,
+                    clusters=clusters,
+                )
+            except Exception as e:
+                return _send(self, 500, {"error": f"cluster review export failed: {e}"})
+            return _send(self, 200, payload)
+
         if parsed.path == "/api/tray":
             items = self._with_db(list_tray)
             return _send(self, 200, {"items": items})
@@ -227,6 +275,8 @@ class ApiHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/import/scans":
             return self._handle_scan_pdf_upload()
+        if parsed.path == "/api/import/photos":
+            return self._handle_photo_upload()
         try:
             body = _json_body(self)
         except Exception as e:
@@ -441,6 +491,64 @@ class ApiHandler(BaseHTTPRequestHandler):
             },
         )
 
+    def _handle_photo_upload(self) -> None:
+        try:
+            _fields, files = _multipart_form(self, max_body=MAX_UPLOAD_BODY)
+        except Exception as e:
+            return _send(self, 400, {"error": str(e)})
+
+        upload = files.get("file") or {}
+        filename = str(upload.get("filename") or "").strip()
+        data = upload.get("data") or b""
+        if not filename:
+            return _send(self, 400, {"error": "file required"})
+        ext = Path(filename).suffix.lower()
+        if ext not in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".heif", ".tif", ".tiff"}:
+            return _send(self, 400, {"error": "file must be an image"})
+        if not isinstance(data, (bytes, bytearray)) or not data:
+            return _send(self, 400, {"error": "uploaded file is empty"})
+
+        cleaned_name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename).name).strip("._")
+        if not cleaned_name:
+            cleaned_name = f"photo_upload{ext or '.jpg'}"
+
+        uploads_root = self._imports_root() / "photos" / "inbox" / "uploads"
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+        batch_dir = uploads_root / f"{stamp}-{secrets.token_hex(4)}"
+        batch_dir.mkdir(parents=True, exist_ok=True)
+        uploaded_path = batch_dir / cleaned_name
+        uploaded_path.write_bytes(bytes(data))
+
+        try:
+            import_report = self._with_db(
+                import_photos_inbox,
+                inbox_dir=batch_dir,
+                store_dir=Path(self.server.store_dir).resolve(),
+                limit=0,
+            )
+            thumbs_report = self._with_db(
+                generate_thumbnails,
+                store_dir=Path(self.server.store_dir).resolve(),
+                source="photo",
+                size=512,
+                limit=0,
+                tool="auto",
+            )
+        except Exception as e:
+            return _send(self, 500, {"error": f"photo import failed: {e}"})
+
+        return _send(
+            self,
+            200,
+            {
+                "ok": True,
+                "uploaded_file": str(uploaded_path),
+                "upload_size_bytes": len(data),
+                "import": import_report,
+                "thumbs": thumbs_report,
+            },
+        )
+
     def do_PUT(self) -> None:
         parsed = urlparse(self.path)
         try:
@@ -581,6 +689,20 @@ class ApiHandler(BaseHTTPRequestHandler):
             ensure_schema(db)
             return fn(db, **kwargs)
 
+    def _project_root(self) -> Path:
+        return Path(self.server.app_dir).resolve().parent
+
+    def _serve_path(self, target: Path, mime: str) -> None:
+        if not target.exists() or not target.is_file():
+            return self.send_error(404)
+        data = target.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def _serve_file(self, rel: str, mime: str) -> None:
         base = Path(self.server.app_dir).resolve()
         target = (base / rel).resolve()
@@ -588,16 +710,64 @@ class ApiHandler(BaseHTTPRequestHandler):
             target.relative_to(base)
         except ValueError:
             return self.send_error(403)
-        if not target.exists() or not target.is_file():
-            return self.send_error(404)
-        data = target.read_bytes()
-        self.send_response(200)
-        self.send_header("Content-Type", mime)
-        # Frontend assets change frequently during local iteration.
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        return self._serve_path(target, mime)
+
+    def _serve_store_file(self, rel: str, mime: str) -> None:
+        base = Path(self.server.store_dir).resolve()
+        target = (base / rel).resolve()
+        try:
+            target.relative_to(base)
+        except ValueError:
+            return self.send_error(403)
+        return self._serve_path(target, mime)
+
+    def _export_cluster_review_payload(
+        self,
+        *,
+        collection_id: str,
+        include_neighbors: int,
+        similarity_threshold: float,
+        max_neighbors: int,
+        clusters: str,
+    ) -> dict:
+        script = self._project_root() / "tools" / "export_clusters.py"
+        if not script.exists():
+            raise FileNotFoundError("tools/export_clusters.py not found")
+
+        with tempfile.NamedTemporaryFile(prefix="cluster_review_", suffix=".json", delete=False) as tmp:
+            out_path = Path(tmp.name)
+
+        try:
+            cmd = [
+                sys.executable,
+                str(script),
+                "--db",
+                str(self.server.db_path),
+                "--out",
+                str(out_path),
+                "--collection-id",
+                collection_id,
+                "--include-neighbors",
+                str(include_neighbors),
+                "--similarity-threshold",
+                str(similarity_threshold),
+                "--max-neighbors",
+                str(max_neighbors),
+                "--clusters",
+                clusters,
+                "--api-base",
+                "",
+            ]
+            proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+            if proc.returncode != 0:
+                err = (proc.stderr or proc.stdout or "unknown export error").strip()
+                raise RuntimeError(err)
+            return json.loads(out_path.read_text(encoding="utf-8"))
+        finally:
+            try:
+                out_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
     def _serve_media(self, asset_id: str, kind: str) -> None:
         kind = kind if kind in ("thumb", "original") else "thumb"
