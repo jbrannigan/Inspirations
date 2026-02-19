@@ -2,6 +2,11 @@
 
 ## Update (February 19, 2026)
 
+### Annotation Delete with Undo (PR #24)
+- Extracted `deleteAnnotationWithUndo()` helper shared by the annotation list delete button and the marker delete button.
+- Deletes immediately then shows a toast with an Undo action that recreates the annotation at the same `x`/`y` position with the original text.
+- Completes the last remaining item (A-7) from the UX audit sweep.
+
 ### Full UX Refactor — Audit Sweep (PR #22)
 - Created `app/shared.js`: extracted `escapeHtml`, `api`, `formatApiError`, `showToast`, and `_removeToast` into a shared module loaded by both `index.html` and `admin.html`. Removed duplicated copies from `app.js` and `admin.js`.
 - CSS foundation overhaul:
