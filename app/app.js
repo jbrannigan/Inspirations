@@ -1156,20 +1156,33 @@ async function openModal(asset) {
   // Source link in notes area
   $("#assetNotes").value = asset.notes || "";
   const link = $("#sourceLink");
-  if (asset.source_ref) {
+  if (asset.source === "scan") {
+    // Parse page number from scan://sha#pN
+    const pageMatch = (asset.source_ref || "").match(/#p(\d+)$/);
+    const pageFragment = pageMatch ? `#page=${pageMatch[1]}` : "";
+    link.href = `/media/${asset.id}?kind=pdf${pageFragment}`;
+    link.textContent = "Open PDF";
+  } else if (isHttpUrl(asset.source_ref)) {
     link.href = asset.source_ref;
+    link.textContent = "Open original";
+  } else if (asset.stored_path) {
+    link.href = `/media/${asset.id}?kind=original`;
     link.textContent = "Open original";
   } else {
     link.href = "#";
     link.textContent = "No source";
   }
 
-  // View Source button: scan → original PDF, external source → source_ref, photo → stored file
+  // View Source button: scan → original PDF (with page), external → source_ref, photo → stored file
   const viewSourceBtn = $("#viewSourceBtn");
   if (viewSourceBtn) {
     let targetUrl = null;
+    let btnLabel = "View Source";
     if (asset.source === "scan") {
-      targetUrl = `/media/${asset.id}?kind=pdf`;
+      const pageMatch = (asset.source_ref || "").match(/#p(\d+)$/);
+      const pageFragment = pageMatch ? `#page=${pageMatch[1]}` : "";
+      targetUrl = `/media/${asset.id}?kind=pdf${pageFragment}`;
+      btnLabel = "View PDF";
     } else if (isHttpUrl(asset.source_ref)) {
       targetUrl = asset.source_ref;
     } else if (asset.stored_path) {
@@ -1177,6 +1190,7 @@ async function openModal(asset) {
     }
     if (targetUrl) {
       viewSourceBtn.style.display = "";
+      viewSourceBtn.textContent = btnLabel;
       viewSourceBtn.onclick = () => window.open(targetUrl, "_blank", "noopener");
     } else {
       viewSourceBtn.style.display = "none";
