@@ -20,6 +20,7 @@ from .ai import (
 )
 from .export import export_html_gallery, export_static_share_portal
 from .server import run_server
+from .store import create_collection, add_items_to_collection
 
 
 def _p(p: str) -> Path:
@@ -277,6 +278,35 @@ def cmd_export_portal(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_promote_boards(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        boards = db.query(
+            "select distinct board from assets where board is not null and board != '' order by board"
+        )
+        created = 0
+        skipped = 0
+        total_items = 0
+        for row in boards:
+            board_name = row["board"]
+            collection_name = f"pins: {board_name}"
+            existing = db.query("select id from collections where name = ?", (collection_name,))
+            if existing:
+                skipped += 1
+                continue
+            col = create_collection(db, name=collection_name)
+            cid = col["id"]
+            asset_rows = db.query("select id from assets where board = ?", (board_name,))
+            asset_ids = [r["id"] for r in asset_rows]
+            n = add_items_to_collection(db, collection_id=cid, asset_ids=asset_ids)
+            created += 1
+            total_items += n
+            print(f"  Created '{collection_name}' with {n} items")
+    print(f"\nDone. Created {created} collections, skipped {skipped} existing, {total_items} total items linked.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="inspirations", description="Inspiration library utilities")
     p.set_defaults(func=lambda _: p.print_help() or 2)
@@ -390,6 +420,10 @@ def build_parser() -> argparse.ArgumentParser:
     similar.add_argument("--min-score", type=float, default=0.0, help="Discard results below this blended score")
     similar.add_argument("--api-key", default="", help="Gemini API key (or set GEMINI_API_KEY)")
     similar.set_defaults(func=cmd_ai_similar)
+
+    pb = sub.add_parser("promote-boards", help="Convert boards to collections (one-time migration)")
+    pb.add_argument("--db", required=True)
+    pb.set_defaults(func=cmd_promote_boards)
 
     serve = sub.add_parser("serve", help="Run local web app")
     serve.add_argument("--host", default="127.0.0.1", help="Bind host (default 127.0.0.1)")

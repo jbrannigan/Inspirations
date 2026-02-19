@@ -39,7 +39,6 @@ const state = {
   gridZoom: localStorage.getItem("gridZoom") || "m",
   modalScanPages: null,     // array of asset IDs for the open scan doc's pages
   modalScanPageIndex: 0,    // which page is currently shown in the modal
-  viewBoardName: "",        // board currently single-selected for Review (like viewCollectionId)
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -579,7 +578,6 @@ function openMobilePanel(side) {
 async function selectCollection(collectionId) {
   state.activeCollectionId = collectionId || "";
   state.viewCollectionId = collectionId || "";
-  state.viewBoardName = "";
   renderCollections();
   setStats();
   closeMobilePanels();
@@ -620,12 +618,10 @@ function setStats() {
   $("#addFiltered").disabled = state.assets.length === 0 || trayMode;
   $("#clearSelection").disabled = state.selected.size === 0;
   if (reviewBtn) {
-    const canReview = (viewCollection || state.viewBoardName) && !trayMode;
+    const canReview = !!viewCollection && !trayMode;
     reviewBtn.disabled = !canReview;
     if (viewCollection) {
       reviewBtn.textContent = `Review "${viewCollection.name}"`;
-    } else if (state.viewBoardName) {
-      reviewBtn.textContent = `Review "${state.viewBoardName}"`;
     } else {
       reviewBtn.textContent = "Review Collection";
     }
@@ -673,50 +669,12 @@ function renderGroups() {
   wrap.innerHTML = "";
   const searchVal = ($("#groupSearch")?.value || "").toLowerCase().trim();
 
-  // Boards section (from facets)
-  const boards = (state.facets.boards || []).filter((it) => {
-    if (!it.board) return false;
-    if (searchVal && !it.board.toLowerCase().includes(searchVal)) return false;
-    return true;
-  });
-  if (boards.length) {
-    const header = document.createElement("div");
-    header.className = "groupsHeader";
-    header.textContent = "Boards";
-    wrap.appendChild(header);
-    for (const it of boards) {
-      const isActive = state.boards.has(it.board);
-      const el = document.createElement("div");
-      el.className = `listItem groupItem${isActive ? " on" : ""}`;
-      el.innerHTML = `<div class="groupItemRow"><span class="groupItemName">${escapeHtml(it.board)}</span><span class="groupItemCount">${it.n}</span></div>`;
-      el.onclick = async () => {
-        if (state.viewBoardName === it.board) {
-          // Deselect
-          state.viewBoardName = "";
-          state.boards.delete(it.board);
-        } else {
-          state.viewBoardName = it.board;
-          state.boards.clear();
-          state.boards.add(it.board);
-        }
-        setStats();
-        renderGroups();
-        await loadAssets();
-      };
-      wrap.appendChild(el);
-    }
-  }
-
   // Collections section
   const collections = state.collections.filter((c) => {
     if (!searchVal) return true;
     return c.name.toLowerCase().includes(searchVal);
   });
   if (collections.length) {
-    const header = document.createElement("div");
-    header.className = "groupsHeader";
-    header.textContent = "My Collections";
-    wrap.appendChild(header);
     for (const c of collections) {
       const isViewing = c.id === state.viewCollectionId;
       const isDestination = c.id === state.activeCollectionId;
@@ -731,7 +689,7 @@ function renderGroups() {
     }
   }
 
-  if (!boards.length && !collections.length) {
+  if (!collections.length) {
     wrap.innerHTML = searchVal ? '<div class="muted">No matching groups.</div>' : '<div class="muted">No groups yet.</div>';
   }
   updateFiltersBadge();
@@ -740,7 +698,7 @@ function renderGroups() {
 function updateFiltersBadge() {
   const badge = $("#filtersBadge");
   if (!badge) return;
-  const count = state.sources.size + state.labels.size + state.mediaStatuses.size + state.contentKinds.size + state.creators.size;
+  const count = state.sources.size + state.labels.size + state.boards.size + state.mediaStatuses.size + state.contentKinds.size + state.creators.size;
   badge.textContent = count > 0 ? `(${count})` : "";
 }
 
@@ -1653,12 +1611,6 @@ $("#showTrayCanvas").onclick = async () => {
 
 $("#reviewCollection").onclick = () => {
   const viewCollection = getViewCollection();
-  if (state.viewBoardName && !viewCollection) {
-    const dataUrl = `/api/cluster/review?board=${encodeURIComponent(state.viewBoardName)}&include_neighbors=0`;
-    const url = `/tools/cluster_explorer.html?data=${encodeURIComponent(dataUrl)}`;
-    window.open(url, "_blank");
-    return;
-  }
   if (!viewCollection) return;
   const dataUrl = `/api/cluster/review?collection_id=${encodeURIComponent(viewCollection.id)}&include_neighbors=0`;
   const url = `/tools/cluster_explorer.html?data=${encodeURIComponent(dataUrl)}`;
@@ -2037,6 +1989,7 @@ function renderFilters() {
   const groups = [
     { key: "sources", label: "Source", set: state.sources, valueKey: "source" },
     { key: "labels", label: "AI Tags", set: state.labels, valueKey: "label" },
+    { key: "boards", label: "Board", set: state.boards, valueKey: "board" },
     { key: "media_statuses", label: "Media Type", set: state.mediaStatuses, valueKey: "media_status" },
     { key: "content_kinds", label: "Record Type", set: state.contentKinds, valueKey: "content_kind" },
     { key: "creators", label: "Creator / Page", set: state.creators, valueKey: "creator_name" },
