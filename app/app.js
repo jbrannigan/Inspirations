@@ -39,6 +39,7 @@ const state = {
   gridZoom: localStorage.getItem("gridZoom") || "m",
   modalScanPages: null,     // array of asset IDs for the open scan doc's pages
   modalScanPageIndex: 0,    // which page is currently shown in the modal
+  viewBoardName: "",        // board currently single-selected for Review (like viewCollectionId)
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -578,6 +579,7 @@ function openMobilePanel(side) {
 async function selectCollection(collectionId) {
   state.activeCollectionId = collectionId || "";
   state.viewCollectionId = collectionId || "";
+  state.viewBoardName = "";
   renderCollections();
   setStats();
   closeMobilePanels();
@@ -618,9 +620,16 @@ function setStats() {
   $("#addFiltered").disabled = state.assets.length === 0 || trayMode;
   $("#clearSelection").disabled = state.selected.size === 0;
   if (reviewBtn) {
-    reviewBtn.disabled = !viewCollection || trayMode;
-    reviewBtn.textContent = viewCollection ? `Review "${viewCollection.name}"` : "Review Collection";
-    reviewBtn.classList.toggle("primaryAction", !!viewCollection && !trayMode);
+    const canReview = (viewCollection || state.viewBoardName) && !trayMode;
+    reviewBtn.disabled = !canReview;
+    if (viewCollection) {
+      reviewBtn.textContent = `Review "${viewCollection.name}"`;
+    } else if (state.viewBoardName) {
+      reviewBtn.textContent = `Review "${state.viewBoardName}"`;
+    } else {
+      reviewBtn.textContent = "Review Collection";
+    }
+    reviewBtn.classList.toggle("primaryAction", !!canReview);
   }
   $("#showTrayCanvas").textContent = trayMode ? "Tray Canvas On" : "Show Tray Canvas";
   $("#showTrayCanvas").disabled = !trayMode && state.tray.length === 0;
@@ -681,8 +690,16 @@ function renderGroups() {
       el.className = `listItem groupItem${isActive ? " on" : ""}`;
       el.innerHTML = `<div class="groupItemRow"><span class="groupItemName">${escapeHtml(it.board)}</span><span class="groupItemCount">${it.n}</span></div>`;
       el.onclick = async () => {
-        if (state.boards.has(it.board)) state.boards.delete(it.board);
-        else state.boards.add(it.board);
+        if (state.viewBoardName === it.board) {
+          // Deselect
+          state.viewBoardName = "";
+          state.boards.delete(it.board);
+        } else {
+          state.viewBoardName = it.board;
+          state.boards.clear();
+          state.boards.add(it.board);
+        }
+        setStats();
         renderGroups();
         await loadAssets();
       };
@@ -1636,6 +1653,12 @@ $("#showTrayCanvas").onclick = async () => {
 
 $("#reviewCollection").onclick = () => {
   const viewCollection = getViewCollection();
+  if (state.viewBoardName && !viewCollection) {
+    const dataUrl = `/api/cluster/review?board=${encodeURIComponent(state.viewBoardName)}&include_neighbors=0`;
+    const url = `/tools/cluster_explorer.html?data=${encodeURIComponent(dataUrl)}`;
+    window.open(url, "_blank");
+    return;
+  }
   if (!viewCollection) return;
   const dataUrl = `/api/cluster/review?collection_id=${encodeURIComponent(viewCollection.id)}&include_neighbors=0`;
   const url = `/tools/cluster_explorer.html?data=${encodeURIComponent(dataUrl)}`;

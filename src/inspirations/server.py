@@ -218,8 +218,9 @@ class ApiHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/cluster/review":
             q = parse_qs(parsed.query)
             collection_id = (q.get("collection_id", [""])[0] or "").strip()
-            if not collection_id:
-                return _send(self, 400, {"error": "collection_id required"})
+            board = (q.get("board", [""])[0] or "").strip()
+            if not collection_id and not board:
+                return _send(self, 400, {"error": "collection_id or board required"})
             include_neighbors_raw = (q.get("include_neighbors", ["0"])[0] or "0").strip()
             similarity_raw = (q.get("similarity_threshold", ["0.72"])[0] or "0.72").strip()
             max_neighbors_raw = (q.get("max_neighbors", ["6"])[0] or "6").strip()
@@ -245,6 +246,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             try:
                 payload = self._export_cluster_review_payload(
                     collection_id=collection_id,
+                    board=board,
                     include_neighbors=include_neighbors,
                     similarity_threshold=similarity,
                     max_neighbors=max_neighbors,
@@ -745,6 +747,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         self,
         *,
         collection_id: str,
+        board: str = "",
         include_neighbors: int,
         similarity_threshold: float,
         max_neighbors: int,
@@ -778,6 +781,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 "--api-base",
                 "",
             ]
+            if board:
+                cmd += ["--board", board]
             proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
             if proc.returncode != 0:
                 err = (proc.stderr or proc.stdout or "unknown export error").strip()

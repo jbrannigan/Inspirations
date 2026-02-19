@@ -451,6 +451,7 @@ def export_clusters(
     max_neighbors: int,
     clusters: str,
     collection_id: str,
+    board: str = "",
     include_neighbors: int,
     api_base: str,
     project_root: Path,
@@ -491,9 +492,15 @@ def export_clusters(
                 include_neighbors=include_neighbors,
             )
             print(
-                f"Collection scope enabled: {collection_id}; exporting {len(scoped_ids)} assets "
+                f"Collection scope enabled: focus; exporting {len(scoped_ids)} assets "
                 f"(include_neighbors={include_neighbors})."
             )
+        elif board:
+            collection_name = board
+            board_asset_ids = {aid for aid, a in assets.items() if (a.get("board") or "") == board}
+            scoped_ids = [aid for aid in embedded_ids if aid in board_asset_ids]
+            focus_ids = set(scoped_ids)
+            print(f"Board scope enabled: '{board}'; exporting {len(scoped_ids)} assets.")
         else:
             scoped_ids = embedded_ids
 
@@ -561,6 +568,7 @@ def export_clusters(
                 "api_base": api_base or "",
                 "collection_id": collection_id or "",
                 "collection_name": collection_name,
+                "board": board or "",
                 "include_neighbors": include_neighbors,
                 "focus_count": len(focus_ids),
                 "nearby_count": len(nearby_ids),
@@ -623,6 +631,7 @@ def parse_args() -> argparse.Namespace:
         help='Cluster count: "auto", "none", or integer (default: auto)',
     )
     parser.add_argument("--collection-id", default="", help="Optional collection id to export")
+    parser.add_argument("--board", default="", help="Optional board name to export (alternative to --collection-id)")
     parser.add_argument(
         "--include-neighbors",
         type=int,
@@ -660,6 +669,7 @@ def main() -> int:
             max_neighbors=args.max_neighbors,
             clusters=args.clusters,
             collection_id=(args.collection_id or "").strip(),
+            board=(args.board or "").strip(),
             include_neighbors=max(0, int(include_neighbors)),
             api_base=api_base,
             project_root=REPO_ROOT,
