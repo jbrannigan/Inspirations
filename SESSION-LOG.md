@@ -7,6 +7,32 @@ Dated entries for every work session. Read this first when resuming.
 
 ---
 
+## 2026-02-19 — Round 1 bug fixes (PR #32)
+
+- **Fix 1 — Modal close ×**: Moved `#closeModal` out of `.modalActions` row; now a standalone 36×36 × button positioned absolute top-right of `.modalContent`
+- **Fix 2 — Scan source links**: `openModal()` builds correct `Open PDF` / `View PDF` links with `#page=N` fragment from `source_ref`; server adds `Content-Disposition: inline` for PDF responses
+- **Fix 3 — Multipage scan page nav**: Cards show `‹ 1/3 ›` overlay on thumbnail; modal shows `‹ Page N of M ›` bottom bar; sibling `source_ref` reconstructed from `scan://sha#pN` pattern (no extra API call); annotations reload per page
+- **Fix 4 — Board review**: Board clicks single-select (`state.viewBoardName`); Review button enables for boards with label `Review "<board>"`; `/api/cluster/review` accepts `board` param; `export_clusters.py` gains `--board` to scope export by board name
+- Validation: 104 tests passing, CI green on py3.11/3.12/3.13, lint clean
+
+---
+
+## 2026-02-19 — Explorer 3D canvas blank (PR #31)
+
+- Diagnosed why the Explore view showed nothing on the 3D canvas
+- **Root cause 1 — LOD distances too small** (`explorer.js`):
+  - `LOD_FAR=18` was smaller than the closest possible node (~20 units away)
+  - Camera at `z=25`, data normalized to ±5–10; all 3661 nodes were culled
+  - Fixed: `LOD_FAR=40 / LOD_MED=22 / LOD_CLOSE=12`
+- **Root cause 2 — Race condition** (`app.js`):
+  - `state.view="explore"` was set before the `window.Explorer` null check
+  - If Three.js CDN hadn't loaded yet, state locked permanently and retries were no-ops
+  - Fixed: guard changed to `state.view === "explore" && _explorerInited`
+- Validation: 104 tests passing, CI green, merged to main
+- Note: clustering falls back to 1 cluster (sklearn/numpy not installed); see open questions
+
+---
+
 ## 2026-02-19 — Scan title cleanup + upload UX polish
 
 - Branch: `codex/ux-simplification-pass`
