@@ -22,6 +22,7 @@ from .db import Db, ensure_schema
 from .importers.scans import import_photos_inbox, import_scans_inbox
 from .store import (
     add_items_to_collection,
+    bulk_set_triage_status,
     create_annotation,
     create_collection,
     delete_annotation,
@@ -40,6 +41,8 @@ from .store import (
     remove_item_from_collection,
     remove_items_from_collection,
     set_collection_order,
+    set_triage_status,
+    triage_stats,
     update_annotation,
     update_asset_notes,
 )
@@ -152,6 +155,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 content_kind=q.get("content_kind", [""])[0],
                 creator=q.get("creator", [""])[0],
                 collection_id=q.get("collection_id", [""])[0],
+                triage_status=q.get("triage_status", [""])[0],
+                needs_annotation=_parse_bool_param(q.get("needs_annotation", [""])[0], default=False),
                 include_hidden=_parse_bool_param(q.get("include_hidden", [""])[0], default=False),
                 limit=int(q.get("limit", [str(DEFAULT_ASSETS_PAGE_SIZE)])[0]),
                 offset=int(q.get("offset", ["0"])[0]),
@@ -274,6 +279,10 @@ class ApiHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 return _send(self, 500, {"error": f"explorer layout failed: {e}"})
             return _send(self, 200, payload)
+
+        if parsed.path == "/api/triage/stats":
+            stats = self._with_db(triage_stats)
+            return _send(self, 200, stats)
 
         if parsed.path == "/api/tray":
             items = self._with_db(list_tray)
@@ -406,6 +415,26 @@ class ApiHandler(BaseHTTPRequestHandler):
             if not isinstance(asset_ids, list):
                 return _send(self, 400, {"error": "asset_ids must be list"})
             self._with_db(set_collection_order, collection_id=m.group(1), asset_ids=asset_ids)
+            return _send(self, 200, {"ok": True})
+
+        if parsed.path == "/api/assets/triage/bulk":
+            ids = body.get("ids") or []
+            status = body.get("status")
+            if not isinstance(ids, list):
+                return _send(self, 400, {"error": "ids must be list"})
+            if status not in ("keeper", "hidden", None):
+                return _send(self, 400, {"error": "status must be 'keeper', 'hidden', or null"})
+            count = self._with_db(bulk_set_triage_status, asset_ids=ids, status=status)
+            return _send(self, 200, {"updated": count})
+
+        m = re.match(r"^/api/assets/([^/]+)/triage$", parsed.path)
+        if m:
+            asset_id = m.group(1)
+            status = body.get("status")
+            needs_annotation = body.get("needs_annotation")
+            if status not in ("keeper", "hidden", None):
+                return _send(self, 400, {"error": "status must be 'keeper', 'hidden', or null"})
+            self._with_db(set_triage_status, asset_id=asset_id, status=status, needs_annotation=needs_annotation)
             return _send(self, 200, {"ok": True})
 
         m = re.match(r"^/api/assets/([^/]+)/hide$", parsed.path)

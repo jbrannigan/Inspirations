@@ -163,6 +163,21 @@ def ensure_schema(db: Db) -> None:
             "creator_name": "text",
             "source_domain": "text",
             "source_name": "text",
+            # Rich metadata from page scrapes
+            "source_url": "text",
+            "seo_alt_text": "text",
+            "closeup_desc": "text",
+            "hashtags": "text",
+            "dominant_color": "text",
+            "image_width": "integer",
+            "image_height": "integer",
+            "post_text": "text",
+            "engagement_json": "text",
+            "scrape_json": "text",
+            # Triage workflow
+            "triage_status": "text",
+            "triage_at": "text",
+            "needs_annotation": "integer",
         },
     )
     db.exec("create unique index if not exists ux_assets_source_ref on assets(source, source_ref);")
@@ -173,6 +188,7 @@ def ensure_schema(db: Db) -> None:
     db.exec("create index if not exists ix_assets_content_kind on assets(content_kind);")
     db.exec("create index if not exists ix_assets_creator_name on assets(creator_name);")
     db.exec("create index if not exists ix_assets_source_domain on assets(source_domain);")
+    db.exec("create index if not exists ix_assets_triage on assets(triage_status);")
     db.exec(
         """
         create table if not exists collections (

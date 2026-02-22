@@ -22,7 +22,7 @@ personal tool — no need for Flask/Django overhead.
 
 **Decision:** Single SQLite file at `data/inspirations.sqlite`.
 
-**Why:** Zero-config, portable, sufficient for ~4k assets. Backups are just
+**Why:** Zero-config, portable, sufficient for ~5k assets. Backups are just
 file copies.
 
 **Consequence:** No concurrent write scaling. Batch operations need careful
@@ -83,9 +83,6 @@ interactive mode for small batches and retries.
 **Why:** Batch API is ~50% cheaper and avoids rate limit pressure. Interactive
 is better for immediate feedback and retry workflows.
 
-**Tooling:** `tools/tagging_batch.py` (batch), `tools/tagging_runner.py`
-(interactive), `tools/tagging_pipeline.py` (auto-chooses).
-
 ---
 
 ## D008 — Provider-level deduplication (2026-02-05)
@@ -94,8 +91,7 @@ is better for immediate feedback and retry workflows.
 not just model-specific.
 
 **Why:** Prevents re-tagging assets that were successfully handled by a
-fallback model. The 7 RECITATION fallback assets tagged by gemini-2.0-flash
-should not be re-attempted by gemini-2.5-flash.
+fallback model.
 
 ---
 
@@ -108,49 +104,63 @@ stored in `asset_embeddings` table.
 without adding a vector database.
 
 **Consequence:** Embeddings stored as JSON arrays in SQLite. Similarity
-computation is in-process Python (numpy-free, pure math). Scales to ~4k
-assets comfortably.
+computation is in-process Python (numpy-free, pure math).
 
 ---
 
-## D010 — scikit-learn in isolated venv for clustering (2026-02-13)
+## D014 — Scrape-first rebuild (2026-02-22)
 
-**Decision:** Use scikit-learn for KMeans/silhouette clustering, installed in
-a temporary isolated venv (`/private/tmp/inspirations-cluster-venv`).
+**Decision:** Nuke the database and rebuild from browser-scraped data instead
+of continuing with ZIP-export-based imports.
 
-**Why:** Keeps the main project dependency-free. Clustering is a batch
-offline operation, not a runtime dependency.
+**Why:** Browser scraping captures much richer metadata (post text, hashtags,
+creator names, engagement data, high-res images for Facebook) than the
+pre-exported ZIP files. Pinterest images are already stored locally and will
+be matched via an image map. Facebook images will be re-captured at full
+resolution during scraping.
 
----
+**Consequence:** Old importers (`pinterest_crawler.py`, `facebook_saved.py`)
+are deleted. New importers (`pinterest_scrape.py`, `facebook_scrape.py`)
+consume JSON produced by browser scraping. The `rebuild-db` command
+orchestrates a clean reimport. Old documentation archived to `docs/archive/`.
 
-## D011 — Cluster Explorer as standalone HTML tool (2026-02-13)
-
-**Decision:** Cluster Explorer is a separate HTML page (`tools/cluster_explorer.html`)
-served by a dedicated server (`tools/serve_explorer.py`), not integrated
-into the main app.
-
-**Why:** Different use case (spatial graph exploration vs grid curation).
-Keeps the main app simple. Explorer reads a static JSON snapshot, not
-the live database.
-
-**Spec:** `docs/CLUSTER_EXPLORER_SPEC-v2.md`
+**Spec:** `docs/SCRAPE_REBUILD_SPEC.md`
 
 ---
 
-## D012 — Accessibility Tier C (2026-02-18)
+## D015 — Triage-first curation workflow (2026-02-22)
 
-**Decision:** Inspirations is Tier C (Personal) per STANDARDS.md accessibility
-tiers.
+**Decision:** The primary curation UX is a keeper/hidden triage workflow,
+not the previous filter-and-collect approach.
 
-**Why:** Solo use only — Jim on Mac Mini and iPad. No external users planned.
+**Why:** With ~5,000 items from multiple sources, the user needs to quickly
+separate "house stuff" from everything else. A card-by-card review with
+keyboard shortcuts (keep/hide/skip) is faster than manual collection building.
+
+**Consequence:** New `triage_status` column on assets (null=pending, 'keeper',
+'hidden'). Triage dashboard shows stats. Review mode walks through items one
+at a time. Collections are managed via natural-language prompts rather than
+complex UI.
 
 ---
 
-## D013 — Session-only delete in Explorer (2026-02-14)
+## D016 — Natural-language collection management (2026-02-22)
 
-**Decision:** Cluster Explorer duplicate-review operates in session-only mode
-by default (hides items in UI, no DB writes). API-backed removal requires
-explicit `api_base` parameter.
+**Decision:** Use a chat-style prompt in the app for collection operations
+instead of building complex collection UI widgets.
 
-**Why:** Safe default for review workflows. Prevents accidental data loss
-during exploratory duplicate identification.
+**Why:** "Move all kitchen items to a new collection" is faster than
+select-all + drag + create-collection UI flows. Reduces frontend complexity
+and makes the app feel friendly rather than techy.
+
+**Consequence:** Backend needs a flexible collection-operations API. Frontend
+needs a text input that sends natural-language requests to the backend (or
+processes them client-side with simple pattern matching).
+
+---
+
+## Archived Decisions (pre-rebuild)
+
+Decisions D010–D013 (cluster explorer, accessibility tier, session-only delete)
+were specific to the pre-rebuild system. They are documented in
+`docs/archive/` for reference but no longer apply to active development.

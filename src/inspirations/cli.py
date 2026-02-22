@@ -5,8 +5,14 @@ import json
 import os
 from pathlib import Path
 
+import shutil
+import sys
+from datetime import datetime
+
 from .db import Db, ensure_schema
 from .importers.scans import import_scans_inbox
+from .importers.pinterest_scrape import import_pinterest_scrape
+from .importers.facebook_scrape import import_facebook_scrape
 from .thumbnails import generate_thumbnails
 from .ai import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
@@ -58,6 +64,104 @@ def cmd_list(args: argparse.Namespace) -> int:
         total = db.query_value("select count(*) from assets")
     out = {"total_assets": total, "by_source": [{"source": r["source"], "n": r["n"]} for r in rows]}
     print(json.dumps(out, indent=2))
+    return 0
+
+
+def cmd_import_pinterest_scrape(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    store_dir = _p(args.store)
+    json_path = _p(args.json)
+    image_map_path = _p(args.image_map) if args.image_map else None
+
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = import_pinterest_scrape(
+            db=db,
+            json_path=json_path,
+            store_dir=store_dir,
+            image_map_path=image_map_path,
+            download_missing=not args.no_download,
+            limit=args.limit,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_import_facebook_scrape(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    store_dir = _p(args.store)
+    json_dir = _p(args.json_dir)
+
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = import_facebook_scrape(
+            db=db,
+            json_dir=json_dir,
+            store_dir=store_dir,
+            limit=args.limit,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_rebuild_db(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    store_dir = _p(args.store)
+
+    # Step 1: Backup current DB
+    if db_path.exists():
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_dir = db_path.parent / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup_path = backup_dir / f"pre-rebuild-{ts}.sqlite"
+        shutil.copy2(db_path, backup_path)
+        print(f"[rebuild-db] Backed up DB → {backup_path}", file=sys.stderr)
+        db_path.unlink()
+        print("[rebuild-db] Deleted old DB", file=sys.stderr)
+
+    # Step 2: Create fresh schema
+    with Db(db_path) as db:
+        ensure_schema(db)
+    print("[rebuild-db] Fresh schema created", file=sys.stderr)
+
+    summary: dict = {}
+
+    # Step 3: Scan import
+    if args.scan_inbox:
+        inbox = _p(args.scan_inbox)
+        print(f"[rebuild-db] Importing scans from {inbox}", file=sys.stderr)
+        with Db(db_path) as db:
+            ensure_schema(db)
+            r = import_scans_inbox(db, inbox_dir=inbox, store_dir=store_dir)
+        summary["scans"] = r
+
+    # Step 4: Pinterest scrape import
+    if args.pinterest_json:
+        pj = _p(args.pinterest_json)
+        image_map = _p(args.pinterest_image_map) if args.pinterest_image_map else None
+        print(f"[rebuild-db] Importing Pinterest from {pj}", file=sys.stderr)
+        with Db(db_path) as db:
+            ensure_schema(db)
+            r = import_pinterest_scrape(db=db, json_path=pj, store_dir=store_dir, image_map_path=image_map)
+        summary["pinterest"] = r
+
+    # Step 5: Facebook scrape import
+    if args.facebook_json_dir:
+        fj = _p(args.facebook_json_dir)
+        print(f"[rebuild-db] Importing Facebook from {fj}", file=sys.stderr)
+        with Db(db_path) as db:
+            ensure_schema(db)
+            r = import_facebook_scrape(db=db, json_dir=fj, store_dir=store_dir)
+        summary["facebook"] = r
+
+    # Step 6: Generate thumbnails
+    print("[rebuild-db] Generating thumbnails", file=sys.stderr)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        r = generate_thumbnails(db, store_dir=store_dir)
+    summary["thumbnails"] = r
+
+    print(json.dumps(summary, indent=2))
     return 0
 
 
@@ -276,6 +380,18 @@ def build_parser() -> argparse.ArgumentParser:
     imp = sub.add_parser("import", help="Import from exports")
     imp_sub = imp.add_subparsers(dest="import_cmd")
 
+    pin_sc = imp_sub.add_parser("pinterest-scrape", help="Import Pinterest from browser scrape JSON")
+    pin_sc.add_argument("--json", required=True, help="Path to pinterest_scrape.json")
+    pin_sc.add_argument("--image-map", default="", help="Path to pinterest_image_map.json (optional)")
+    pin_sc.add_argument("--no-download", action="store_true", help="Skip downloading missing images")
+    pin_sc.add_argument("--limit", type=int, default=0, help="Limit pins (0 = no limit)")
+    pin_sc.set_defaults(func=cmd_import_pinterest_scrape)
+
+    fb_sc = imp_sub.add_parser("facebook-scrape", help="Import Facebook from browser scrape JSON")
+    fb_sc.add_argument("--json-dir", required=True, help="Directory containing facebook_scrape_*.json files")
+    fb_sc.add_argument("--limit", type=int, default=0, help="Limit posts (0 = no limit)")
+    fb_sc.set_defaults(func=cmd_import_facebook_scrape)
+
     sc = imp_sub.add_parser("scans", help="Import scans from an inbox folder")
     sc.add_argument("--inbox", required=True, help="Path to scans inbox folder")
     sc.add_argument("--format", default="jpg", help="Page image format: jpg or png")
@@ -353,6 +469,13 @@ def build_parser() -> argparse.ArgumentParser:
     similar.add_argument("--min-score", type=float, default=0.0, help="Discard results below this blended score")
     similar.add_argument("--api-key", default="", help="Gemini API key (or set GEMINI_API_KEY)")
     similar.set_defaults(func=cmd_ai_similar)
+
+    rebuild = sub.add_parser("rebuild-db", help="Nuke DB and reimport from scrape data")
+    rebuild.add_argument("--pinterest-json", default="", help="Path to pinterest_scrape.json")
+    rebuild.add_argument("--pinterest-image-map", default="", help="Path to pinterest_image_map.json")
+    rebuild.add_argument("--facebook-json-dir", default="", help="Directory with facebook_scrape_*.json")
+    rebuild.add_argument("--scan-inbox", default="", help="Scan inbox directory")
+    rebuild.set_defaults(func=cmd_rebuild_db)
 
     pb = sub.add_parser("promote-boards", help="Convert boards to collections (one-time migration)")
     pb.add_argument("--db", required=True)

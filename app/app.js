@@ -1,1214 +1,555 @@
+// ─── State ─────────────────────────────────────────────────────────────────────
 const state = {
+  // Navigation
+  view: "browse",               // "browse" | "review"
+  currentBoard: null,           // board filter (null = all)
+  currentSource: null,          // source filter (null = all)
+  currentCollection: null,      // collection ID filter
+  triageFilter: "",             // "" | "pending" | "keeper" | "hidden" | "needs-comment"
+
+  // Assets
   assets: [],
-  collections: [],
-  activeCollectionId: "",
-  viewCollectionId: "",
-  selected: new Set(),
-  expanded: new Set(),
-  q: "",
-  sources: new Set(),
-  boards: new Set(),
-  labels: new Set(),
-  labelMatchMode: "any",
-  mediaStatuses: new Set(),
-  contentKinds: new Set(),
-  creators: new Set(),
-  modalAsset: null,
-  annotations: [],
-  selectMode: true,
-  facets: { sources: [], boards: [], labels: [], media_statuses: [], content_kinds: [], creators: [] },
-  tray: [],
-  dragging: null,
-  activeAnnotationId: null,
-  noteTimers: {},
-  assetsRequestSeq: 0,
-  semanticMode: false,
-  error: "",
-  initComplete: false,
   hasMore: false,
   loadingAssets: false,
+  offset: 0,
+  q: "",
+  semanticMode: false,
+  assetsRequestSeq: 0,
+
+  // Review mode
+  reviewItems: [],
+  reviewIndex: 0,
+  reviewHistory: [],
+  reviewSkipped: 0,
+  reviewKept: 0,
+  reviewHidden: 0,
+
+  // Collections + facets
+  collections: [],
+  facets: { sources: [], boards: [] },
+
+  // Modal + annotations
+  modalAsset: null,
+  annotations: [],
+  activeAnnotationId: null,
+  dragging: null,
+  noteTimers: {},
+  modalScanPages: null,
+  modalScanPageIndex: 0,
+
+  // Imports
   scanImportBusy: false,
   photoImportBusy: false,
   scanImportFile: null,
   photoImportFile: null,
-  mediaDefaultsSeeded: false,
-  canvasMode: "main",
-  view: "grid",
-  filterOpen: { sources: true },
-  filtersExpanded: false,
-  gridZoom: localStorage.getItem("gridZoom") || "m",
-  modalScanPages: null,     // array of asset IDs for the open scan doc's pages
-  modalScanPageIndex: 0,    // which page is currently shown in the modal
 };
 
+const ASSETS_PAGE_SIZE = 240;
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+const escapeHtml = Shared.escapeHtml;
+const api = Shared.api;
+const formatApiError = Shared.formatApiError;
+
 const IMAGE_SUFFIX_RE = /\.(jpg|jpeg|png|webp|gif|bmp|svg)(\?.*)?$/i;
 const PDF_FILE_EXT_RE = /\.pdf$/i;
 const IMAGE_FILE_EXT_RE = /\.(jpg|jpeg|png|webp|gif|bmp|heic|heif|tif|tiff)$/i;
-const EXTREME_ASPECT_RATIO_MAX = 1.8;
-const EXTREME_ASPECT_RATIO_MIN = 0.8;
-const ASSETS_PAGE_SIZE = 240;
-
-const escapeHtml = Shared.escapeHtml;
-
-function applyZoom() {
-  const grid = $("#grid");
-  if (!grid) return;
-  grid.className = `grid zoom-${state.gridZoom}`;
-  const zoomControl = $("#zoomControl");
-  if (zoomControl) {
-    zoomControl.querySelectorAll("button[data-zoom]").forEach((btn) => {
-      btn.classList.toggle("active", btn.dataset.zoom === state.gridZoom);
-    });
-  }
-}
-
-function setZoom(level) {
-  state.gridZoom = level;
-  localStorage.setItem("gridZoom", level);
-  applyZoom();
-}
-
-function asList(value) {
-  if (!value) return [];
-  if (Array.isArray(value)) return value.filter((x) => x !== null && x !== undefined && `${x}`.trim() !== "");
-  return [value];
-}
-
-function parseAi(a) {
-  if (!a.ai_json) return null;
-  try {
-    return JSON.parse(a.ai_json);
-  } catch {
-    return null;
-  }
-}
-
-function aiLabelCount(ai) {
-  if (!ai) return 0;
-  const keys = [
-    "rooms",
-    "elements",
-    "materials",
-    "colors",
-    "styles",
-    "lighting",
-    "fixtures",
-    "appliances",
-    "text_in_image",
-    "brands_products",
-    "tags",
-  ];
-  return keys.reduce((acc, k) => acc + asList(ai[k]).length, 0);
-}
-
-function topTags(ai, max = 5) {
-  if (!ai) return [];
-  const buckets = [
-    "rooms",
-    "elements",
-    "materials",
-    "colors",
-    "styles",
-    "lighting",
-    "fixtures",
-    "appliances",
-    "tags",
-  ];
-  const out = [];
-  const seen = new Set();
-  for (const key of buckets) {
-    for (const item of asList(ai[key])) {
-      const v = `${item}`.trim();
-      if (!v || seen.has(v)) continue;
-      seen.add(v);
-      out.push(v);
-      if (out.length >= max) return out;
-    }
-  }
-  return out;
-}
-
-function renderChips(items) {
-  const list = asList(items);
-  if (!list.length) {
-    return '<span class="chip empty">none</span>';
-  }
-  return list.map((x) => `<span class="chip">${escapeHtml(x)}</span>`).join("");
-}
-
-function renderTagSections(ai) {
-  if (!ai) return "";
-  const sections = [
-    ["Rooms", "rooms"],
-    ["Elements", "elements"],
-    ["Materials", "materials"],
-    ["Colors", "colors"],
-    ["Styles", "styles"],
-    ["Lighting", "lighting"],
-    ["Fixtures", "fixtures"],
-    ["Appliances", "appliances"],
-    ["Text in image", "text_in_image"],
-    ["Brands / Products", "brands_products"],
-    ["Tags", "tags"],
-  ];
-  return sections
-    .map(
-      ([label, key]) => `
-      <div class="tagSection">
-        <div class="tagTitle">${label}</div>
-        <div class="chips">${renderChips(ai[key])}</div>
-      </div>`
-    )
-    .join("");
-}
-
-const api = Shared.api;
 
 async function apiUpload(path, formData) {
-  const res = await fetch(path, {
-    method: "POST",
-    body: formData,
-  });
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(t || res.statusText);
-  }
+  const res = await fetch(path, { method: "POST", body: formData });
+  if (!res.ok) { const t = await res.text(); throw new Error(t || res.statusText); }
   return res.json();
 }
 
-const formatApiError = Shared.formatApiError;
+// ─── Utilities ─────────────────────────────────────────────────────────────────
 
-function showFatalUiError(err) {
-  const message = formatApiError(err);
-  state.error = message;
-  const narrative = $("#canvasNarrative");
-  if (narrative) narrative.textContent = `The canvas could not be loaded. ${message}`;
-  const stats = $("#stats");
-  if (stats) stats.textContent = "Unable to load items";
-  const filters = $("#filters");
-  if (filters) filters.innerHTML = `<div class="muted">Unable to load filters: ${escapeHtml(message)}</div>`;
-  const grid = $("#grid");
-  if (grid && state.assets.length === 0) {
-    grid.innerHTML = `<div class="muted">Unable to load items: ${escapeHtml(message)}</div>`;
-  }
-  updateLoadMoreButton();
-}
-
-function looksLikeImageRef(value) {
-  const text = `${value || ""}`.trim().toLowerCase();
-  if (!text) return false;
-  if (IMAGE_SUFFIX_RE.test(text)) return true;
-  if (text.includes(".jpg?") || text.includes(".jpeg?") || text.includes(".png?")) return true;
-  return false;
-}
-
-function sourceHost(value) {
+function semanticQueryFromInput(value) {
   const text = `${value || ""}`.trim();
   if (!text) return "";
-  try {
-    return new URL(text).hostname.replace(/^www\./, "");
-  } catch {
-    return "";
+  for (const p of ["sem:", "similar:"]) {
+    if (text.toLowerCase().startsWith(p)) return text.slice(p.length).trim();
   }
+  return "";
 }
 
 function previewForAsset(a) {
-  if (a.thumb_path) return { url: `/media/${a.id}?kind=thumb`, kind: "thumb" };
-  if (a.stored_path && looksLikeImageRef(a.stored_path)) return { url: `/media/${a.id}?kind=original`, kind: "stored" };
-  if (a.image_url && looksLikeImageRef(a.image_url)) return { url: a.image_url, kind: "remote" };
-  return { url: "", kind: "none" };
+  if (a.thumb_path) return `/media/${a.id}?kind=thumb`;
+  if (a.stored_path) return `/media/${a.id}?kind=original`;
+  if (a.image_url && IMAGE_SUFFIX_RE.test(a.image_url)) return a.image_url;
+  return "";
 }
 
-function shouldContainFit(img) {
-  if (!img || !img.naturalWidth || !img.naturalHeight) return false;
-  const ratio = img.naturalWidth / img.naturalHeight;
-  return ratio > EXTREME_ASPECT_RATIO_MAX || ratio < EXTREME_ASPECT_RATIO_MIN;
+function displayTitle(a) {
+  return (a.title || "").trim() || "(untitled)";
 }
 
-function thumbFor(a) {
-  return previewForAsset(a).url;
-}
-
-function isHttpUrl(value) {
-  const text = `${value || ""}`.trim();
-  if (!text) return false;
-  try {
-    const parsed = new URL(text);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
+function sourceHost(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; }
 }
 
 function isPdfFile(file) {
   if (!file) return false;
-  const name = `${file.name || ""}`.trim();
-  const mime = `${file.type || ""}`.trim().toLowerCase();
-  return PDF_FILE_EXT_RE.test(name) || mime === "application/pdf";
+  return PDF_FILE_EXT_RE.test(file.name || "") || (file.type || "").toLowerCase() === "application/pdf";
 }
 
 function isImageFile(file) {
   if (!file) return false;
-  const name = `${file.name || ""}`.trim();
-  const mime = `${file.type || ""}`.trim().toLowerCase();
-  if (mime.startsWith("image/")) return true;
-  return IMAGE_FILE_EXT_RE.test(name);
+  return (file.type || "").startsWith("image/") || IMAGE_FILE_EXT_RE.test(file.name || "");
 }
 
 function setSingleFileSelection(input, file, stateKey) {
   state[stateKey] = file || null;
   if (!input) return;
-  if (!file) {
-    input.value = "";
-    return;
-  }
-  try {
-    const dt = new DataTransfer();
-    dt.items.add(file);
-    input.files = dt.files;
-  } catch {
-    // Some browsers block synthetic FileList assignment; state fallback still works.
-  }
+  if (!file) { input.value = ""; return; }
+  try { const dt = new DataTransfer(); dt.items.add(file); input.files = dt.files; } catch {}
 }
 
 function wireSingleFileDropZone(options) {
-  const zone = options.zone;
-  const input = options.input;
+  const { zone, input } = options;
   if (!zone || !input) return;
-  const prevent = (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-  };
-  const busy = () => (typeof options.isBusy === "function" ? !!options.isBusy() : false);
-  const activate = (event) => {
-    prevent(event);
+  const prevent = (e) => { e.preventDefault(); e.stopPropagation(); };
+  const busy = () => typeof options.isBusy === "function" ? !!options.isBusy() : false;
+  ["dragenter", "dragover"].forEach((evt) => zone.addEventListener(evt, (e) => { prevent(e); if (!busy()) zone.classList.add("dragActive"); }));
+  ["dragleave", "dragend"].forEach((evt) => zone.addEventListener(evt, (e) => { prevent(e); zone.classList.remove("dragActive"); }));
+  zone.addEventListener("drop", (e) => {
+    prevent(e); zone.classList.remove("dragActive");
     if (busy()) return;
-    zone.classList.add("dragActive");
-  };
-  const clear = (event) => {
-    prevent(event);
-    zone.classList.remove("dragActive");
-  };
-  ["dragenter", "dragover"].forEach((evt) => zone.addEventListener(evt, activate));
-  ["dragleave", "dragend"].forEach((evt) => zone.addEventListener(evt, clear));
-  zone.addEventListener("drop", (event) => {
-    clear(event);
-    if (busy()) return;
-    const file = (event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0]) || null;
+    const file = e.dataTransfer?.files?.[0] || null;
     if (!file) return;
-    if (!options.accept(file)) {
-      if (options.invalidMessage) Shared.showToast(options.invalidMessage, { type: "error" });
-      return;
-    }
+    if (!options.accept(file)) { if (options.invalidMessage) Shared.showToast(options.invalidMessage, { type: "error" }); return; }
     setSingleFileSelection(input, file, options.stateKey);
     if (typeof options.onSelected === "function") options.onSelected(file);
   });
 }
 
-function getCollectionById(collectionId) {
-  if (!collectionId) return null;
-  return state.collections.find((c) => c.id === collectionId) || null;
+// ─── Asset loading ─────────────────────────────────────────────────────────────
+
+async function loadAssets(opts = {}) {
+  if (state.loadingAssets) return;
+  const append = opts.append || false;
+  if (!append) { state.offset = 0; }
+
+  state.loadingAssets = true;
+  const seq = ++state.assetsRequestSeq;
+
+  if (!append) renderSkeletons();
+
+  const params = new URLSearchParams();
+  params.set("limit", ASSETS_PAGE_SIZE);
+  params.set("offset", state.offset);
+
+  const semQ = semanticQueryFromInput(state.q);
+  if (semQ) {
+    params.set("q", `sem:${semQ}`);
+    state.semanticMode = true;
+  } else {
+    state.semanticMode = false;
+    if (state.q) params.set("q", state.q);
+  }
+
+  if (state.currentSource) params.set("source", state.currentSource);
+  if (state.currentBoard) params.set("board", state.currentBoard);
+  if (state.currentCollection) params.set("collection_id", state.currentCollection);
+
+  if (state.triageFilter === "needs-comment") {
+    params.set("needs_annotation", "1");
+    params.set("include_hidden", "1");
+  } else if (state.triageFilter === "hidden") {
+    params.set("triage_status", "hidden");
+    params.set("include_hidden", "1");
+  } else if (state.triageFilter) {
+    params.set("triage_status", state.triageFilter);
+  }
+
+  // Always include hidden items when "all" is selected to show full picture
+  // but don't show triage=hidden by default unless explicitly requested
+  // (server default: exclude hidden)
+
+  try {
+    let data;
+    if (semQ) {
+      const res = await fetch(`/api/search/similar?${params}`);
+      if (!res.ok) throw new Error(await res.text());
+      data = await res.json();
+    } else {
+      data = await api(`/api/assets?${params}`);
+    }
+
+    if (seq !== state.assetsRequestSeq) return; // stale
+
+    const newAssets = data.assets || [];
+    if (append) {
+      state.assets = [...state.assets, ...newAssets];
+    } else {
+      state.assets = newAssets;
+    }
+    state.hasMore = !!(data.has_more);
+    state.offset += newAssets.length;
+
+    renderGrid();
+    updateStats();
+    updateLoadMoreBtn();
+  } catch (e) {
+    if (seq !== state.assetsRequestSeq) return;
+    const grid = $("#grid");
+    if (grid) grid.innerHTML = `<div class="empty-state">Unable to load items: ${escapeHtml(formatApiError(e))}</div>`;
+  } finally {
+    if (seq === state.assetsRequestSeq) state.loadingAssets = false;
+  }
 }
 
-function getActiveCollection() {
-  return getCollectionById(state.activeCollectionId);
-}
-
-function getViewCollection() {
-  return getCollectionById(state.viewCollectionId);
-}
-
-function getHiddenCollection() {
-  return state.collections.find((c) => `${c.name || ""}`.trim().toLowerCase() === "hidden") || null;
-}
-
-function updateLoadMoreButton() {
+function updateLoadMoreBtn() {
   const btn = $("#loadMore");
   if (!btn) return;
-  const visible = !state.semanticMode && !state.error && state.hasMore;
-  btn.hidden = !visible;
-  btn.disabled = !visible || state.loadingAssets;
+  btn.hidden = !state.hasMore || state.semanticMode;
+  btn.disabled = state.loadingAssets;
   btn.textContent = state.loadingAssets ? "Loading…" : "Load More";
 }
 
-function englishJoin(values) {
-  const items = values.filter((x) => `${x || ""}`.trim() !== "");
-  if (!items.length) return "";
-  if (items.length === 1) return items[0];
-  if (items.length === 2) return `${items[0]} and ${items[1]}`;
-  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+function updateStats() {
+  const statsEl = $("#stats");
+  if (statsEl) statsEl.textContent = `${state.assets.length} items shown`;
 }
 
-function summarizeValues(values, max = 4) {
-  const items = values.filter((x) => `${x || ""}`.trim() !== "");
-  if (items.length <= max) return englishJoin(items);
-  return `${englishJoin(items.slice(0, max))} and ${items.length - max} more`;
-}
+// ─── Grid rendering ─────────────────────────────────────────────────────────────
 
-function sourceLabel(value) {
-  const map = { pinterest: "Pinterest", facebook: "Facebook", scan: "Scan", photo: "Photo" };
-  return map[value] || value;
-}
-
-function effectiveSelection(setValues, facetItems, facetKey) {
-  const selected = Array.from(setValues).map((x) => `${x || ""}`.trim()).filter(Boolean);
-  if (!selected.length) return [];
-  const all = (facetItems || []).map((it) => `${it[facetKey] || ""}`.trim()).filter(Boolean);
-  const allUnique = Array.from(new Set(all));
-  if (allUnique.length > 0 && selected.length >= allUnique.length) return [];
-  return selected;
-}
-
-function updateLabelModeButton() {
-  const btn = $("#toggleLabelMode");
-  if (!btn) return;
-  btn.textContent = state.labelMatchMode === "all" ? "AI Tags: All" : "AI Tags: Any";
-}
-
-function filtersNarrativeParts() {
-  const parts = [];
-  const selectedSources = effectiveSelection(state.sources, state.facets.sources, "source").map(sourceLabel);
-  const selectedBoards = effectiveSelection(state.boards, state.facets.boards, "board");
-  const selectedLabels = effectiveSelection(state.labels, state.facets.labels, "label");
-  const selectedMedia = effectiveSelection(state.mediaStatuses, state.facets.media_statuses, "media_status").map((v) =>
-    prettyFacetValue("media_statuses", v)
-  );
-  const selectedKinds = effectiveSelection(state.contentKinds, state.facets.content_kinds, "content_kind").map((v) =>
-    prettyFacetValue("content_kinds", v)
-  );
-  const selectedCreators = effectiveSelection(state.creators, state.facets.creators, "creator_name");
-
-  if (selectedSources.length) parts.push(`Source: ${summarizeValues(selectedSources)}`);
-  if (selectedBoards.length) parts.push(`Source tags: ${summarizeValues(selectedBoards)}`);
-  if (selectedLabels.length) {
-    const labelModeText = state.labelMatchMode === "all" ? "all selected tags" : "any selected tag";
-    parts.push(`AI tags (${labelModeText}): ${summarizeValues(selectedLabels)}`);
-  }
-  if (selectedMedia.length) parts.push(`Media type: ${summarizeValues(selectedMedia)}`);
-  if (selectedKinds.length) parts.push(`Record type: ${summarizeValues(selectedKinds)}`);
-  if (selectedCreators.length) parts.push(`Creator/page: ${summarizeValues(selectedCreators)}`);
-  return parts;
-}
-
-function mediaNarrativeClause(selectedMediaStatuses) {
-  const unique = Array.from(new Set(selectedMediaStatuses));
-  if (unique.length === 2 && unique.includes("image") && unique.includes("link_only")) {
-    return "have an image or a link";
-  }
-  const parts = selectedMediaStatuses.map((value) => {
-    if (value === "image") return "have an image";
-    if (value === "link_only") return "have a link";
-    if (value === "metadata_only") return "are metadata only";
-    return `match "${value.replace(/_/g, " ")}"`;
-  });
-  if (!parts.length) return "";
-  if (parts.length === 1) return parts[0];
-  if (parts.length === 2) return `${parts[0]} or ${parts[1]}`;
-  return `${parts.slice(0, -1).join(", ")}, or ${parts[parts.length - 1]}`;
-}
-
-function trayAssetIdsSet() {
-  return new Set(state.tray.map((item) => item.id));
-}
-
-function memberAssetIds(item) {
-  const explicit = asList(item && item.scan_group_member_ids)
-    .map((id) => `${id || ""}`.trim())
-    .filter(Boolean);
-  if (explicit.length) return Array.from(new Set(explicit));
-  const fallback = `${(item && item.id) || ""}`.trim();
-  return fallback ? [fallback] : [];
-}
-
-function expandAssetIds(ids) {
-  const byId = new Map();
-  for (const item of state.assets) byId.set(item.id, item);
-  for (const item of state.tray) if (!byId.has(item.id)) byId.set(item.id, item);
-  const expanded = [];
-  const seen = new Set();
-  for (const rawId of ids || []) {
-    const id = `${rawId || ""}`.trim();
-    if (!id) continue;
-    const item = byId.get(id);
-    const members = item ? memberAssetIds(item) : [id];
-    for (const memberId of members) {
-      if (!memberId || seen.has(memberId)) continue;
-      seen.add(memberId);
-      expanded.push(memberId);
-    }
-  }
-  return expanded;
-}
-
-function buildCanvasNarrative() {
-  if (state.error) {
-    return "The canvas could not be loaded right now. Please try again.";
-  }
-
-  if (state.canvasMode === "tray") {
-    const textQuery = `${state.q || ""}`.trim();
-    if (state.tray.length === 0) {
-      return "The tray canvas is empty. Add items from the main canvas to start curating what you want to share.";
-    }
-    if (state.assets.length === 0 && textQuery) {
-      return `The tray canvas has no items that match "${textQuery}".`;
-    }
-    if (textQuery) {
-      return `The tray canvas is showing items from your share cart that match "${textQuery}".`;
-    }
-    return "The tray canvas is showing items from your share cart.";
-  }
-
-  const viewCollection = getViewCollection();
-  const semanticQuery = semanticQueryFromInput(state.q);
-  const textQuery = semanticQuery ? "" : `${state.q || ""}`.trim();
-  const selectedSources = effectiveSelection(state.sources, state.facets.sources, "source");
-  const selectedBoards = effectiveSelection(state.boards, state.facets.boards, "board");
-  const selectedLabels = effectiveSelection(state.labels, state.facets.labels, "label");
-  const selectedMedia = effectiveSelection(state.mediaStatuses, state.facets.media_statuses, "media_status");
-  const selectedKinds = effectiveSelection(state.contentKinds, state.facets.content_kinds, "content_kind");
-  const selectedCreators = effectiveSelection(state.creators, state.facets.creators, "creator_name");
-  const hasFilters =
-    selectedSources.length > 0 ||
-    selectedBoards.length > 0 ||
-    selectedLabels.length > 0 ||
-    selectedMedia.length > 0 ||
-    selectedKinds.length > 0 ||
-    selectedCreators.length > 0;
-  let base = viewCollection
-    ? `The canvas is showing items from the "${viewCollection.name}" collection`
-    : "The canvas is showing all items";
-
-  if (semanticQuery) {
-    base = viewCollection
-      ? `The canvas is showing items from the "${viewCollection.name}" collection similar to "${semanticQuery}"`
-      : `The canvas is showing items similar to "${semanticQuery}"`;
-  } else if (textQuery) {
-    base = viewCollection
-      ? `The canvas is showing items from the "${viewCollection.name}" collection that match "${textQuery}"`
-      : `The canvas is showing items that match "${textQuery}"`;
-  }
-
-  if (state.assets.length === 0) {
-    base = base.replace("is showing", "currently has no");
-    if (!base.endsWith(".")) base += ".";
-    return `${base} Try changing the search term or clearing one or more filters.`;
-  }
-
-  const mediaOnlyFilter =
-    hasFilters &&
-    selectedMedia.length > 0 &&
-    selectedSources.length === 0 &&
-    selectedBoards.length === 0 &&
-    selectedLabels.length === 0 &&
-    selectedKinds.length === 0 &&
-    selectedCreators.length === 0;
-  if (!viewCollection && !semanticQuery && !textQuery && mediaOnlyFilter) {
-    return `The canvas is showing all items filtered by those that ${mediaNarrativeClause(selectedMedia)}.`;
-  }
-
-  const filterParts = filtersNarrativeParts();
-  if (!filterParts.length) return `${base}.`;
-  return `${base}. Filters applied: ${filterParts.join("; ")}.`;
-}
-
-function semanticQueryFromInput(value) {
-  const text = `${value || ""}`.trim();
-  if (!text) return "";
-  const prefixes = ["sem:", "similar:"];
-  for (const p of prefixes) {
-    if (text.toLowerCase().startsWith(p)) {
-      return text.slice(p.length).trim();
-    }
-  }
-  return "";
-}
-
-function semanticSourceFilter() {
-  if (state.sources.size === 0) return "";
-  return Array.from(state.sources).join(",");
-}
-
-function shortRef(value, max = 64) {
-  const text = `${value || ""}`.trim();
-  if (!text) return "";
-  if (text.length <= max) return text;
-  return `${text.slice(0, max - 1)}…`;
-}
-
-function displayTitle(assetLike) {
-  const source = `${(assetLike && assetLike.source) || ""}`.trim().toLowerCase();
-  let title = `${(assetLike && assetLike.title) || ""}`.trim();
-  if (!title) return "(untitled)";
-  if (source === "facebook") {
-    title = title
-      .replace(/^.{1,40}\s+saved a (?:link|product|video)(?: from)?\s+/i, "")
-      .replace(/^.{1,40}\s+saved a (?:link|product|video)\.?$/i, "")
-      .trim();
-    if (!title) {
-      const host = sourceHost(
-        `${(assetLike && assetLike.source_ref) || (assetLike && assetLike.image_url) || ""}`
-      );
-      return host ? `Saved from ${host}` : "(untitled)";
-    }
-  }
-  return title || "(untitled)";
-}
-
-function isMobilePanelMode() {
-  return window.matchMedia("(max-width: 1100px)").matches;
-}
-
-function closeMobilePanels() {
-  document.body.classList.remove("mobile-left-open", "mobile-right-open");
-}
-
-function openMobilePanel(side) {
-  if (!isMobilePanelMode()) return;
-  closeMobilePanels();
-  if (side === "right") {
-    document.body.classList.add("mobile-right-open");
-    return;
-  }
-  document.body.classList.add("mobile-left-open");
-}
-
-async function selectCollection(collectionId) {
-  state.activeCollectionId = collectionId || "";
-  state.viewCollectionId = collectionId || "";
-  renderCollections();
-  setStats();
-  closeMobilePanels();
-  await loadAssets();
-}
-
-function setStats() {
-  const activeCollection = getActiveCollection();
-  const viewCollection = getViewCollection();
-  const trayIds = trayAssetIdsSet();
-  const traySelectedCount = Array.from(state.selected).filter((id) => trayIds.has(id)).length;
-  const trayMode = state.canvasMode === "tray";
-  const destination = activeCollection ? ` • Add-to "${activeCollection.name}"` : "";
-  const narrative = buildCanvasNarrative();
-  $("#canvasNarrative").textContent = narrative;
-  $("#stats").textContent = trayMode
-    ? `${state.assets.length} tray item${state.assets.length === 1 ? "" : "s"} shown`
-    : `${state.assets.length} items shown${destination}`;
-  const selectionBar = $("#selectionBar");
-  if (selectionBar) {
-    selectionBar.hidden = state.selected.size === 0;
-    const label = $("#selectionLabel");
-    if (label) label.textContent = `${state.selected.size} selected`;
-  }
-  $("#addSelectedToCollection").textContent = activeCollection
-    ? `Add to "${activeCollection.name}"`
-    : "Select Collection to Add";
-  $("#addSelectedToCollection").disabled = state.selected.size === 0 || !activeCollection || trayMode;
-  $("#addSelected").textContent = activeCollection ? "Add to Tray (Optional)" : "Add to Tray";
-  $("#addSelected").disabled = state.selected.size === 0 || trayMode;
-  $("#removeSelectedFromCollection").textContent = viewCollection
-    ? `Remove from "${viewCollection.name}"`
-    : "Remove from Collection";
-  $("#removeSelectedFromCollection").disabled = state.selected.size === 0 || !viewCollection || trayMode;
-  $("#removeSelectedFromTray").disabled = traySelectedCount === 0;
-  $("#addFiltered").textContent = activeCollection ? `Add Filtered to "${activeCollection.name}"` : "Add Filtered to Tray";
-  $("#addFiltered").disabled = state.assets.length === 0 || trayMode;
-  $("#clearSelection").disabled = state.selected.size === 0;
-  $("#showTrayCanvas").textContent = trayMode ? "Tray Canvas On" : "Show Tray Canvas";
-  $("#showTrayCanvas").disabled = !trayMode && state.tray.length === 0;
-  $("#showAll").textContent = trayMode ? "Back to Main Canvas" : "Show All";
-  if (trayMode) {
-    $("#collectionHint").textContent = `Tray canvas is active. Collections are separate; use "Add Tray to Collection" when your tray is ready.`;
-  } else if (!activeCollection) {
-    $("#collectionHint").textContent =
-      state.selected.size > 0
-        ? 'Pick a collection for primary add, or use tray as a temporary holding area.'
-        : "No collection selected. Select one to enable direct add; tray remains optional.";
-  } else if (!viewCollection) {
-    $("#collectionHint").textContent = `Selected collection: "${activeCollection.name}". Canvas is showing all items.`;
-  } else if (state.tray.length > 0) {
-    $("#collectionHint").textContent = `Viewing "${viewCollection.name}". Use Review (opens a new tab) to inspect similarity groups. Direct add is primary; tray has ${state.tray.length} optional item${state.tray.length === 1 ? "" : "s"}.`;
-  } else {
-    $("#collectionHint").textContent = `Viewing "${viewCollection.name}". Use Review (opens a new tab) to inspect similarity groups, then keep adding selected items directly.`;
-  }
-  $("#trayCount").textContent = `${state.tray.length} items`;
-  const addTrayLabel = activeCollection ? `Add Tray to "${activeCollection.name}"` : "Add Tray to Collection";
-  const disableTrayActions = state.tray.length === 0;
-  const disableAddTrayToCollection = disableTrayActions || !activeCollection;
-  $("#createFromTray").disabled = disableTrayActions;
-  $("#createFromTrayTop").disabled = disableTrayActions;
-  $("#addTrayToCollection").textContent = addTrayLabel;
-  $("#addTrayToCollectionTop").textContent = addTrayLabel;
-  $("#addTrayToCollection").disabled = disableAddTrayToCollection;
-  $("#addTrayToCollectionTop").disabled = disableAddTrayToCollection;
-  $("#clearTray").disabled = disableTrayActions;
-  $("#clearTrayTop").disabled = disableTrayActions;
-  updateLoadMoreButton();
-}
-
-function renderCollections() {
-  renderGroups();
-}
-
-function renderGroups() {
-  const wrap = $("#groups");
-  if (!wrap) return;
-  wrap.innerHTML = "";
-  const searchVal = ($("#groupSearch")?.value || "").toLowerCase().trim();
-
-  // Collections section
-  const collections = state.collections.filter((c) => {
-    if (!searchVal) return true;
-    return c.name.toLowerCase().includes(searchVal);
-  });
-  if (collections.length) {
-    for (const c of collections) {
-      const isViewing = c.id === state.viewCollectionId;
-      const isDestination = c.id === state.activeCollectionId;
-      const stateText = isViewing ? "Viewing" : isDestination ? "Destination" : "";
-      const el = document.createElement("div");
-      el.className = `listItem groupItem${isViewing ? " on" : ""}`;
-      el.innerHTML = `<div class="groupItemRow"><span class="groupItemName">${escapeHtml(c.name)}</span><span class="groupItemCount">${c.count}</span></div>${stateText ? `<div class="muted" style="font-size:11px;margin-top:2px">${stateText}</div>` : ""}`;
-      el.onclick = async () => {
-        await selectCollection(c.id);
-      };
-      wrap.appendChild(el);
-    }
-  }
-
-  if (!collections.length) {
-    wrap.innerHTML = searchVal ? '<div class="muted">No matching groups.</div>' : '<div class="muted">No groups yet.</div>';
-  }
-  updateFiltersBadge();
-}
-
-function updateFiltersBadge() {
-  const badge = $("#filtersBadge");
-  if (!badge) return;
-  const count = state.sources.size + state.labels.size + state.boards.size + state.mediaStatuses.size + state.contentKinds.size + state.creators.size;
-  badge.textContent = count > 0 ? `(${count})` : "";
-}
-
-function renderSkeletons(count) {
-  if (count === undefined) count = 12;
-  const wrap = $("#grid");
-  wrap.innerHTML = "";
-  applyZoom();
-  for (let i = 0; i < count; i++) {
+function renderSkeletons() {
+  const grid = $("#grid");
+  if (!grid) return;
+  grid.innerHTML = "";
+  for (let i = 0; i < 12; i++) {
     const el = document.createElement("div");
     el.className = "skeleton-card";
     el.innerHTML = '<div class="skeleton-thumb"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div>';
-    wrap.appendChild(el);
+    grid.appendChild(el);
   }
 }
 
 function renderGrid() {
-  const wrap = $("#grid");
-  wrap.innerHTML = "";
-  applyZoom();
+  const grid = $("#grid");
+  if (!grid) return;
+  grid.innerHTML = "";
+
   if (!state.assets.length) {
-    const isFiltered = state.q || state.sources.size || state.boards.size ||
-      state.labels.size || state.contentKinds.size || state.creators.size;
-    const message = state.error
-      ? `Unable to load items: ${escapeHtml(state.error)}`
-      : isFiltered ? "No items match your current filters." : "No items yet.";
-    const action = state.error ? ""
-      : isFiltered ? '<button class="miniBtn" id="emptyStateClear">Clear all filters</button>'
-      : "<p>Use the import buttons above to add your first items.</p>";
-    wrap.innerHTML = `<div class="empty-state"><div class="empty-state-message">${message}</div>${action}</div>`;
-    const clearBtn = wrap.querySelector("#emptyStateClear");
-    if (clearBtn) clearBtn.onclick = async () => { resetFiltersAndSearch(); await loadFacets({ seedDefaultMedia: false }); await loadAssets(); };
-    setStats();
+    grid.innerHTML = '<div class="empty-state">No items match your current filters.</div>';
     return;
   }
+
   for (const a of state.assets) {
-    const el = document.createElement("div");
-    el.className = `card ${state.selected.has(a.id) ? "selected" : ""} ${state.expanded.has(a.id) ? "expanded" : ""}`;
-    el.dataset.id = a.id;
-    const isMutliScan = a.source === "scan" && Number(a.scan_doc_pages || 0) > 1;
-    const memberIds = isMutliScan ? (a.scan_group_member_ids || []) : [];
-    const preview = previewForAsset(a);
-    const img = preview.url;
-    const ai = a.ai;
-    const summary = (ai && ai.summary) || a.ai_summary || a.description || "";
-    const imageType = ai && ai.image_type ? `${ai.image_type}` : "";
-    const labelCount = aiLabelCount(ai);
-    const top = topTags(ai, 6);
-    const host = sourceHost(a.source_ref || a.image_url || "");
-    const placeholderLabel = host ? `No preview (${host})` : "No preview image";
-    const metaParts = [];
-    if (typeof a.score === "number") {
-      metaParts.push(`Similarity: ${(a.score * 100).toFixed(1)}%`);
-    }
-    if (a.board) metaParts.push(`Board: ${a.board}`);
-    metaParts.push(`Source: ${a.source}`);
-    if (a.source === "scan" && Number(a.scan_doc_pages || 0) > 1) {
-      metaParts.push(`Pages: ${Number(a.scan_doc_pages)}`);
-    }
-    if (a.creator_name) metaParts.push(`Creator: ${a.creator_name}`);
-    if (a.content_kind) metaParts.push(`Type: ${a.content_kind}`);
-    if (a.media_status) metaParts.push(`Media: ${a.media_status}`);
-    if (imageType) metaParts.push(`Image: ${imageType}`);
-    const meta = metaParts.join(" • ");
-    const sourceRef = `${a.source_ref || ""}`.trim();
-    const sourceRefDisplay = shortRef(sourceRef);
-    const importedDate = `${a.imported_at || ""}`.slice(0, 10);
-    const createdDate = `${a.created_at || ""}`.slice(0, 10);
-    el.innerHTML = `
-      <div class="thumb">
-        ${
-          img
-            ? `<img src="${escapeHtml(img)}" loading="lazy" alt="" />`
-            : `<div class="thumbPlaceholder"><div class="thumbPlaceholderText">${escapeHtml(placeholderLabel)}</div></div>`
-        }
-        <div class="badge">${a.source}</div>
-        <label class="selectBox"><input type="checkbox" ${state.selected.has(a.id) ? "checked" : ""} /></label>
-        ${isMutliScan && memberIds.length > 1 ? `<div class="scanPageNav">
-          <button class="scanPagePrev" aria-label="Previous page" disabled>‹</button>
-          <span class="scanPageIndicator">1 / ${memberIds.length}</span>
-          <button class="scanPageNext" aria-label="Next page">›</button>
-        </div>` : ""}
-      </div>
-      <div class="cardBody">
-        <div class="cardTitle">${escapeHtml(displayTitle(a))}</div>
-        ${summary ? `<div class="cardSummary">${escapeHtml(summary)}</div>` : `<div class="cardSummary">Not tagged yet.</div>`}
-        <div class="cardMeta">${escapeHtml(meta)}</div>
-        ${ai ? `<div class="compactTags">${renderChips(top)}</div>` : ""}
-        ${ai ? `<div class="tagGrid">${renderTagSections(ai)}</div>` : ""}
-        <div class="expandedInfo">
-          <div class="expandedRow">
-            ${
-              sourceRef
-                ? `<a class="sourceRefInline" href="${escapeHtml(sourceRef)}" target="_blank" rel="noopener">${escapeHtml(sourceRefDisplay)}</a>`
-                : `<span class="muted">No source link</span>`
-            }
-          </div>
-          ${
-            importedDate
-              ? `<div class="expandedRow">Imported: ${escapeHtml(importedDate)}</div>`
-              : ""
-          }
-          ${
-            createdDate && createdDate !== importedDate
-              ? `<div class="expandedRow">Created: ${escapeHtml(createdDate)}</div>`
-              : ""
-          }
-          ${!ai ? '<div class="expandedRow muted">No AI tags available for this item.</div>' : ""}
-          ${ai ? `<div class="expandedRow muted">Model: ${escapeHtml(a.ai_model || a.ai_provider || "—")}</div>` : ""}
-        </div>
-        <div class="cardFooter">
-          ${labelCount > 0
-            ? `<div class="tag-status tagged">${labelCount} tags</div>`
-            : `<div class="tag-status untagged">Not tagged</div>`}
-          <button class="miniBtn annotateBtn" data-annotate>Annotate</button>
-        </div>
-      </div>
-    `;
-    const imageEl = el.querySelector(".thumb img");
-    const thumbEl = el.querySelector(".thumb");
-    if (imageEl) {
-      const applyFit = () => {
-        if (!thumbEl) return;
-        thumbEl.classList.toggle("fitContain", shouldContainFit(imageEl));
-      };
-      imageEl.addEventListener("load", applyFit);
-      if (typeof imageEl.decode === "function") {
-        imageEl.decode().then(applyFit).catch(() => {});
-      } else {
-        setTimeout(applyFit, 0);
-      }
-      if (imageEl.complete) applyFit();
-      imageEl.addEventListener("error", () => {
-        if (!thumbEl || thumbEl.querySelector(".thumbPlaceholder")) return;
-        imageEl.remove();
-        const placeholder = document.createElement("div");
-        placeholder.className = "thumbPlaceholder";
-        const text = document.createElement("div");
-        text.className = "thumbPlaceholderText";
-        text.textContent = placeholderLabel;
-        placeholder.appendChild(text);
-        thumbEl.prepend(placeholder);
-      });
-    }
-    const checkbox = el.querySelector("input");
-    checkbox.addEventListener("click", (e) => {
-      e.stopPropagation();
-      toggleSelect(a.id);
-      updateCardState(a.id);
-    });
-    if (isMutliScan && memberIds.length > 1) {
-      let cardPageIndex = 0;
-      const prevBtn = el.querySelector(".scanPagePrev");
-      const nextBtn = el.querySelector(".scanPageNext");
-      const indicator = el.querySelector(".scanPageIndicator");
-      const thumbImg = el.querySelector(".thumb img");
-      const navPage = (delta) => {
-        const newIdx = Math.max(0, Math.min(memberIds.length - 1, cardPageIndex + delta));
-        if (newIdx === cardPageIndex) return;
-        cardPageIndex = newIdx;
-        if (thumbImg) thumbImg.src = `/media/${memberIds[cardPageIndex]}?kind=thumb`;
-        if (indicator) indicator.textContent = `${cardPageIndex + 1} / ${memberIds.length}`;
-        if (prevBtn) prevBtn.disabled = cardPageIndex === 0;
-        if (nextBtn) nextBtn.disabled = cardPageIndex === memberIds.length - 1;
-      };
-      if (prevBtn) prevBtn.addEventListener("click", (e) => { e.stopPropagation(); navPage(-1); });
-      if (nextBtn) nextBtn.addEventListener("click", (e) => { e.stopPropagation(); navPage(1); });
-      el.querySelector("[data-annotate]").addEventListener("click", (e) => {
-        e.stopPropagation();
-        const siblingSourceRef = (a.source_ref || "").replace(/#p\d+$/, "") + `#p${cardPageIndex + 1}`;
-        openModal({ ...a, id: memberIds[cardPageIndex], source_ref: siblingSourceRef });
-      });
-    } else {
-      el.querySelector("[data-annotate]").addEventListener("click", (e) => {
-        e.stopPropagation();
-        openModal(a);
-      });
-    }
-    const sourceLinkEl = el.querySelector(".sourceRefInline");
-    if (sourceLinkEl) {
-      sourceLinkEl.addEventListener("click", (e) => {
-        e.stopPropagation();
-        e.preventDefault();
-        const href = sourceLinkEl.getAttribute("href");
-        if (href) window.open(href, "_blank", "noopener,noreferrer");
-      });
-    }
-    el.onclick = () => {
-      if (state.expanded.has(a.id)) state.expanded.delete(a.id);
-      else state.expanded.add(a.id);
-      updateCardState(a.id);
-    };
-    wrap.appendChild(el);
+    grid.appendChild(buildCard(a));
   }
-  setStats();
 }
 
-function updateCardState(id) {
-  const el = document.querySelector(`.card[data-id="${id}"]`);
-  if (!el) return;
-  el.classList.toggle("selected", state.selected.has(id));
-  el.classList.toggle("expanded", state.expanded.has(id));
-  const cb = el.querySelector("input[type=checkbox]");
-  if (cb) cb.checked = state.selected.has(id);
-  setStats();
+function buildCard(a) {
+  const el = document.createElement("div");
+  el.className = "card";
+  el.dataset.id = a.id;
+
+  const imgUrl = previewForAsset(a);
+  const ts = a.triage_status || "";
+  const needsComment = a.needs_annotation == 1;
+  let badgeHtml = "";
+  if (ts === "keeper" && needsComment) {
+    badgeHtml = '<span class="triage-badge needs-comment" title="Keeper — comment later"></span>';
+  } else if (ts === "keeper") {
+    badgeHtml = '<span class="triage-badge keeper" title="Keeper"></span>';
+  } else if (ts === "hidden") {
+    badgeHtml = '<span class="triage-badge hidden-status" title="Hidden"></span>';
+  }
+
+  const isScan = a.source === "scan";
+  const memberIds = (a.scan_group_member_ids || []);
+  const isMultiScan = isScan && memberIds.length > 1;
+
+  let scanNavHtml = "";
+  if (isMultiScan) {
+    scanNavHtml = `<div class="card-scan-nav">
+      <button class="scan-nav-btn scan-prev" aria-label="Previous page" disabled>‹</button>
+      <span class="scan-nav-indicator">1 / ${memberIds.length}</span>
+      <button class="scan-nav-btn scan-next" aria-label="Next page">›</button>
+    </div>`;
+  }
+
+  el.innerHTML = `
+    <div class="card-image">
+      ${imgUrl
+        ? `<img src="${escapeHtml(imgUrl)}" loading="lazy" alt="" />`
+        : `<div class="card-placeholder">${escapeHtml(displayTitle(a))}</div>`}
+      ${badgeHtml}
+      ${scanNavHtml}
+    </div>
+    <div class="card-footer">
+      <span class="card-title">${escapeHtml(displayTitle(a))}</span>
+      <span class="card-source">${escapeHtml(a.source || "")}</span>
+    </div>
+  `;
+
+  el.onclick = (e) => {
+    if (e.target.closest(".scan-nav-btn")) return;
+    openModal(a);
+  };
+
+  // Scan page nav wiring
+  if (isMultiScan) {
+    let pageIdx = 0;
+    const prev = el.querySelector(".scan-prev");
+    const next = el.querySelector(".scan-next");
+    const indicator = el.querySelector(".scan-nav-indicator");
+    const img = el.querySelector(".card-image img");
+
+    const updateNav = () => {
+      if (prev) prev.disabled = pageIdx === 0;
+      if (next) next.disabled = pageIdx >= memberIds.length - 1;
+      if (indicator) indicator.textContent = `${pageIdx + 1} / ${memberIds.length}`;
+      if (img) img.src = `/media/${memberIds[pageIdx]}?kind=thumb`;
+    };
+
+    if (prev) prev.addEventListener("click", (e) => { e.stopPropagation(); pageIdx = Math.max(0, pageIdx - 1); updateNav(); });
+    if (next) next.addEventListener("click", (e) => { e.stopPropagation(); pageIdx = Math.min(memberIds.length - 1, pageIdx + 1); updateNav(); });
+  }
+
+  return el;
 }
 
-function toggleSelect(id) {
-  if (state.selected.has(id)) state.selected.delete(id);
-  else state.selected.add(id);
-  setStats();
+// ─── Facets + sidebar ───────────────────────────────────────────────────────────
+
+async function loadFacets() {
+  try {
+    const data = await api("/api/facets");
+    state.facets = data;
+    renderSourceChips(data.sources || []);
+    renderBoardList(data.boards || []);
+  } catch (e) {
+    console.error("Failed to load facets:", e);
+  }
 }
+
+function renderSourceChips(sources) {
+  const wrap = $("#sourceChips");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+
+  const allBtn = document.createElement("button");
+  allBtn.className = `filter-chip${!state.currentSource ? " active" : ""}`;
+  allBtn.dataset.source = "";
+  allBtn.textContent = "All";
+  allBtn.onclick = () => setSourceFilter(null);
+  wrap.appendChild(allBtn);
+
+  for (const s of sources) {
+    const src = s.source || s.value || "";
+    if (!src) continue;
+    const btn = document.createElement("button");
+    btn.className = `filter-chip${state.currentSource === src ? " active" : ""}`;
+    btn.dataset.source = src;
+    const label = { pinterest: "Pinterest", facebook: "Facebook", scan: "Scans", photo: "Photos" }[src] || src;
+    btn.textContent = `${label} (${s.count || 0})`;
+    btn.onclick = () => setSourceFilter(src);
+    wrap.appendChild(btn);
+  }
+}
+
+function renderBoardList(boards) {
+  const wrap = $("#boardList");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+
+  if (!boards.length) {
+    wrap.innerHTML = '<div class="muted sidebar-loading">No boards yet.</div>';
+    return;
+  }
+
+  const allBtn = document.createElement("button");
+  allBtn.className = `board-chip${!state.currentBoard ? " active" : ""}`;
+  allBtn.innerHTML = `<span>All boards</span>`;
+  allBtn.onclick = () => setBoardFilter(null);
+  wrap.appendChild(allBtn);
+
+  for (const b of boards) {
+    const board = b.board || b.value || "";
+    if (!board) continue;
+    const btn = document.createElement("button");
+    btn.className = `board-chip${state.currentBoard === board ? " active" : ""}`;
+    btn.innerHTML = `<span>${escapeHtml(board)}</span><span class="count">${b.count || 0}</span>`;
+    btn.onclick = () => setBoardFilter(board);
+    wrap.appendChild(btn);
+  }
+}
+
+function setSourceFilter(source) {
+  state.currentSource = source || null;
+  state.offset = 0;
+  renderSourceChips(state.facets.sources || []);
+  loadAssets();
+}
+
+function setBoardFilter(board) {
+  state.currentBoard = board || null;
+  state.offset = 0;
+  renderBoardList(state.facets.boards || []);
+  loadAssets();
+}
+
+// ─── Triage status filter ───────────────────────────────────────────────────────
+
+function wireStatusChips() {
+  const chips = $$("[data-triage]");
+  chips.forEach((chip) => {
+    chip.addEventListener("click", () => {
+      chips.forEach((c) => c.classList.remove("active"));
+      chip.classList.add("active");
+      state.triageFilter = chip.dataset.triage;
+      state.offset = 0;
+      loadAssets();
+    });
+  });
+}
+
+// ─── Collections ────────────────────────────────────────────────────────────────
 
 async function loadCollections() {
-  const data = await api("/api/collections");
-  state.collections = data.collections;
-  if (state.activeCollectionId && !state.collections.some((c) => c.id === state.activeCollectionId)) {
-    state.activeCollectionId = "";
-  }
-  if (state.viewCollectionId && !state.collections.some((c) => c.id === state.viewCollectionId)) {
-    state.viewCollectionId = "";
-  }
-  renderCollections();
-  setStats();
-}
-
-async function loadTray() {
-  const data = await api("/api/tray");
-  state.tray = data.items;
-  renderTray();
-  setStats();
-  if (state.canvasMode === "tray") {
-    await loadAssets();
-  }
-}
-
-function assetMatchesClientFilters(asset) {
-  if (state.mediaStatuses.size > 0 && !state.mediaStatuses.has(`${asset.media_status || ""}`)) return false;
-  if (state.contentKinds.size > 0 && !state.contentKinds.has(`${asset.content_kind || ""}`)) return false;
-  if (state.creators.size > 0 && !state.creators.has(`${asset.creator_name || ""}`)) return false;
-  return true;
-}
-
-async function loadAssets(append = false) {
-  if (append && (state.loadingAssets || !state.hasMore || state.semanticMode || state.canvasMode === "tray")) return;
-  const requestSeq = append ? state.assetsRequestSeq : ++state.assetsRequestSeq;
-  const semanticQuery = state.canvasMode === "tray" ? "" : semanticQueryFromInput(state.q);
-  state.semanticMode = state.canvasMode === "tray" ? false : !!semanticQuery;
-  state.loadingAssets = true;
-  if (!append) renderSkeletons();
-  updateLoadMoreButton();
   try {
-    if (state.canvasMode === "tray") {
-      const query = `${state.q || ""}`.trim().toLowerCase();
-      const rows = state.tray
-        .map((item) => ({ ...item, ai: parseAi(item) }))
-        .filter((item) => {
-          if (!query) return true;
-          const haystack = [
-            displayTitle(item),
-            item.description || "",
-            item.source_ref || "",
-            item.source || "",
-            item.board || "",
-          ]
-            .join(" ")
-            .toLowerCase();
-          return haystack.includes(query);
-        });
-      if (requestSeq !== state.assetsRequestSeq) return;
-      state.error = "";
-      state.assets = rows;
-      state.hasMore = false;
-      renderGrid();
-      return;
-    }
-
-    if (semanticQuery) {
-      const source = encodeURIComponent(semanticSourceFilter());
-      const q = encodeURIComponent(semanticQuery);
-      const data = await api(`/api/search/similar?q=${q}&source=${source}&limit=${ASSETS_PAGE_SIZE}`);
-      if (requestSeq !== state.assetsRequestSeq) return;
-      state.error = "";
-      const rows = (data.results || []).map((a) => ({ ...a, ai: parseAi(a) })).filter(assetMatchesClientFilters);
-      state.assets = rows;
-      state.hasMore = false;
-      renderGrid();
-      return;
-    }
-
-    const q = encodeURIComponent(state.q || "");
-    const source = encodeURIComponent(Array.from(state.sources).join(","));
-    const board = encodeURIComponent(Array.from(state.boards).join(","));
-    const label = encodeURIComponent(Array.from(state.labels).join(","));
-    const labelMode = encodeURIComponent(state.labelMatchMode || "any");
-    const mediaStatus = encodeURIComponent(Array.from(state.mediaStatuses).join(","));
-    const contentKind = encodeURIComponent(Array.from(state.contentKinds).join(","));
-    const creator = encodeURIComponent(Array.from(state.creators).join(","));
-    const col = encodeURIComponent(state.viewCollectionId || "");
-    const offset = append ? state.assets.length : 0;
-    const data = await api(
-      `/api/assets?q=${q}&source=${source}&board=${board}&label=${label}&label_mode=${labelMode}&media_status=${mediaStatus}&content_kind=${contentKind}&creator=${creator}&collection_id=${col}&limit=${ASSETS_PAGE_SIZE}&offset=${offset}`
-    );
-    if (requestSeq !== state.assetsRequestSeq) return;
-    state.error = "";
-    const rows = (data.assets || []).map((a) => ({ ...a, ai: parseAi(a) }));
-    state.assets = append ? [...state.assets, ...rows] : rows;
-    state.hasMore = rows.length === ASSETS_PAGE_SIZE;
-    renderGrid();
-  } catch (err) {
-    if (requestSeq !== state.assetsRequestSeq) return;
-    if (!append) {
-      state.assets = [];
-      state.hasMore = false;
-    }
-    state.error = formatApiError(err);
-    renderGrid();
-  } finally {
-    if (requestSeq === state.assetsRequestSeq) {
-      state.loadingAssets = false;
-      updateLoadMoreButton();
-    }
+    const data = await api("/api/collections");
+    state.collections = data.collections || [];
+    renderCollectionList();
+  } catch (e) {
+    console.error("Failed to load collections:", e);
   }
 }
 
-function printModalAsset(asset) {
-  if (!asset) return;
-  const title = escapeHtml(displayTitle(asset));
-  const metaParts = [];
-  if (asset.source) metaParts.push(`Source: ${asset.source}`);
-  if (asset.creator_name) metaParts.push(`Creator: ${asset.creator_name}`);
-  if (asset.content_kind) metaParts.push(`Record type: ${asset.content_kind}`);
-  const meta = escapeHtml(metaParts.join(" • "));
-  const src = thumbFor(asset) || (asset.image_url ? escapeHtml(asset.image_url) : "");
-  const notes = escapeHtml(asset.notes || "");
-  const rawSourceRef = `${asset.source_ref || ""}`.trim();
-  const sourceRef = escapeHtml(rawSourceRef);
-  const sourceRefBlock = sourceRef
-    ? isHttpUrl(rawSourceRef)
-      ? `<div><a href="${sourceRef}" target="_blank" rel="noopener">Open source</a></div>`
-      : `<div class="notes"><strong>Source:</strong> ${sourceRef}</div>`
-    : "";
-  const html = `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>${title}</title>
-  <style>
-    body { font-family: -apple-system, Segoe UI, Arial, sans-serif; margin: 22px; color: #1f2937; }
-    h1 { margin: 0 0 6px 0; font-size: 20px; }
-    .meta { margin-bottom: 14px; color: #4b5563; font-size: 13px; }
-    .card { border: 1px solid #d1d5db; border-radius: 12px; padding: 16px; }
-    img { max-width: 100%; border-radius: 8px; display: block; margin-bottom: 12px; }
-    .notes { margin-top: 12px; white-space: pre-wrap; font-size: 14px; line-height: 1.4; }
-    a { color: #1d4ed8; text-decoration: none; }
-    @media print { body { margin: 0.35in; } .card { border: none; padding: 0; } }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>${title}</h1>
-    <div class="meta">${meta}</div>
-    ${src ? `<img src="${src}" alt="" />` : ""}
-    ${sourceRefBlock}
-    ${notes ? `<div class="notes"><strong>Notes:</strong><br/>${notes}</div>` : ""}
-  </div>
-</body>
-</html>`;
-  const openPrintWindow = window.open("", "_blank");
-  if (openPrintWindow) {
-    try {
-      openPrintWindow.document.write(html);
-      openPrintWindow.document.close();
-      setTimeout(() => {
-        try {
-          openPrintWindow.focus();
-          openPrintWindow.print();
-        } catch (err) {
-          Shared.showToast(`Print failed: ${err && err.message ? err.message : err}`, { type: "error" });
-        }
-      }, 140);
-      return;
-    } catch {}
+function renderCollectionList() {
+  const wrap = $("#collectionList");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+
+  const visible = state.collections.filter((c) => (c.name || "").toLowerCase() !== "hidden");
+
+  if (!visible.length) {
+    wrap.innerHTML = '<div class="muted sidebar-loading">No collections yet.</div>';
+    return;
   }
-  const frame = document.createElement("iframe");
-  frame.style.position = "fixed";
-  frame.style.right = "0";
-  frame.style.bottom = "0";
-  frame.style.width = "0";
-  frame.style.height = "0";
-  frame.style.opacity = "0";
-  frame.style.border = "0";
-  frame.setAttribute("aria-hidden", "true");
-  document.body.appendChild(frame);
-  const cleanup = () => {
-    setTimeout(() => {
-      if (frame.parentNode) frame.parentNode.removeChild(frame);
-    }, 1200);
-  };
+
+  // "All" (deselect collection)
+  if (state.currentCollection) {
+    const allBtn = document.createElement("button");
+    allBtn.className = "collection-chip";
+    allBtn.textContent = "← All items";
+    allBtn.onclick = () => setCollectionFilter(null);
+    wrap.appendChild(allBtn);
+  }
+
+  for (const c of visible) {
+    const btn = document.createElement("button");
+    btn.className = `collection-chip${state.currentCollection === c.id ? " active" : ""}`;
+    btn.innerHTML = `<span>${escapeHtml(c.name)}</span><span class="count">${c.count || 0}</span>`;
+    btn.onclick = () => setCollectionFilter(c.id);
+    wrap.appendChild(btn);
+  }
+}
+
+function setCollectionFilter(collectionId) {
+  state.currentCollection = collectionId || null;
+  state.offset = 0;
+  renderCollectionList();
+  loadAssets();
+}
+
+$("#newCollection").addEventListener("click", async () => {
+  const name = prompt("Collection name:");
+  if (!name || !name.trim()) return;
   try {
-    const doc = frame.contentWindow && frame.contentWindow.document;
-    if (!doc || !frame.contentWindow) throw new Error("embedded print frame unavailable");
-    doc.open();
-    doc.write(html);
-    doc.close();
-    setTimeout(() => {
-      try {
-        frame.contentWindow.focus();
-        frame.contentWindow.print();
-      } catch (err) {
-        Shared.showToast(`Print failed: ${err && err.message ? err.message : err}`, { type: "error" });
-      } finally {
-        cleanup();
-      }
-    }, 160);
-  } catch (err) {
-    cleanup();
-    Shared.showToast(`Print failed: ${err && err.message ? err.message : err}`, { type: "error" });
+    await api("/api/collections", { method: "POST", body: JSON.stringify({ name: name.trim() }) });
+    await loadCollections();
+    Shared.showToast(`Created collection "${name.trim()}"`, { type: "success" });
+  } catch (e) {
+    Shared.showToast(`Failed: ${formatApiError(e)}`, { type: "error" });
   }
-}
+});
 
-function isViewingHiddenCollection() {
-  const hidden = getHiddenCollection();
-  if (!hidden) return false;
-  return hidden.id === state.viewCollectionId;
-}
+// ─── Detail modal ────────────────────────────────────────────────────────────────
 
 async function openModal(asset) {
   state.modalAsset = asset;
-  $("#modalTitle").textContent = displayTitle(asset);
-  $("#modalMeta").textContent = `${asset.source} • ${asset.source_ref || ""}`;
-  const hideBtn = $("#hideAssetBtn");
-  if (hideBtn) hideBtn.textContent = isViewingHiddenCollection() ? "Unhide" : "Hide to Hidden";
 
-  // Progressive image loading: show thumb immediately, swap to original when ready
-  const modalImage = $("#modalImage");
-  const previewUrl = thumbFor(asset);
-  const hasThumb = !!asset.thumb_path;
-  const originalUrl = asset.stored_path ? `/media/${asset.id}?kind=original` : null;
-  if (previewUrl) {
-    modalImage.src = previewUrl;
-    modalImage.style.display = "block";
-    modalImage.onload = () => {
-      renderMarkers();
-      renderFloatingNote();
-      // Background-load higher-res original if we started with a thumbnail
-      if (hasThumb && originalUrl && originalUrl !== previewUrl) {
-        const hires = new Image();
-        hires.onload = () => {
-          if (state.modalAsset === asset) {
-            modalImage.src = originalUrl;
-            renderMarkers();
-          }
-        };
-        hires.src = originalUrl;
-      }
-    };
-  } else {
-    modalImage.removeAttribute("src");
-    modalImage.style.display = "none";
+  const title = displayTitle(asset);
+  const metaParts = [];
+  if (asset.board) metaParts.push(asset.board);
+  metaParts.push(asset.source || "");
+  if (asset.created_at) metaParts.push(asset.created_at.slice(0, 10));
+
+  $("#modalTitle").textContent = title;
+  $("#modalMeta").textContent = metaParts.filter(Boolean).join(" · ");
+
+  const img = $("#modalImage");
+  if (img) {
+    const url = asset.thumb_path ? `/media/${asset.id}?kind=original`
+                : asset.stored_path ? `/media/${asset.id}?kind=original`
+                : asset.image_url || "";
+    img.src = url;
+    img.style.display = url ? "block" : "none";
   }
 
-  // Source link in notes area
-  $("#assetNotes").value = asset.notes || "";
-  const link = $("#sourceLink");
-  if (asset.source === "scan") {
-    // Parse page number from scan://sha#pN
-    const pageMatch = (asset.source_ref || "").match(/#p(\d+)$/);
-    const pageFragment = pageMatch ? `#page=${pageMatch[1]}` : "";
-    link.href = `/media/${asset.id}?kind=pdf${pageFragment}`;
-    link.textContent = "Open PDF";
-  } else if (isHttpUrl(asset.source_ref)) {
-    link.href = asset.source_ref;
-    link.textContent = "Open original";
-  } else if (asset.stored_path) {
-    link.href = `/media/${asset.id}?kind=original`;
-    link.textContent = "Open original";
-  } else {
-    link.href = "#";
-    link.textContent = "No source";
+  // Source link
+  const sourceLink = $("#sourceLink");
+  if (sourceLink) {
+    const ref = asset.source_ref || "";
+    sourceLink.href = ref || "#";
+    sourceLink.textContent = ref ? (asset.source === "scan" ? "Open PDF" : `Open ${asset.source || "original"}`) : "No source";
   }
 
-  // View Source button: scan → original PDF (with page), external → source_ref, photo → stored file
+  // Source site link (Pinterest/Facebook external URL)
+  const sourceSiteRow = $("#sourceSiteRow");
+  const sourceSiteLink = $("#sourceSiteLink");
+  if (sourceSiteRow && sourceSiteLink && asset.source_url) {
+    sourceSiteLink.href = asset.source_url;
+    sourceSiteLink.textContent = `Original site (${sourceHost(asset.source_url) || asset.source_url}) ↗`;
+    sourceSiteRow.hidden = false;
+  } else if (sourceSiteRow) {
+    sourceSiteRow.hidden = true;
+  }
+
+  // View source button
   const viewSourceBtn = $("#viewSourceBtn");
   if (viewSourceBtn) {
-    let targetUrl = null;
-    let btnLabel = "View Source";
-    if (asset.source === "scan") {
-      const pageMatch = (asset.source_ref || "").match(/#p(\d+)$/);
-      const pageFragment = pageMatch ? `#page=${pageMatch[1]}` : "";
-      targetUrl = `/media/${asset.id}?kind=pdf${pageFragment}`;
-      btnLabel = "View PDF";
-    } else if (isHttpUrl(asset.source_ref)) {
-      targetUrl = asset.source_ref;
-    } else if (asset.stored_path) {
-      targetUrl = `/media/${asset.id}?kind=original`;
-    }
-    if (targetUrl) {
-      viewSourceBtn.style.display = "";
-      viewSourceBtn.textContent = btnLabel;
-      viewSourceBtn.onclick = () => window.open(targetUrl, "_blank", "noopener");
-    } else {
-      viewSourceBtn.style.display = "none";
-    }
+    const ref = asset.source_ref || "";
+    viewSourceBtn.onclick = () => { if (ref) window.open(ref, "_blank", "noopener"); };
+    viewSourceBtn.disabled = !ref;
   }
 
-  // Multipage scan navigation in modal
+  // Print button
+  const printBtn = $("#printAssetBtn");
+  if (printBtn) printBtn.onclick = () => printModalAsset(asset);
+
+  // Notes
+  const notesArea = $("#assetNotes");
+  if (notesArea) {
+    notesArea.value = asset.notes || "";
+    notesArea.oninput = () => scheduleNotesUpdate(asset.id, notesArea.value);
+  }
+
+  // Triage buttons
+  updateModalTriageButtons(asset.triage_status);
+  const keepBtn = $("#modalKeepBtn");
+  const hideBtn = $("#modalHideBtn");
+  if (keepBtn) keepBtn.onclick = async () => { await setTriageFromModal(asset, "keeper"); };
+  if (hideBtn) hideBtn.onclick = async () => { await setTriageFromModal(asset, "hidden"); };
+
+  // Scan page nav
   const imageStage = $("#imageStage");
-  const existingModalNav = imageStage && imageStage.querySelector(".modalScanNav");
-  if (existingModalNav) existingModalNav.remove();
-  const scanPages = asset.scan_group_member_ids || [];
-  if (asset.source === "scan" && scanPages.length > 1) {
-    const pageMatch = (asset.source_ref || "").match(/#p(\d+)$/);
-    state.modalScanPages = scanPages;
-    state.modalScanPageIndex = pageMatch ? parseInt(pageMatch[1], 10) - 1 : 0;
+  const existingNav = imageStage && imageStage.querySelector(".modalScanNav");
+  if (existingNav) existingNav.remove();
+
+  if (asset.source === "scan" && (asset.scan_group_member_ids || []).length > 1) {
+    const pages = asset.scan_group_member_ids;
+    state.modalScanPages = pages;
+    const refMatch = (asset.source_ref || "").match(/#p(\d+)$/);
+    state.modalScanPageIndex = refMatch ? parseInt(refMatch[1], 10) - 1 : 0;
     const navEl = document.createElement("div");
     navEl.className = "modalScanNav";
     navEl.innerHTML = `
-      <button class="modalScanPrev" aria-label="Previous page" ${state.modalScanPageIndex === 0 ? "disabled" : ""}>‹</button>
-      <span class="modalScanIndicator">Page ${state.modalScanPageIndex + 1} of ${scanPages.length}</span>
-      <button class="modalScanNext" aria-label="Next page" ${state.modalScanPageIndex === scanPages.length - 1 ? "disabled" : ""}>›</button>
+      <button class="modalScanPrev" ${state.modalScanPageIndex === 0 ? "disabled" : ""}>‹</button>
+      <span class="modalScanIndicator">Page ${state.modalScanPageIndex + 1} of ${pages.length}</span>
+      <button class="modalScanNext" ${state.modalScanPageIndex === pages.length - 1 ? "disabled" : ""}>›</button>
     `;
     navEl.querySelector(".modalScanPrev").onclick = () => _navModalScan(-1);
     navEl.querySelector(".modalScanNext").onclick = () => _navModalScan(1);
@@ -1224,6 +565,54 @@ async function openModal(asset) {
   renderMarkers();
 }
 
+function updateModalTriageButtons(triageStatus) {
+  const keepBtn = $("#modalKeepBtn");
+  const hideBtn = $("#modalHideBtn");
+  if (keepBtn) keepBtn.classList.toggle("active", triageStatus === "keeper");
+  if (hideBtn) hideBtn.classList.toggle("active", triageStatus === "hidden");
+}
+
+async function setTriageFromModal(asset, status) {
+  const newStatus = asset.triage_status === status ? null : status;
+  try {
+    await api(`/api/assets/${encodeURIComponent(asset.id)}/triage`, {
+      method: "POST",
+      body: JSON.stringify({ status: newStatus }),
+    });
+    asset.triage_status = newStatus;
+    updateModalTriageButtons(newStatus);
+    // Update badge on card
+    const card = $(`[data-id="${asset.id}"]`);
+    if (card) {
+      const oldBadge = card.querySelector(".triage-badge");
+      if (oldBadge) oldBadge.remove();
+      if (newStatus === "keeper") {
+        const badge = document.createElement("span");
+        badge.className = "triage-badge keeper";
+        badge.title = "Keeper";
+        card.querySelector(".card-image").appendChild(badge);
+      } else if (newStatus === "hidden") {
+        const badge = document.createElement("span");
+        badge.className = "triage-badge hidden-status";
+        badge.title = "Hidden";
+        card.querySelector(".card-image").appendChild(badge);
+      }
+    }
+    const msg = newStatus === "keeper" ? "Marked as keeper" : newStatus === "hidden" ? "Hidden" : "Reset to pending";
+    Shared.showToast(msg, { type: "success" });
+  } catch (e) {
+    Shared.showToast(`Failed: ${formatApiError(e)}`, { type: "error" });
+  }
+}
+
+function closeModal() {
+  $("#modal").classList.add("hidden");
+  state.modalAsset = null;
+  state.annotations = [];
+  const img = $("#modalImage");
+  if (img) img.style.display = "block";
+}
+
 async function _navModalScan(delta) {
   if (!state.modalScanPages) return;
   const newIdx = Math.max(0, Math.min(state.modalScanPages.length - 1, state.modalScanPageIndex + delta));
@@ -1233,156 +622,56 @@ async function _navModalScan(delta) {
   const curAsset = state.modalAsset;
   const siblingSourceRef = (curAsset.source_ref || "").replace(/#p\d+$/, "") + `#p${newIdx + 1}`;
   state.modalAsset = { ...curAsset, id: siblingId, source_ref: siblingSourceRef };
-
-  // Swap image to sibling thumbnail
   const modalImage = $("#modalImage");
-  if (modalImage) {
-    modalImage.src = `/media/${siblingId}?kind=thumb`;
-    modalImage.style.display = "block";
-  }
-
-  // Update page indicator and prev/next disabled state
+  if (modalImage) modalImage.src = `/media/${siblingId}?kind=thumb`;
   const indicator = document.querySelector(".modalScanIndicator");
   if (indicator) indicator.textContent = `Page ${newIdx + 1} of ${state.modalScanPages.length}`;
   const prevBtn = document.querySelector(".modalScanPrev");
   const nextBtn = document.querySelector(".modalScanNext");
   if (prevBtn) prevBtn.disabled = newIdx === 0;
   if (nextBtn) nextBtn.disabled = newIdx === state.modalScanPages.length - 1;
-
-  // Update source link and view PDF button
-  const pageFragment = `#page=${newIdx + 1}`;
-  const pdfUrl = `/media/${siblingId}?kind=pdf${pageFragment}`;
-  const link = $("#sourceLink");
-  if (link) { link.href = pdfUrl; link.textContent = "Open PDF"; }
-  const viewSourceBtn = $("#viewSourceBtn");
-  if (viewSourceBtn) viewSourceBtn.onclick = () => window.open(pdfUrl, "_blank", "noopener");
-
+  const sourceLink = $("#sourceLink");
+  const pdfUrl = `/media/${siblingId}?kind=pdf#page=${newIdx + 1}`;
+  if (sourceLink) { sourceLink.href = pdfUrl; sourceLink.textContent = "Open PDF"; }
   await loadAnnotations(siblingId);
   renderAnnotations();
   renderMarkers();
 }
 
-function closeModal() {
-  $("#modal").classList.add("hidden");
-  state.modalAsset = null;
-  state.annotations = [];
-  $("#modalImage").style.display = "block";
-}
+// ─── Notes / annotations ────────────────────────────────────────────────────────
 
-async function hideModalAsset() {
-  const asset = state.modalAsset;
-  if (!asset) return;
-  const memberIds = memberAssetIds(asset);
-  const assetTitle = displayTitle(asset);
-  if (isViewingHiddenCollection()) {
-    const hidden = getHiddenCollection();
-    if (!hidden) return;
+function scheduleNotesUpdate(assetId, value) {
+  clearTimeout(state.noteTimers[assetId]);
+  state.noteTimers[assetId] = setTimeout(async () => {
     try {
-      await api(`/api/collections/${encodeURIComponent(hidden.id)}/items/remove`, {
-        method: "POST",
-        body: JSON.stringify({ asset_ids: memberIds }),
+      await api(`/api/assets/${encodeURIComponent(assetId)}`, {
+        method: "PUT",
+        body: JSON.stringify({ notes: value }),
       });
-      const hiddenId = hidden.id;
-      closeModal();
-      await loadCollections();
-      await loadAssets();
-      Shared.showToast(`Unhid "${assetTitle}"`, {
-        type: "success",
-        actionLabel: "Undo",
-        onAction: async () => {
-          await api(`/api/collections/${encodeURIComponent(hiddenId)}/items`, {
-            method: "POST",
-            body: JSON.stringify({ asset_ids: memberIds }),
-          });
-          await loadCollections();
-          await loadAssets();
-          Shared.showToast("Restored to hidden.", { type: "info" });
-        },
-      });
-    } catch (e) {
-      Shared.showToast(`Unhide failed: ${formatApiError(e)}`, { type: "error" });
-    }
-    return;
-  }
-  try {
-    const firstId = memberIds[0];
-    if (!firstId) return;
-    const hiddenRes = await api(`/api/assets/${encodeURIComponent(firstId)}/hide`, {
-      method: "POST",
-      body: JSON.stringify({}),
-    });
-    const hiddenCollectionId = `${hiddenRes.hidden_collection_id || ""}`.trim();
-    if (hiddenCollectionId && memberIds.length > 1) {
-      await api(`/api/collections/${encodeURIComponent(hiddenCollectionId)}/items`, {
-        method: "POST",
-        body: JSON.stringify({ asset_ids: memberIds.slice(1) }),
-      });
-    }
-    closeModal();
-    await loadCollections();
-    await loadAssets();
-    Shared.showToast(`Hidden "${assetTitle}"`, {
-      type: "success",
-      actionLabel: "Undo",
-      onAction: async () => {
-        if (!hiddenCollectionId) return;
-        await api(`/api/collections/${encodeURIComponent(hiddenCollectionId)}/items/remove`, {
-          method: "POST",
-          body: JSON.stringify({ asset_ids: memberIds }),
-        });
-        await loadCollections();
-        await loadAssets();
-        Shared.showToast("Asset restored to canvas.", { type: "info" });
-      },
-    });
-  } catch (e) {
-    Shared.showToast(`Hide failed: ${formatApiError(e)}`, { type: "error" });
-  }
-}
-
-async function deleteAnnotationWithUndo(ann) {
-  const { id, x, y, text } = ann;
-  const assetId = state.modalAsset && state.modalAsset.id;
-  await api(`/api/annotations/${id}`, { method: "DELETE" });
-  state.annotations = state.annotations.filter((a) => a.id !== id);
-  if (state.activeAnnotationId === id) state.activeAnnotationId = null;
-  renderAnnotations();
-  renderMarkers();
-  renderFloatingNote();
-  Shared.showToast("Annotation deleted", {
-    type: "info",
-    actionLabel: "Undo",
-    onAction: async () => {
-      if (!assetId) return;
-      const res = await api("/api/annotations", {
-        method: "POST",
-        body: JSON.stringify({ asset_id: assetId, x, y, text: text || "" }),
-      });
-      state.annotations.push(res.annotation);
-      renderAnnotations();
-      renderMarkers();
-      renderFloatingNote();
-    },
-  });
+    } catch {}
+  }, 800);
 }
 
 async function loadAnnotations(assetId) {
-  const data = await api(`/api/annotations?asset_id=${encodeURIComponent(assetId)}`);
-  state.annotations = data.annotations;
+  try {
+    const data = await api(`/api/annotations?asset_id=${encodeURIComponent(assetId)}`);
+    state.annotations = data.annotations || [];
+  } catch { state.annotations = []; }
 }
 
 function renderAnnotations() {
   const wrap = $("#annList");
+  if (!wrap) return;
   wrap.innerHTML = "";
   state.annotations.forEach((ann, idx) => {
     const el = document.createElement("div");
-    el.className = `listItem annItem ${state.activeAnnotationId === ann.id ? "active" : ""}`;
+    el.className = `listItem annItem${state.activeAnnotationId === ann.id ? " active" : ""}`;
     el.innerHTML = `
       <div class="annHeader">
         <strong>#${idx + 1}</strong>
-        <button class="iconBtn danger" data-del="${ann.id}">×</button>
+        <button class="iconBtn danger" data-del="${ann.id}" type="button">×</button>
       </div>
-      <textarea data-ann="${ann.id}">${ann.text || ""}</textarea>
+      <textarea data-ann="${ann.id}">${escapeHtml(ann.text || "")}</textarea>
     `;
     el.onclick = () => setActiveAnnotation(ann.id);
     const ta = el.querySelector("textarea");
@@ -1391,10 +680,62 @@ function renderAnnotations() {
       syncFloatingText(ann.id, ta.value);
       scheduleAnnotationUpdate(ann.id, { text: ta.value });
     });
-    el.querySelector("[data-del]").onclick = async () => {
+    el.querySelector("[data-del]").onclick = async (e) => {
+      e.stopPropagation();
       await deleteAnnotationWithUndo(ann);
     };
     wrap.appendChild(el);
+  });
+}
+
+function scheduleAnnotationUpdate(annId, patch) {
+  clearTimeout(state.noteTimers[`ann_${annId}`]);
+  state.noteTimers[`ann_${annId}`] = setTimeout(async () => {
+    try { await api(`/api/annotations/${annId}`, { method: "PUT", body: JSON.stringify(patch) }); } catch {}
+  }, 600);
+}
+
+function setActiveAnnotation(annId) {
+  state.activeAnnotationId = annId;
+  renderAnnotations();
+  renderMarkers();
+  renderFloatingNote();
+}
+
+function syncFloatingText(annId, value) {
+  if (state.activeAnnotationId !== annId) return;
+  const ft = $("#floatingText");
+  if (ft && ft.value !== value) ft.value = value;
+}
+
+function renderFloatingNote() {
+  const note = $("#floatingNote");
+  const ft = $("#floatingText");
+  if (!note || !ft) return;
+  const ann = state.annotations.find((a) => a.id === state.activeAnnotationId);
+  if (!ann) { note.classList.add("hidden"); return; }
+  const pt = normalizedToStagePoint(ann.x, ann.y);
+  note.style.left = `${pt.left + 16}px`;
+  note.style.top = `${pt.top}px`;
+  note.classList.remove("hidden");
+  ft.value = ann.text || "";
+}
+
+async function deleteAnnotationWithUndo(ann) {
+  const { id, x, y, text } = ann;
+  const assetId = state.modalAsset?.id;
+  await api(`/api/annotations/${id}`, { method: "DELETE" });
+  state.annotations = state.annotations.filter((a) => a.id !== id);
+  if (state.activeAnnotationId === id) state.activeAnnotationId = null;
+  renderAnnotations(); renderMarkers(); renderFloatingNote();
+  Shared.showToast("Annotation deleted", {
+    type: "info", actionLabel: "Undo",
+    onAction: async () => {
+      if (!assetId) return;
+      const res = await api("/api/annotations", { method: "POST", body: JSON.stringify({ asset_id: assetId, x, y, text: text || "" }) });
+      state.annotations.push(res.annotation);
+      renderAnnotations(); renderMarkers(); renderFloatingNote();
+    },
   });
 }
 
@@ -1402,17 +743,14 @@ function modalImageGeometry() {
   const stage = $("#imageStage");
   const img = $("#modalImage");
   const stageRect = stage.getBoundingClientRect();
-  const stageWidth = stageRect.width;
-  const stageHeight = stageRect.height;
-  if (!img || img.style.display === "none" || !img.naturalWidth || !img.naturalHeight || stageWidth <= 0 || stageHeight <= 0) {
-    return { stageRect, left: 0, top: 0, width: stageWidth, height: stageHeight };
+  const { width: sw, height: sh } = stageRect;
+  if (!img || img.style.display === "none" || !img.naturalWidth || !img.naturalHeight || sw <= 0 || sh <= 0) {
+    return { stageRect, left: 0, top: 0, width: sw, height: sh };
   }
-  const scale = Math.min(stageWidth / img.naturalWidth, stageHeight / img.naturalHeight);
+  const scale = Math.min(sw / img.naturalWidth, sh / img.naturalHeight);
   const width = img.naturalWidth * scale;
   const height = img.naturalHeight * scale;
-  const left = (stageWidth - width) / 2;
-  const top = (stageHeight - height) / 2;
-  return { stageRect, left, top, width, height };
+  return { stageRect, left: (sw - width) / 2, top: (sh - height) / 2, width, height };
 }
 
 function stagePointToNormalized(clientX, clientY, clamp = false) {
@@ -1420,27 +758,23 @@ function stagePointToNormalized(clientX, clientY, clamp = false) {
   if (geo.width <= 0 || geo.height <= 0) return null;
   let x = (clientX - geo.stageRect.left - geo.left) / geo.width;
   let y = (clientY - geo.stageRect.top - geo.top) / geo.height;
-  if (clamp) {
-    x = Math.max(0, Math.min(1, x));
-    y = Math.max(0, Math.min(1, y));
-    return { x, y, geo };
-  }
+  if (clamp) { x = Math.max(0, Math.min(1, x)); y = Math.max(0, Math.min(1, y)); return { x, y, geo }; }
   if (x < 0 || x > 1 || y < 0 || y > 1) return null;
   return { x, y, geo };
 }
 
 function normalizedToStagePoint(x, y) {
   const geo = modalImageGeometry();
-  return {
-    left: geo.left + x * geo.width,
-    top: geo.top + y * geo.height,
-    geo,
-  };
+  return { left: geo.left + x * geo.width, top: geo.top + y * geo.height, geo };
 }
+
+const _markerColors = ["#6F5AA8","#c4787a","#7a9b8a","#b8860b","#5a8fc4"];
+function markerColor(idx) { return _markerColors[idx % _markerColors.length]; }
 
 function renderMarkers() {
   $$(".marker").forEach((m) => m.remove());
   const stage = $("#imageStage");
+  if (!stage) return;
   state.annotations.forEach((ann, idx) => {
     const m = document.createElement("div");
     m.className = "marker";
@@ -1450,17 +784,13 @@ function renderMarkers() {
     m.dataset.id = ann.id;
     m.style.background = markerColor(idx);
     m.innerHTML = `
-      <span style="color: #F2F2F6;">${idx + 1}</span>
+      <span style="color:#F2F2F6">${idx + 1}</span>
       <div class="badgeIcons">
-        <button class="ok" data-ok="${ann.id}" aria-label="Done">
-          <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-            <path d="M3.2 8.4l2.3 2.3L12.8 3.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
+        <button class="ok" data-ok="${ann.id}" aria-label="Done" type="button">
+          <svg viewBox="0 0 16 16" width="12" height="12"><path d="M3.2 8.4l2.3 2.3L12.8 3.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
-        <button class="del" data-del="${ann.id}" aria-label="Delete">
-          <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-            <path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          </svg>
+        <button class="del" data-del="${ann.id}" aria-label="Delete" type="button">
+          <svg viewBox="0 0 16 16" width="12" height="12"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         </button>
       </div>
     `;
@@ -1470,629 +800,492 @@ function renderMarkers() {
       m.setPointerCapture(e.pointerId);
       state.dragging = { id: ann.id, pointerId: e.pointerId, moved: false };
     };
-    m.onclick = (e) => {
-      e.stopPropagation();
-      setActiveAnnotation(ann.id);
-    };
+    m.onclick = (e) => { e.stopPropagation(); setActiveAnnotation(ann.id); };
     if (state.activeAnnotationId === ann.id) m.classList.add("active");
-    m.querySelector("[data-ok]").onclick = (e) => {
-      e.stopPropagation();
-      state.activeAnnotationId = null;
-      renderAnnotations();
-      renderMarkers();
-      renderFloatingNote();
-    };
-    m.querySelector("[data-del]").onclick = async (e) => {
-      e.stopPropagation();
-      await deleteAnnotationWithUndo(ann);
-    };
+    m.querySelector("[data-ok]").onclick = (e) => { e.stopPropagation(); state.activeAnnotationId = null; renderAnnotations(); renderMarkers(); renderFloatingNote(); };
+    m.querySelector("[data-del]").onclick = async (e) => { e.stopPropagation(); await deleteAnnotationWithUndo(ann); };
     stage.appendChild(m);
   });
 }
 
-$("#imageStage").addEventListener("click", async (e) => {
-  if (!state.modalAsset) return;
-  if (e.target.closest(".marker") || e.target.closest(".floatingNote")) return;
-  const point = stagePointToNormalized(e.clientX, e.clientY);
-  if (!point) return;
-  const res = await api("/api/annotations", {
-    method: "POST",
-    body: JSON.stringify({ asset_id: state.modalAsset.id, x: point.x, y: point.y, text: "" }),
-  });
-  state.annotations.push(res.annotation);
-  state.activeAnnotationId = res.annotation.id;
-  renderAnnotations();
-  renderMarkers();
-  renderFloatingNote();
-});
-
-$("#imageStage").addEventListener("pointermove", async (e) => {
-  if (!state.dragging) return;
-  const point = stagePointToNormalized(e.clientX, e.clientY, true);
-  if (!point) return;
-  const ann = state.annotations.find((a) => a.id === state.dragging.id);
-  if (!ann) return;
-  ann.x = point.x;
-  ann.y = point.y;
-  state.dragging.moved = true;
-  renderMarkers();
-  renderFloatingNote();
-});
-
-$("#imageStage").addEventListener("pointerup", async (e) => {
-  if (!state.dragging) return;
-  const ann = state.annotations.find((a) => a.id === state.dragging.id);
-  if (ann) {
-    await api(`/api/annotations/${ann.id}`, {
-      method: "PUT",
-      body: JSON.stringify({ x: ann.x, y: ann.y }),
-    });
-  }
-  state.dragging = null;
-});
-
-$("#closeModal").onclick = () => closeModal();
-$("#modal").onclick = (e) => {
-  if (e.target.id === "modal") closeModal();
-};
-const hideAssetBtn = $("#hideAssetBtn");
-if (hideAssetBtn) {
-  hideAssetBtn.onclick = async () => {
-    await hideModalAsset();
-  };
-}
-const printAssetBtn = $("#printAssetBtn");
-if (printAssetBtn) {
-  printAssetBtn.onclick = () => {
+// Image stage event listeners for annotation creation/drag
+const imageStageEl = document.getElementById("imageStage");
+if (imageStageEl) {
+  imageStageEl.addEventListener("click", async (e) => {
     if (!state.modalAsset) return;
-    printModalAsset(state.modalAsset);
-  };
+    if (e.target.closest(".marker") || e.target.closest(".floatingNote")) return;
+    const point = stagePointToNormalized(e.clientX, e.clientY);
+    if (!point) return;
+    const res = await api("/api/annotations", {
+      method: "POST",
+      body: JSON.stringify({ asset_id: state.modalAsset.id, x: point.x, y: point.y, text: "" }),
+    });
+    state.annotations.push(res.annotation);
+    state.activeAnnotationId = res.annotation.id;
+    renderAnnotations(); renderMarkers(); renderFloatingNote();
+  });
+
+  imageStageEl.addEventListener("pointermove", async (e) => {
+    if (!state.dragging) return;
+    const point = stagePointToNormalized(e.clientX, e.clientY, true);
+    if (!point) return;
+    const ann = state.annotations.find((a) => a.id === state.dragging.id);
+    if (!ann) return;
+    ann.x = point.x; ann.y = point.y;
+    state.dragging.moved = true;
+    renderMarkers(); renderFloatingNote();
+  });
+
+  imageStageEl.addEventListener("pointerup", async () => {
+    if (!state.dragging) return;
+    const ann = state.annotations.find((a) => a.id === state.dragging.id);
+    if (ann) {
+      await api(`/api/annotations/${ann.id}`, { method: "PUT", body: JSON.stringify({ x: ann.x, y: ann.y }) });
+    }
+    state.dragging = null;
+  });
 }
 
-$("#search").addEventListener("input", (e) => {
-  state.q = e.target.value || "";
-  if (state.canvasMode !== "tray" && semanticQueryFromInput(state.q)) {
-    setStats();
+// Modal close wiring
+const closeModalBtn = $("#closeModal");
+if (closeModalBtn) closeModalBtn.onclick = closeModal;
+const modalEl = $("#modal");
+if (modalEl) modalEl.onclick = (e) => { if (e.target.id === "modal") closeModal(); };
+
+// ─── Print ──────────────────────────────────────────────────────────────────────
+
+function printModalAsset(asset) {
+  const url = asset.stored_path ? `/media/${asset.id}?kind=original` : asset.image_url || "";
+  if (!url) return;
+  const win = window.open("", "_blank");
+  win.document.write(`<!doctype html><html><body style="margin:0"><img src="${escapeHtml(url)}" style="max-width:100%" /></body></html>`);
+  win.document.close();
+  win.onload = () => { win.print(); };
+}
+
+// ─── Review mode ────────────────────────────────────────────────────────────────
+
+function enterReview() {
+  if (!state.assets.length) {
+    Shared.showToast("No items to review.", { type: "info" });
     return;
   }
-  loadAssets();
-});
+  state.view = "review";
+  state.reviewItems = [...state.assets];
+  state.reviewIndex = 0;
+  state.reviewHistory = [];
+  state.reviewSkipped = 0;
+  state.reviewKept = 0;
+  state.reviewHidden = 0;
 
-$("#search").addEventListener("keydown", (e) => {
-  if (e.key !== "Enter") return;
-  loadAssets();
-});
-// top source dropdown not used; filters panel handles sources
-function resetFiltersAndSearch() {
-  state.q = "";
-  $("#search").value = "";
-  state.sources.clear();
-  state.boards.clear();
-  state.labels.clear();
-  state.mediaStatuses.clear();
-  state.contentKinds.clear();
-  state.creators.clear();
-  state.selected.clear();
-  state.expanded.clear();
-  state.labelMatchMode = "any";
-  updateLabelModeButton();
+  const browseView = $("#browseView");
+  const reviewView = $("#reviewView");
+  const reviewComplete = $("#reviewComplete");
+  const reviewCard = $("#reviewCard");
+  if (browseView) browseView.hidden = true;
+  if (reviewView) reviewView.hidden = false;
+  if (reviewComplete) reviewComplete.hidden = true;
+  if (reviewCard) reviewCard.hidden = false;
+
+  renderReviewCard();
 }
 
-$("#showAll").onclick = async () => {
-  resetFiltersAndSearch();
-  state.canvasMode = "main";
-  state.viewCollectionId = "";
-  renderCollections();
-  setStats();
-  closeMobilePanels();
-  await loadFacets({ seedDefaultMedia: false });
-  await loadAssets();
-};
+function exitReview() {
+  state.view = "browse";
+  const browseView = $("#browseView");
+  const reviewView = $("#reviewView");
+  if (browseView) browseView.hidden = false;
+  if (reviewView) reviewView.hidden = true;
+  loadAssets();
+}
 
-$("#showTrayCanvas").onclick = async () => {
-  state.canvasMode = "tray";
-  state.viewCollectionId = "";
-  renderCollections();
-  setStats();
-  closeMobilePanels();
-  await loadAssets();
-};
+function renderReviewCard() {
+  const item = state.reviewItems[state.reviewIndex];
+  if (!item) return;
 
-$("#loadMore").onclick = async () => {
-  await loadAssets(true);
-};
+  const total = state.reviewItems.length;
+  const counter = $("#reviewCounter");
+  const progressBar = $("#reviewProgressBar");
+  if (counter) counter.textContent = `${state.reviewIndex + 1} of ${total}`;
+  if (progressBar) progressBar.style.width = `${((state.reviewIndex) / total) * 100}%`;
 
-$(".content").addEventListener("scroll", () => {
-  const content = $(".content");
-  if (!content || state.semanticMode || state.loadingAssets || !state.hasMore) return;
-  if (content.scrollTop + content.clientHeight >= content.scrollHeight - 220) {
-    loadAssets(true);
+  const img = $("#reviewImg");
+  if (img) {
+    const url = item.thumb_path ? `/media/${item.id}?kind=original`
+                : item.stored_path ? `/media/${item.id}?kind=original`
+                : item.image_url || "";
+    img.src = url;
+    img.alt = displayTitle(item);
   }
-});
 
-window.addEventListener("resize", () => {
-  if (!isMobilePanelMode()) closeMobilePanels();
-  if (!state.modalAsset) return;
-  renderMarkers();
-  renderFloatingNote();
-});
+  const titleEl = $("#reviewTitle");
+  if (titleEl) titleEl.textContent = displayTitle(item);
 
-// Filters accordion toggle
-$("#filtersToggle")?.addEventListener("click", () => {
-  state.filtersExpanded = !state.filtersExpanded;
-  const filtersDiv = $("#filters");
-  const chevron = $("#filtersChevron");
-  if (filtersDiv) filtersDiv.style.display = state.filtersExpanded ? "" : "none";
-  if (chevron) chevron.textContent = state.filtersExpanded ? "▾" : "▸";
-  const toggle = $("#filtersToggle");
-  if (toggle) toggle.setAttribute("aria-expanded", state.filtersExpanded ? "true" : "false");
-});
+  const metaEl = $("#reviewMeta");
+  if (metaEl) {
+    const parts = [];
+    if (item.board) parts.push(item.board);
+    parts.push(item.source || "");
+    metaEl.textContent = parts.filter(Boolean).join(" · ");
+  }
 
-// Group search filter
-$("#groupSearch")?.addEventListener("input", () => renderGroups());
+  const descEl = $("#reviewDesc");
+  if (descEl) descEl.textContent = item.seo_alt_text || item.ai_summary || item.description || "";
 
-// Zoom control buttons
-$("#zoomControl")?.addEventListener("click", (e) => {
-  const btn = e.target.closest("button[data-zoom]");
-  if (btn) setZoom(btn.dataset.zoom);
-});
+  const link = $("#reviewSourceLink");
+  if (link) {
+    const ref = item.source_ref || "";
+    link.href = ref || "#";
+    link.hidden = !ref;
+    link.textContent = ref ? `View on ${item.source || "source"} ↗` : "";
+  }
 
-$("#selectAll").onclick = () => {
-  for (const a of state.assets) state.selected.add(a.id);
-  setStats();
-  renderGrid();
-};
+  // Reset checkbox
+  const cb = $("#commentLater");
+  if (cb) cb.checked = false;
 
-$("#newCollection").onclick = async () => {
-  const name = prompt("Collection name:", "Kitchen — Round 1");
-  if (!name) return;
-  const res = await api("/api/collections", { method: "POST", body: JSON.stringify({ name }) });
-  await loadCollections();
-  await selectCollection(res.collection.id);
-};
+  // Update undo button
+  const undoBtn = $("#reviewUndo");
+  if (undoBtn) undoBtn.disabled = state.reviewHistory.length === 0;
+}
 
-$("#deleteCollection").onclick = async () => {
-  const collectionId = state.activeCollectionId;
-  if (!collectionId) return;
-  const c = state.collections.find((x) => x.id === collectionId);
-  const ok = confirm(`Delete collection "${c ? c.name : ""}"? This cannot be undone.`);
-  if (!ok) return;
-  try {
-    await api(`/api/collections/${collectionId}`, { method: "DELETE" });
-    state.activeCollectionId = "";
-    if (state.viewCollectionId === collectionId) state.viewCollectionId = "";
-    await loadCollections();
-    await loadAssets();
-  } catch (e) {
-    // fallback for servers that only support JSON body for DELETE
+async function reviewAction(action) {
+  const item = state.reviewItems[state.reviewIndex];
+  if (!item) return;
+
+  // Save undo entry
+  state.reviewHistory.push({
+    id: item.id,
+    index: state.reviewIndex,
+    previousStatus: item.triage_status || null,
+    previousAnnotation: item.needs_annotation || 0,
+    action,
+  });
+
+  if (action === "keep") {
+    const commentLater = document.getElementById("commentLater")?.checked || false;
     try {
-      await api(`/api/collections`, {
-        method: "DELETE",
-        body: JSON.stringify({ id: collectionId }),
-      });
-      state.activeCollectionId = "";
-      if (state.viewCollectionId === collectionId) state.viewCollectionId = "";
-      await loadCollections();
-      await loadAssets();
-    } catch (e2) {
-      Shared.showToast(`Delete failed: ${e2.message || e2}`, { type: "error" });
-    }
-  }
-};
-
-$("#addSelected").onclick = async () => {
-  const ids = expandAssetIds(Array.from(state.selected));
-  if (!ids.length) return;
-  await api(`/api/tray/add`, {
-    method: "POST",
-    body: JSON.stringify({ asset_ids: ids }),
-  });
-  state.selected.clear();
-  await loadTray();
-  await loadAssets();
-};
-
-$("#addSelectedToCollection").onclick = async () => {
-  if (!state.activeCollectionId || state.selected.size === 0) return;
-  const ids = expandAssetIds(Array.from(state.selected));
-  if (!ids.length) return;
-  try {
-    await api(`/api/collections/${state.activeCollectionId}/items`, {
-      method: "POST",
-      body: JSON.stringify({ asset_ids: ids }),
-    });
-    state.selected.clear();
-    await loadCollections();
-    await loadAssets();
-  } catch (e) {
-    Shared.showToast(`Add failed: ${e.message || e}`, { type: "error" });
-  }
-};
-
-$("#removeSelectedFromCollection").onclick = async () => {
-  if (!state.viewCollectionId || state.selected.size === 0) return;
-  const ids = expandAssetIds(Array.from(state.selected));
-  if (!ids.length) return;
-  const col = getViewCollection();
-  const colId = state.viewCollectionId;
-  const colName = col ? col.name : "this collection";
-  const count = state.selected.size;
-  try {
-    await api(`/api/collections/${colId}/items/remove`, {
-      method: "POST",
-      body: JSON.stringify({ asset_ids: ids }),
-    });
-    state.selected.clear();
-    await loadCollections();
-    await loadAssets();
-    Shared.showToast(`Removed ${count} item${count === 1 ? "" : "s"} from "${colName}"`, {
-      type: "success",
-      actionLabel: "Undo",
-      onAction: async () => {
-        await api(`/api/collections/${colId}/items`, {
-          method: "POST",
-          body: JSON.stringify({ asset_ids: ids }),
-        });
-        await loadCollections();
-        await loadAssets();
-        Shared.showToast("Restored items.", { type: "info" });
-      },
-    });
-  } catch (e) {
-    Shared.showToast(`Remove failed: ${e.message || e}`, { type: "error" });
-  }
-};
-
-$("#removeSelectedFromTray").onclick = async () => {
-  const trayIds = trayAssetIdsSet();
-  const selectedTrayIds = Array.from(state.selected).filter((id) => trayIds.has(id));
-  const ids = expandAssetIds(selectedTrayIds);
-  if (!ids.length) return;
-  await api("/api/tray/remove", {
-    method: "POST",
-    body: JSON.stringify({ asset_ids: ids }),
-  });
-  selectedTrayIds.forEach((id) => state.selected.delete(id));
-  await loadTray();
-  await loadAssets();
-};
-
-$("#addFiltered").onclick = async () => {
-  const ids = expandAssetIds(state.assets.map((a) => a.id));
-  if (!ids.length) return;
-  if (state.activeCollectionId) {
-    await api(`/api/collections/${state.activeCollectionId}/items`, {
-      method: "POST",
-      body: JSON.stringify({ asset_ids: ids }),
-    });
-    await loadCollections();
-  } else {
-    await api(`/api/tray/add`, {
-      method: "POST",
-      body: JSON.stringify({ asset_ids: ids }),
-    });
-    await loadTray();
-  }
-  state.selected.clear();
-  await loadAssets();
-};
-
-$("#clearSelection").onclick = (e) => {
-  if (e) {
-    e.preventDefault();
-    e.stopPropagation();
-  }
-  state.selected.clear();
-  renderGrid();
-};
-
-$("#assetNotes").addEventListener("input", async (e) => {
-  if (!state.modalAsset) return;
-  await api(`/api/assets/${state.modalAsset.id}`, {
-    method: "PUT",
-    body: JSON.stringify({ notes: e.target.value }),
-  });
-});
-
-function markerColor(idx) {
-  return "#6F5AA8";
-}
-
-function setActiveAnnotation(id) {
-  state.activeAnnotationId = id;
-  renderAnnotations();
-  renderMarkers();
-  renderFloatingNote();
-  const ta = document.querySelector(`textarea[data-ann="${id}"]`);
-  if (ta) ta.focus();
-}
-
-function renderFloatingNote() {
-  const box = $("#floatingNote");
-  const ta = $("#floatingText");
-  if (!state.activeAnnotationId) {
-    box.classList.add("hidden");
-    return;
-  }
-  const ann = state.annotations.find((a) => a.id === state.activeAnnotationId);
-  if (!ann) {
-    box.classList.add("hidden");
-    return;
-  }
-  box.classList.remove("hidden");
-  ta.value = ann.text || "";
-  const pt = normalizedToStagePoint(ann.x, ann.y);
-  const left = Math.min(pt.geo.left + pt.geo.width - 240, Math.max(10, pt.left + 12));
-  const top = Math.min(pt.geo.top + pt.geo.height - 140, Math.max(10, pt.top + 12));
-  box.style.left = `${left}px`;
-  box.style.top = `${top}px`;
-  setTimeout(() => ta.focus(), 0);
-}
-
-function syncFloatingText(id, text) {
-  if (state.activeAnnotationId !== id) return;
-  $("#floatingText").value = text;
-}
-
-function scheduleAnnotationUpdate(id, payload) {
-  if (state.noteTimers[id]) clearTimeout(state.noteTimers[id]);
-  state.noteTimers[id] = setTimeout(async () => {
-    await api(`/api/annotations/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(payload),
-    });
-  }, 250);
-}
-
-$("#floatingText").addEventListener("input", (e) => {
-  if (!state.activeAnnotationId) return;
-  const ann = state.annotations.find((a) => a.id === state.activeAnnotationId);
-  if (!ann) return;
-  ann.text = e.target.value;
-  const listTa = document.querySelector(`textarea[data-ann="${ann.id}"]`);
-  if (listTa) listTa.value = e.target.value;
-  scheduleAnnotationUpdate(ann.id, { text: e.target.value });
-});
-
-$("#floatingText").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    state.activeAnnotationId = null;
-    renderAnnotations();
-    renderMarkers();
-    renderFloatingNote();
-  }
-});
-
-// refresh button removed
-
-async function init() {
-  applyZoom();
-  try {
-    await loadCollections();
-    await loadFacets();
-    await loadTray();
-    await loadAssets();
-    state.initComplete = true;
-  } catch (err) {
-    console.error("App initialization failed", err);
-    showFatalUiError(err);
-  }
-}
-
-init();
-
-document.querySelectorAll('.toolbar .row').forEach(row => {
-  row.addEventListener('scroll', () => {
-    const atEnd = row.scrollLeft + row.clientWidth >= row.scrollWidth - 8;
-    row.classList.toggle('scrolled-end', atEnd);
-  });
-});
-
-function facetContextQueryString() {
-  const source = encodeURIComponent(Array.from(state.sources).join(","));
-  const mediaStatus = encodeURIComponent(Array.from(state.mediaStatuses).join(","));
-  return `source=${source}&media_status=${mediaStatus}`;
-}
-
-async function loadFacets(options = {}) {
-  const seedDefaultMedia = options.seedDefaultMedia !== false;
-  const data = await api(`/api/facets?${facetContextQueryString()}`);
-  state.facets = data.facets;
-  const mediaItems = state.facets.media_statuses || [];
-  let seededDefaultMedia = false;
-  if (seedDefaultMedia && !state.mediaDefaultsSeeded && state.mediaStatuses.size === 0 && mediaItems.length) {
-    mediaItems.forEach((it) => {
-      const value = `${it.media_status || ""}`.trim();
-      if (!value || value === "metadata_only") return;
-      state.mediaStatuses.add(value);
-    });
-    if (state.mediaStatuses.size === 0) {
-      mediaItems.forEach((it) => {
-        const value = `${it.media_status || ""}`.trim();
-        if (value) state.mediaStatuses.add(value);
-      });
-    }
-    seededDefaultMedia = state.mediaStatuses.size > 0;
-    if (seededDefaultMedia) state.mediaDefaultsSeeded = true;
-  }
-  if (seededDefaultMedia) {
-    // Recompute context-sensitive content kinds with the default media filter now applied.
-    const data2 = await api(`/api/facets?${facetContextQueryString()}`);
-    state.facets = data2.facets;
-  }
-  renderFilters();
-  renderGroups();
-  updateFiltersBadge();
-}
-
-function prettyFacetValue(groupKey, value) {
-  if (groupKey === "media_statuses") {
-    if (value === "image") return "Image";
-    if (value === "link_only") return "Link only";
-    if (value === "metadata_only") return "Metadata only";
-  }
-  if (groupKey === "content_kinds") {
-    return value.replace(/_/g, " ");
-  }
-  return value;
-}
-
-window.addEventListener("error", (event) => {
-  if (!event || !event.error) return;
-  if (event.target && event.target !== window) return;
-  if (state.initComplete) {
-    console.error("Unhandled runtime error", event.error);
-    return;
-  }
-  showFatalUiError(event.error || event.message || "Unexpected error");
-});
-
-window.addEventListener("unhandledrejection", (event) => {
-  if (state.initComplete) {
-    console.error("Unhandled promise rejection", event && event.reason);
-    return;
-  }
-  showFatalUiError((event && event.reason) || "Unexpected async error");
-});
-
-function isFilterGroupOpen(key) {
-  if (Object.prototype.hasOwnProperty.call(state.filterOpen, key)) {
-    return !!state.filterOpen[key];
-  }
-  return key === "sources";
-}
-
-function renderFilters() {
-  const wrap = $("#filters");
-  if (!wrap) return;
-  wrap.innerHTML = "";
-  const groups = [
-    { key: "sources", label: "Source", set: state.sources, valueKey: "source" },
-    { key: "labels", label: "AI Tags", set: state.labels, valueKey: "label" },
-    { key: "boards", label: "Board", set: state.boards, valueKey: "board" },
-    { key: "media_statuses", label: "Media Type", set: state.mediaStatuses, valueKey: "media_status" },
-    { key: "content_kinds", label: "Record Type", set: state.contentKinds, valueKey: "content_kind" },
-    { key: "creators", label: "Creator / Page", set: state.creators, valueKey: "creator_name" },
-  ];
-
-  for (const g of groups) {
-    let items = state.facets[g.key] || [];
-    const hasContextCounts = Array.isArray(state.facets.content_kinds_context);
-    if (g.key === "content_kinds") {
-      const contextual = hasContextCounts ? state.facets.content_kinds_context : [];
-      const contextCounts = new Map(contextual.map((it) => [`${it.content_kind || ""}`.trim(), Number(it.n || 0)]));
-      items = (state.facets.content_kinds || []).map((it) => {
-        const value = `${it.content_kind || ""}`.trim();
-        return {
-          ...it,
-          n_context: hasContextCounts ? (value ? contextCounts.get(value) || 0 : 0) : Number(it.n || 0),
-        };
-      });
-    }
-    if (!items.length) continue;
-    const isOpen = isFilterGroupOpen(g.key);
-    const group = document.createElement("div");
-    group.className = "filterGroup";
-    group.innerHTML = `
-      <button type="button" class="filterToggle" aria-expanded="${isOpen ? "true" : "false"}">
-        <span>${escapeHtml(g.label)}</span>
-        <span class="filterChevron">${isOpen ? "▾" : "▸"}</span>
-      </button>
-    `;
-    const list = document.createElement("div");
-    list.className = `filterList ${isOpen ? "" : "collapsed"}`;
-    items.forEach((it) => {
-      const raw = it[g.valueKey];
-      const value = `${raw || ""}`.trim();
-      if (!value) return;
-      const contextualCount = g.key === "content_kinds" ? Number(it.n_context || 0) : Number(it.n || 0);
-      const isSelected = g.set.has(value);
-      const isZeroOption = g.key === "content_kinds" && hasContextCounts && contextualCount === 0;
-      const disabled = isZeroOption && !isSelected;
-      const row = document.createElement("label");
-      row.className = `filterItem${isZeroOption ? " zeroOption" : ""}`;
-      row.innerHTML = `<input type="checkbox" ${isSelected ? "checked" : ""} ${disabled ? "disabled" : ""} /> ${escapeHtml(prettyFacetValue(g.key, value))} <span class="muted">(${contextualCount})</span>`;
-      row.querySelector("input").addEventListener("change", async (e) => {
-        if (e.target.checked) g.set.add(value);
-        else g.set.delete(value);
-        updateFiltersBadge();
-        if (g.key === "sources" || g.key === "media_statuses") {
-          await loadFacets();
-        }
-        await loadAssets();
-      });
-      list.appendChild(row);
-    });
-    group.querySelector(".filterToggle").addEventListener("click", () => {
-      state.filterOpen[g.key] = !isFilterGroupOpen(g.key);
-      renderFilters();
-    });
-    group.appendChild(list);
-    wrap.appendChild(group);
-  }
-}
-
-function renderTray() {
-  const wrap = $("#tray");
-  wrap.innerHTML = "";
-  for (const item of state.tray) {
-    const el = document.createElement("div");
-    el.className = "listItem trayItem";
-    const preview = previewForAsset(item);
-    el.innerHTML = `
-      <div class="trayItemRow">
-        ${
-          preview.url
-            ? `<img class="trayThumb" src="${escapeHtml(preview.url)}" loading="lazy" alt="" />`
-            : `<div class="trayThumb trayThumbEmpty">No image</div>`
-        }
-        <div class="trayText">
-          <div class="trayTitle">${escapeHtml(displayTitle(item))}</div>
-          <div class="muted">${escapeHtml(item.source || "")}</div>
-        </div>
-        <button class="miniBtn trayRemove">Remove</button>
-      </div>
-    `;
-    el.querySelector(".trayRemove").onclick = async (e) => {
-      e.stopPropagation();
-      await api("/api/tray/remove", {
+      await api(`/api/assets/${encodeURIComponent(item.id)}/triage`, {
         method: "POST",
-        body: JSON.stringify({ asset_ids: memberAssetIds(item) }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "keeper", needs_annotation: commentLater ? 1 : 0 }),
       });
-      await loadTray();
-    };
-    el.onclick = () => {
-      openModal(item);
-    };
-    wrap.appendChild(el);
+      item.triage_status = "keeper";
+      item.needs_annotation = commentLater ? 1 : 0;
+    } catch (e) {
+      Shared.showToast(`Failed to save: ${formatApiError(e)}`, { type: "error" });
+    }
+    state.reviewKept++;
+  } else if (action === "hide") {
+    try {
+      await api(`/api/assets/${encodeURIComponent(item.id)}/triage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "hidden" }),
+      });
+      item.triage_status = "hidden";
+    } catch (e) {
+      Shared.showToast(`Failed to save: ${formatApiError(e)}`, { type: "error" });
+    }
+    state.reviewHidden++;
+  } else {
+    // skip — no API call
+    state.reviewSkipped++;
+  }
+
+  state.reviewIndex++;
+  if (state.reviewIndex >= state.reviewItems.length) {
+    showReviewComplete();
+    return;
+  }
+  renderReviewCard();
+}
+
+async function undoReview() {
+  const last = state.reviewHistory.pop();
+  if (!last) return;
+
+  // Revert counts
+  if (last.action === "keep") state.reviewKept = Math.max(0, state.reviewKept - 1);
+  else if (last.action === "hide") state.reviewHidden = Math.max(0, state.reviewHidden - 1);
+  else state.reviewSkipped = Math.max(0, state.reviewSkipped - 1);
+
+  // Restore API
+  try {
+    await api(`/api/assets/${encodeURIComponent(last.id)}/triage`, {
+      method: "POST",
+      body: JSON.stringify({ status: last.previousStatus, needs_annotation: last.previousAnnotation }),
+    });
+    const item = state.reviewItems.find((i) => i.id === last.id);
+    if (item) { item.triage_status = last.previousStatus; item.needs_annotation = last.previousAnnotation; }
+  } catch (e) {
+    Shared.showToast(`Undo failed: ${formatApiError(e)}`, { type: "error" });
+  }
+
+  state.reviewIndex = last.index;
+
+  // If review was completed, show card again
+  const reviewComplete = $("#reviewComplete");
+  const reviewCard = $("#reviewCard");
+  if (reviewComplete) reviewComplete.hidden = true;
+  if (reviewCard) reviewCard.hidden = false;
+
+  renderReviewCard();
+}
+
+function showReviewComplete() {
+  const reviewCard = $("#reviewCard");
+  const reviewActions = document.querySelector(".review-actions");
+  const reviewUndoBtn = $("#reviewUndo");
+  const reviewComplete = $("#reviewComplete");
+
+  if (reviewCard) reviewCard.hidden = true;
+  if (reviewActions) reviewActions.style.display = "none";
+  if (reviewUndoBtn) reviewUndoBtn.hidden = true;
+  if (reviewComplete) {
+    reviewComplete.hidden = false;
+    const desc = $("#reviewCompleteDesc");
+    const total = state.reviewItems.length;
+    if (desc) desc.textContent = `You reviewed ${total} item${total === 1 ? "" : "s"}.`;
+    const statsEl = $("#reviewCompleteStats");
+    if (statsEl) {
+      statsEl.innerHTML = `
+        <span class="review-stat keeper">${state.reviewKept} keepers</span>
+        <span class="review-stat hidden-s">${state.reviewHidden} hidden</span>
+        <span class="review-stat skipped">${state.reviewSkipped} skipped</span>
+      `;
+    }
+    const progressBar = $("#reviewProgressBar");
+    if (progressBar) progressBar.style.width = "100%";
+    const counter = $("#reviewCounter");
+    if (counter) counter.textContent = `${total} of ${total}`;
   }
 }
 
-function setScanImportButtonState() {
-  const button = $("#addScanPdf");
-  if (!button) return;
-  button.disabled = !!state.scanImportBusy || !!state.photoImportBusy;
-  button.textContent = state.scanImportBusy ? "Importing..." : "Add Scan PDF";
-  const runButton = $("#runScanImport");
-  if (runButton) runButton.disabled = !!state.scanImportBusy || !!state.photoImportBusy || !currentScanImportFile();
+// Review button wiring
+const reviewBtn = $("#reviewBtn");
+if (reviewBtn) reviewBtn.addEventListener("click", enterReview);
+
+const reviewBackBtn = $("#reviewBack");
+if (reviewBackBtn) reviewBackBtn.addEventListener("click", exitReview);
+
+const reviewHideBtn = $("#reviewHideBtn");
+if (reviewHideBtn) reviewHideBtn.addEventListener("click", () => reviewAction("hide"));
+
+const reviewSkipBtn = $("#reviewSkipBtn");
+if (reviewSkipBtn) reviewSkipBtn.addEventListener("click", () => reviewAction("skip"));
+
+const reviewKeepBtn = $("#reviewKeepBtn");
+if (reviewKeepBtn) reviewKeepBtn.addEventListener("click", () => reviewAction("keep"));
+
+const reviewUndoBtn = $("#reviewUndo");
+if (reviewUndoBtn) reviewUndoBtn.addEventListener("click", undoReview);
+
+const reviewExitBtn = $("#reviewExitBtn");
+if (reviewExitBtn) reviewExitBtn.addEventListener("click", exitReview);
+
+const reviewSkippedBtn = $("#reviewSkippedBtn");
+if (reviewSkippedBtn) reviewSkippedBtn.addEventListener("click", () => {
+  // Restart with skipped items (those that were "skip" actioned)
+  const skipped = state.reviewItems.filter((item) => {
+    const histEntry = state.reviewHistory.find((h) => h.id === item.id);
+    return !histEntry || histEntry.action === "skip";
+  });
+  if (!skipped.length) { Shared.showToast("No skipped items.", { type: "info" }); return; }
+  state.reviewItems = skipped;
+  state.reviewIndex = 0;
+  state.reviewHistory = [];
+  state.reviewKept = 0;
+  state.reviewHidden = 0;
+  state.reviewSkipped = 0;
+  const reviewComplete = $("#reviewComplete");
+  const reviewCard = $("#reviewCard");
+  const reviewActions = document.querySelector(".review-actions");
+  const reviewUndoBtnEl = $("#reviewUndo");
+  if (reviewComplete) reviewComplete.hidden = true;
+  if (reviewCard) reviewCard.hidden = false;
+  if (reviewActions) reviewActions.style.display = "";
+  if (reviewUndoBtnEl) reviewUndoBtnEl.hidden = false;
+  renderReviewCard();
+});
+
+// ─── Keyboard shortcuts ──────────────────────────────────────────────────────────
+
+window.addEventListener("keydown", (e) => {
+  // Close modal with Escape
+  if (e.key === "Escape") {
+    if (!$("#modal").classList.contains("hidden")) { closeModal(); return; }
+    if (!$("#scanImportModal").classList.contains("hidden") && !state.scanImportBusy) { closeScanImportModal(); return; }
+    if (!$("#photoImportModal").classList.contains("hidden") && !state.photoImportBusy) { closePhotoImportModal(); return; }
+    if (state.view === "review") { exitReview(); return; }
+    return;
+  }
+
+  // Review mode shortcuts (only when review is active and no modal/input focused)
+  if (state.view !== "review") return;
+  const tag = (e.target && e.target.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return;
+  if (!$("#modal").classList.contains("hidden")) return;
+
+  switch (e.key) {
+    case "ArrowRight":
+    case "k":
+    case "K":
+      e.preventDefault();
+      reviewAction("keep");
+      break;
+    case "ArrowLeft":
+    case "s":
+    case "S":
+      e.preventDefault();
+      reviewAction("hide");
+      break;
+    case "ArrowDown":
+    case " ":
+      e.preventDefault();
+      reviewAction("skip");
+      break;
+    case "z":
+    case "Z":
+      e.preventDefault();
+      undoReview();
+      break;
+    case "c":
+    case "C": {
+      e.preventDefault();
+      const cb = $("#commentLater");
+      if (cb) cb.checked = !cb.checked;
+      break;
+    }
+  }
+});
+
+// ─── Chat bar ────────────────────────────────────────────────────────────────────
+
+function addChatResponse(text) {
+  const bar = $("#chatResponse");
+  if (!bar) return;
+  bar.textContent = text;
+  bar.hidden = false;
+  clearTimeout(addChatResponse._timer);
+  addChatResponse._timer = setTimeout(() => { if (bar) bar.hidden = true; }, 6000);
 }
+
+async function processChat(text) {
+  const lower = text.toLowerCase().trim();
+  if (!lower) return;
+
+  // Create collection
+  const createMatch = lower.match(/(?:make|create)\s+(?:a\s+)?(?:new\s+)?collection\s+(?:called\s+|named\s+)?["']?(.+?)["']?$/);
+  if (createMatch) {
+    const name = createMatch[1].trim();
+    try {
+      await api("/api/collections", { method: "POST", body: JSON.stringify({ name }) });
+      await loadCollections();
+      addChatResponse(`Created collection "${name}".`);
+    } catch (e) { addChatResponse(`Couldn't create collection: ${formatApiError(e)}`); }
+    return;
+  }
+
+  // Show keepers/pending/hidden
+  const statusMatch = lower.match(/(?:show|see|filter|find)\s+(?:me\s+)?(?:only\s+)?(?:the\s+)?(\bkeepers?\b|\bpending\b|\bhidden\b|\bneeds?\s+comment\b)/);
+  if (statusMatch) {
+    const s = statusMatch[1].replace(/\s+/g, "-");
+    const triageVal = s.startsWith("keeper") ? "keeper" : s === "pending" ? "pending" : s === "hidden" ? "hidden" : "needs-comment";
+    state.triageFilter = triageVal;
+    // Update chip
+    $$("[data-triage]").forEach((c) => {
+      const match = (c.dataset.triage === triageVal) || (triageVal === "needs-comment" && c.dataset.triage === "needs-comment");
+      c.classList.toggle("active", match);
+    });
+    await loadAssets();
+    addChatResponse(`Showing ${triageVal} items.`);
+    return;
+  }
+
+  // Show collection
+  const showMatch = lower.match(/(?:show|open|view)\s+(?:me\s+)?(?:the\s+)?(?:collection\s+)?["']?(.+?)["']?(?:\s+collection)?$/);
+  if (showMatch) {
+    const name = showMatch[1].trim();
+    const col = state.collections.find((c) => c.name.toLowerCase().includes(name));
+    if (col) {
+      setCollectionFilter(col.id);
+      addChatResponse(`Showing collection "${col.name}".`);
+    } else {
+      addChatResponse(`No collection matching "${name}" found.`);
+    }
+    return;
+  }
+
+  // Search
+  const searchMatch = lower.match(/(?:find|search(?:\s+for)?)\s+(.+)/);
+  if (searchMatch) {
+    const query = searchMatch[1].trim();
+    state.q = query;
+    const searchInput = $("#search");
+    if (searchInput) searchInput.value = query;
+    await loadAssets();
+    addChatResponse(`Searching for "${query}".`);
+    return;
+  }
+
+  // Review
+  if (lower.match(/\breview\b/)) {
+    enterReview();
+    return;
+  }
+
+  addChatResponse("I didn't understand that. Try: 'make a collection called Kitchen' or 'show keepers'.");
+}
+
+const chatInput = $("#chatInput");
+const chatSend = $("#chatSend");
+if (chatSend) chatSend.addEventListener("click", () => {
+  const val = chatInput?.value || "";
+  if (val.trim()) { processChat(val.trim()); chatInput.value = ""; }
+});
+if (chatInput) chatInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const val = chatInput.value || "";
+    if (val.trim()) { processChat(val.trim()); chatInput.value = ""; }
+  }
+});
+
+// ─── Search ──────────────────────────────────────────────────────────────────────
+
+const searchInput = $("#search");
+if (searchInput) {
+  searchInput.addEventListener("input", (e) => {
+    state.q = e.target.value || "";
+    if (semanticQueryFromInput(state.q)) return; // don't auto-search for sem:
+    loadAssets();
+  });
+  searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") loadAssets();
+  });
+}
+
+// ─── Load More ───────────────────────────────────────────────────────────────────
+
+const loadMoreBtn = $("#loadMore");
+if (loadMoreBtn) loadMoreBtn.addEventListener("click", () => loadAssets({ append: true }));
+
+// ─── Scan import ──────────────────────────────────────────────────────────────────
+
+function openScanImportModal() { $("#scanImportModal")?.classList.remove("hidden"); }
+function closeScanImportModal() { $("#scanImportModal")?.classList.add("hidden"); }
 
 function currentScanImportFile() {
   const input = $("#scanPdfInput");
-  return state.scanImportFile || (input && input.files && input.files[0]) || null;
+  return state.scanImportFile || (input?.files?.[0]) || null;
 }
 
-function openScanImportModal() {
-  const modal = $("#scanImportModal");
-  if (!modal) return;
-  modal.classList.remove("hidden");
-}
-
-function closeScanImportModal() {
-  const modal = $("#scanImportModal");
-  if (!modal) return;
-  modal.classList.add("hidden");
+function setScanImportButtonState() {
+  const btn = $("#addScanPdf");
+  if (btn) { btn.disabled = !!state.scanImportBusy; btn.textContent = state.scanImportBusy ? "Importing…" : "Add Scan"; }
+  const runBtn = $("#runScanImport");
+  if (runBtn) runBtn.disabled = !!state.scanImportBusy || !currentScanImportFile();
 }
 
 function resetScanImportModal() {
@@ -2109,89 +1302,92 @@ function resetScanImportModal() {
 
 async function importScanPdf(file, opts = {}) {
   if (!file) return;
-  const name = `${file.name || ""}`.trim();
-  if (!isPdfFile(file)) {
-    Shared.showToast("Please choose a PDF file.", { type: "error" });
-    return;
-  }
+  if (!isPdfFile(file)) { Shared.showToast("Please choose a PDF file.", { type: "error" }); return; }
+  const name = file.name || "";
   const useFormParser = !!opts.useFormParser;
   const detectDelimiters = opts.detectDelimiters !== false;
-
   state.scanImportBusy = true;
   setScanImportButtonState();
-  setPhotoImportButtonState();
   const narrative = $("#canvasNarrative");
-  const previousNarrative = narrative ? narrative.textContent : "";
-  if (narrative) {
-    narrative.textContent = `Importing "${name}" into scans...`;
-  }
-
+  if (narrative) narrative.textContent = `Importing "${name}"…`;
   try {
     const formData = new FormData();
     formData.append("file", file, name);
     formData.append("use_form_parser", useFormParser ? "1" : "0");
     formData.append("split_on_delimiters", detectDelimiters ? "1" : "0");
     const payload = await apiUpload("/api/import/scans", formData);
-    const importReport = payload.import || {};
-    const created = Number(importReport.created_assets || 0);
-    const docs = Number(importReport.detected_documents || 0);
-    const delimiters = Number(importReport.delimiter_pages_skipped || 0);
-    const errors = Array.isArray(importReport.errors) ? importReport.errors.length : 0;
-
+    const report = payload.import || {};
+    const created = Number(report.created_assets || 0);
     await loadFacets();
     await loadAssets();
-
-    let msg = `Imported ${created} scan page${created === 1 ? "" : "s"} from "${name}".`;
-    if (docs > 0) {
-      msg += ` These are grouped into ${docs} scan document card${docs === 1 ? "" : "s"} in the canvas.`;
-    } else {
-      msg += " This appears as one scan document card in the canvas.";
-    }
-    if (detectDelimiters && delimiters > 0) {
-      msg += ` Skipped ${delimiters} blank delimiter page${delimiters === 1 ? "" : "s"}.`;
-    }
-    if (!detectDelimiters) msg += " Delimiter detection was turned off.";
-    if (errors > 0) msg += ` ${errors} import error${errors === 1 ? "" : "s"} were reported.`;
-    if (useFormParser) msg += " Form Parser option was requested.";
-    Shared.showToast(msg, { type: "success" });
+    Shared.showToast(`Imported ${created} scan page${created === 1 ? "" : "s"} from "${name}".`, { type: "success" });
     closeScanImportModal();
   } catch (e) {
     Shared.showToast(`Scan import failed: ${formatApiError(e)}`, { type: "error", duration: 8000 });
   } finally {
     state.scanImportBusy = false;
     setScanImportButtonState();
-    setPhotoImportButtonState();
-    const input = $("#scanPdfInput");
-    setSingleFileSelection(input, null, "scanImportFile");
-    if (narrative) narrative.textContent = previousNarrative;
-    setStats();
+    setSingleFileSelection($("#scanPdfInput"), null, "scanImportFile");
+    if (narrative) narrative.textContent = "";
   }
 }
 
-function setPhotoImportButtonState() {
-  const button = $("#addPhotos");
-  if (!button) return;
-  button.disabled = !!state.photoImportBusy || !!state.scanImportBusy;
-  button.textContent = state.photoImportBusy ? "Importing..." : "Add Photos";
-  const runButton = $("#runPhotoImport");
-  if (runButton) runButton.disabled = !!state.photoImportBusy || !!state.scanImportBusy || !currentPhotoImportFile();
+const addScanPdfBtn = $("#addScanPdf");
+const scanPdfInput = $("#scanPdfInput");
+const scanDropZone = $("#scanDropZone");
+const runScanImportBtn = $("#runScanImport");
+const cancelScanImportBtn = $("#cancelScanImport");
+const closeScanImportBtn = $("#closeScanImport");
+
+if (addScanPdfBtn) addScanPdfBtn.onclick = () => { if (!state.scanImportBusy) { openScanImportModal(); resetScanImportModal(); } };
+if (scanPdfInput) {
+  scanPdfInput.addEventListener("change", () => {
+    const file = scanPdfInput.files?.[0] || null;
+    if (file && !isPdfFile(file)) {
+      Shared.showToast("Please choose a PDF file.", { type: "error" });
+      setSingleFileSelection(scanPdfInput, null, "scanImportFile");
+      setScanImportButtonState(); return;
+    }
+    state.scanImportFile = file || null;
+    setScanImportButtonState();
+  });
 }
+if (scanDropZone) {
+  wireSingleFileDropZone({
+    zone: scanDropZone, input: scanPdfInput, stateKey: "scanImportFile",
+    accept: isPdfFile, invalidMessage: "Please drop a PDF file.",
+    isBusy: () => state.scanImportBusy || state.photoImportBusy,
+    onSelected: () => setScanImportButtonState(),
+  });
+}
+if (runScanImportBtn) {
+  runScanImportBtn.addEventListener("click", async () => {
+    if (state.scanImportBusy) return;
+    const file = currentScanImportFile();
+    const useFormParser = !!($("#scanUseFormParser")?.checked);
+    const detectDelimiters = !!($("#scanDetectDelimiters")?.checked);
+    await importScanPdf(file, { useFormParser, detectDelimiters });
+  });
+}
+if (cancelScanImportBtn) cancelScanImportBtn.onclick = () => { if (!state.scanImportBusy) { closeScanImportModal(); resetScanImportModal(); } };
+if (closeScanImportBtn) closeScanImportBtn.onclick = () => { if (!state.scanImportBusy) { closeScanImportModal(); resetScanImportModal(); } };
+setScanImportButtonState();
+
+// ─── Photo import ─────────────────────────────────────────────────────────────────
+
+function openPhotoImportModal() { $("#photoImportModal")?.classList.remove("hidden"); }
+function closePhotoImportModal() { $("#photoImportModal")?.classList.add("hidden"); }
 
 function currentPhotoImportFile() {
   const input = $("#photoInput");
-  return state.photoImportFile || (input && input.files && input.files[0]) || null;
+  return state.photoImportFile || (input?.files?.[0]) || null;
 }
 
-function openPhotoImportModal() {
-  const modal = $("#photoImportModal");
-  if (!modal) return;
-  modal.classList.remove("hidden");
-}
-
-function closePhotoImportModal() {
-  const modal = $("#photoImportModal");
-  if (!modal) return;
-  modal.classList.add("hidden");
+function setPhotoImportButtonState() {
+  const btn = $("#addPhotos");
+  if (btn) { btn.disabled = !!state.photoImportBusy || !!state.scanImportBusy; btn.textContent = state.photoImportBusy ? "Importing…" : "Add Photos"; }
+  const runBtn = $("#runPhotoImport");
+  if (runBtn) runBtn.disabled = !!state.photoImportBusy || !!state.scanImportBusy || !currentPhotoImportFile();
 }
 
 function resetPhotoImportModal() {
@@ -2204,31 +1400,22 @@ function resetPhotoImportModal() {
 
 async function importPhoto(file) {
   if (!file) return;
-  const name = `${file.name || ""}`.trim();
-  if (!name) return;
-  if (!isImageFile(file)) {
-    Shared.showToast("Please choose an image file.", { type: "error" });
-    return;
-  }
+  const name = file.name || "";
+  if (!isImageFile(file)) { Shared.showToast("Please choose an image file.", { type: "error" }); return; }
   state.photoImportBusy = true;
   setPhotoImportButtonState();
   setScanImportButtonState();
   const narrative = $("#canvasNarrative");
-  const previousNarrative = narrative ? narrative.textContent : "";
-  if (narrative) narrative.textContent = `Importing "${name}" into photos...`;
-
+  if (narrative) narrative.textContent = `Importing "${name}"…`;
   try {
     const formData = new FormData();
     formData.append("file", file, name);
     const payload = await apiUpload("/api/import/photos", formData);
-    const importReport = payload.import || {};
-    const created = Number(importReport.created_assets || 0);
-    const errors = Array.isArray(importReport.errors) ? importReport.errors.length : 0;
+    const report = payload.import || {};
+    const created = Number(report.created_assets || 0);
     await loadFacets();
     await loadAssets();
-    let msg = `Imported ${created} photo item${created === 1 ? "" : "s"} from "${name}".`;
-    if (errors > 0) msg += ` ${errors} import error${errors === 1 ? "" : "s"} were reported.`;
-    Shared.showToast(msg, { type: "success" });
+    Shared.showToast(`Imported ${created} photo${created === 1 ? "" : "s"} from "${name}".`, { type: "success" });
     closePhotoImportModal();
   } catch (e) {
     Shared.showToast(`Photo import failed: ${formatApiError(e)}`, { type: "error", duration: 8000 });
@@ -2236,386 +1423,61 @@ async function importPhoto(file) {
     state.photoImportBusy = false;
     setPhotoImportButtonState();
     setScanImportButtonState();
-    const input = $("#photoInput");
-    setSingleFileSelection(input, null, "photoImportFile");
-    if (narrative) narrative.textContent = previousNarrative;
-    setStats();
+    setSingleFileSelection($("#photoInput"), null, "photoImportFile");
+    if (narrative) narrative.textContent = "";
   }
 }
 
-async function clearTray() {
-  if (!state.tray.length) return;
-  const clearedIds = expandAssetIds(state.tray.map((x) => x.id));
-  await api("/api/tray/clear", { method: "POST" });
-  await loadTray();
-  Shared.showToast(`Cleared ${clearedIds.length} item${clearedIds.length === 1 ? "" : "s"} from tray`, {
-    type: "success",
-    actionLabel: "Undo",
-    onAction: async () => {
-      await api("/api/tray/add", {
-        method: "POST",
-        body: JSON.stringify({ asset_ids: clearedIds }),
-      });
-      await loadTray();
-      Shared.showToast("Tray restored.", { type: "info" });
-    },
-  });
-}
-
-async function createCollectionFromTray() {
-  if (!state.tray.length) return;
-  const name = prompt("Collection name:", "Curated — Round 1");
-  if (!name) return;
-  const res = await api("/api/tray/create-collection", {
-    method: "POST",
-    body: JSON.stringify({ name }),
-  });
-  await loadCollections();
-  await loadTray();
-  await selectCollection(res.collection.id);
-}
-
-async function addTrayToActiveCollection() {
-  if (!state.activeCollectionId || state.tray.length === 0) return;
-  const ids = expandAssetIds(state.tray.map((x) => x.id));
-  if (!ids.length) return;
-  try {
-    await api(`/api/collections/${state.activeCollectionId}/items`, {
-      method: "POST",
-      body: JSON.stringify({ asset_ids: ids }),
-    });
-    await api("/api/tray/clear", { method: "POST" });
-    await loadCollections();
-    await loadTray();
-    await loadAssets();
-  } catch (e) {
-    Shared.showToast(`Add to collection failed: ${e.message || e}`, { type: "error" });
-  }
-}
-
-$("#clearTray").onclick = clearTray;
-$("#clearTrayTop").onclick = clearTray;
-$("#createFromTray").onclick = createCollectionFromTray;
-$("#createFromTrayTop").onclick = createCollectionFromTray;
-$("#addTrayToCollection").onclick = addTrayToActiveCollection;
-$("#addTrayToCollectionTop").onclick = addTrayToActiveCollection;
-const toggleLabelModeBtn = $("#toggleLabelMode");
-if (toggleLabelModeBtn) {
-  toggleLabelModeBtn.onclick = async () => {
-    state.labelMatchMode = state.labelMatchMode === "all" ? "any" : "all";
-    updateLabelModeButton();
-    await loadAssets();
-  };
-  updateLabelModeButton();
-}
-
-const addScanPdfBtn = $("#addScanPdf");
-const scanPdfInput = $("#scanPdfInput");
-const scanDropZone = $("#scanDropZone");
-const runScanImportBtn = $("#runScanImport");
-const cancelScanImportBtn = $("#cancelScanImport");
-const closeScanImportBtn = $("#closeScanImport");
-if (addScanPdfBtn && scanPdfInput && runScanImportBtn) {
-  addScanPdfBtn.onclick = () => {
-    if (state.scanImportBusy) return;
-    openScanImportModal();
-    resetScanImportModal();
-  };
-  scanPdfInput.addEventListener("change", () => {
-    const file = (scanPdfInput.files && scanPdfInput.files[0]) || null;
-    if (file && !isPdfFile(file)) {
-      Shared.showToast("Please choose a PDF file.", { type: "error" });
-      setSingleFileSelection(scanPdfInput, null, "scanImportFile");
-      setScanImportButtonState();
-      return;
-    }
-    state.scanImportFile = file || null;
-    setScanImportButtonState();
-  });
-  wireSingleFileDropZone({
-    zone: scanDropZone,
-    input: scanPdfInput,
-    stateKey: "scanImportFile",
-    accept: isPdfFile,
-    invalidMessage: "Please drop a PDF file.",
-    isBusy: () => state.scanImportBusy || state.photoImportBusy,
-    onSelected: () => setScanImportButtonState(),
-  });
-  runScanImportBtn.addEventListener("click", async () => {
-    if (state.scanImportBusy) return;
-    const file = currentScanImportFile();
-    const useFormParser = !!($("#scanUseFormParser") && $("#scanUseFormParser").checked);
-    const detectDelimiters = !!($("#scanDetectDelimiters") && $("#scanDetectDelimiters").checked);
-    await importScanPdf(file, { useFormParser, detectDelimiters });
-  });
-  if (cancelScanImportBtn) {
-    cancelScanImportBtn.onclick = () => {
-      if (state.scanImportBusy) return;
-      closeScanImportModal();
-      resetScanImportModal();
-    };
-  }
-  if (closeScanImportBtn) {
-    closeScanImportBtn.onclick = () => {
-      if (state.scanImportBusy) return;
-      closeScanImportModal();
-      resetScanImportModal();
-    };
-  }
-  setScanImportButtonState();
-}
 const addPhotosBtn = $("#addPhotos");
 const photoInput = $("#photoInput");
 const photoDropZone = $("#photoDropZone");
 const runPhotoImportBtn = $("#runPhotoImport");
 const cancelPhotoImportBtn = $("#cancelPhotoImport");
 const closePhotoImportBtn = $("#closePhotoImport");
-if (addPhotosBtn && photoInput && runPhotoImportBtn) {
-  addPhotosBtn.onclick = () => {
-    if (state.photoImportBusy || state.scanImportBusy) return;
-    openPhotoImportModal();
-    resetPhotoImportModal();
-  };
+
+if (addPhotosBtn) addPhotosBtn.onclick = () => {
+  if (!state.photoImportBusy && !state.scanImportBusy) { openPhotoImportModal(); resetPhotoImportModal(); }
+};
+if (photoInput) {
   photoInput.addEventListener("change", () => {
-    const file = (photoInput.files && photoInput.files[0]) || null;
+    const file = photoInput.files?.[0] || null;
     if (file && !isImageFile(file)) {
       Shared.showToast("Please choose an image file.", { type: "error" });
       setSingleFileSelection(photoInput, null, "photoImportFile");
-      setPhotoImportButtonState();
-      return;
+      setPhotoImportButtonState(); return;
     }
     state.photoImportFile = file || null;
     setPhotoImportButtonState();
   });
+}
+if (photoDropZone) {
   wireSingleFileDropZone({
-    zone: photoDropZone,
-    input: photoInput,
-    stateKey: "photoImportFile",
-    accept: isImageFile,
-    invalidMessage: "Please drop an image file.",
+    zone: photoDropZone, input: photoInput, stateKey: "photoImportFile",
+    accept: isImageFile, invalidMessage: "Please drop an image file.",
     isBusy: () => state.photoImportBusy || state.scanImportBusy,
     onSelected: () => setPhotoImportButtonState(),
   });
+}
+if (runPhotoImportBtn) {
   runPhotoImportBtn.addEventListener("click", async () => {
     if (state.photoImportBusy || state.scanImportBusy) return;
-    const file = currentPhotoImportFile();
-    await importPhoto(file);
+    await importPhoto(currentPhotoImportFile());
   });
-  if (cancelPhotoImportBtn) {
-    cancelPhotoImportBtn.onclick = () => {
-      if (state.photoImportBusy) return;
-      closePhotoImportModal();
-      resetPhotoImportModal();
-    };
+}
+if (cancelPhotoImportBtn) cancelPhotoImportBtn.onclick = () => { if (!state.photoImportBusy) { closePhotoImportModal(); resetPhotoImportModal(); } };
+if (closePhotoImportBtn) closePhotoImportBtn.onclick = () => { if (!state.photoImportBusy) { closePhotoImportModal(); resetPhotoImportModal(); } };
+setPhotoImportButtonState();
+
+// ─── Init ─────────────────────────────────────────────────────────────────────────
+
+wireStatusChips();
+
+(async () => {
+  try {
+    await Promise.all([loadCollections(), loadFacets()]);
+    await loadAssets();
+  } catch (e) {
+    const grid = $("#grid");
+    if (grid) grid.innerHTML = `<div class="empty-state">Unable to load: ${escapeHtml(formatApiError(e))}</div>`;
   }
-  if (closePhotoImportBtn) {
-    closePhotoImportBtn.onclick = () => {
-      if (state.photoImportBusy) return;
-      closePhotoImportModal();
-      resetPhotoImportModal();
-    };
-  }
-  setPhotoImportButtonState();
-}
-
-const openLeftSidebarBtn = $("#openLeftSidebar");
-if (openLeftSidebarBtn) {
-  openLeftSidebarBtn.onclick = () => openMobilePanel("left");
-}
-const openRightSidebarBtn = $("#openRightSidebar");
-if (openRightSidebarBtn) {
-  openRightSidebarBtn.onclick = () => openMobilePanel("right");
-}
-const closeLeftSidebarBtn = $("#closeLeftSidebar");
-if (closeLeftSidebarBtn) {
-  closeLeftSidebarBtn.onclick = () => closeMobilePanels();
-}
-const closeRightSidebarBtn = $("#closeRightSidebar");
-if (closeRightSidebarBtn) {
-  closeRightSidebarBtn.onclick = () => closeMobilePanels();
-}
-const mobileOverlay = $("#mobileOverlay");
-if (mobileOverlay) {
-  mobileOverlay.onclick = () => closeMobilePanels();
-}
-window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
-    closeMobilePanels();
-    closeSearchHelp();
-    if (!state.scanImportBusy) closeScanImportModal();
-    if (!state.photoImportBusy) closePhotoImportModal();
-  }
-});
-
-const searchHelpWrap = $(".searchHelpWrap");
-const searchHelpBtn = $("#searchHelp");
-function closeSearchHelp() {
-  if (!searchHelpWrap || !searchHelpBtn) return;
-  searchHelpWrap.classList.remove("open");
-  searchHelpBtn.setAttribute("aria-expanded", "false");
-}
-
-if (searchHelpWrap && searchHelpBtn) {
-  searchHelpBtn.onclick = (e) => {
-    e.stopPropagation();
-    const willOpen = !searchHelpWrap.classList.contains("open");
-    if (willOpen) searchHelpWrap.classList.add("open");
-    else searchHelpWrap.classList.remove("open");
-    searchHelpBtn.setAttribute("aria-expanded", willOpen ? "true" : "false");
-  };
-}
-
-document.addEventListener("click", (e) => {
-  if (!searchHelpWrap || !searchHelpWrap.classList.contains("open")) return;
-  if (searchHelpWrap.contains(e.target)) return;
-  closeSearchHelp();
-});
-
-// ─── Explorer view ────────────────────────────────────────────────────────────
-
-let _explorerInited = false;
-let _explorerLoading = false;
-
-async function switchToExplore() {
-  // Guard: skip only if we're already in explore view AND the canvas is
-  // initialised. Without the _explorerInited check, a click that arrives
-  // before window.Explorer is ready (Three.js CDN still loading) would
-  // lock state.view to "explore" and make all subsequent clicks no-ops.
-  if (state.view === "explore" && _explorerInited) return;
-  state.view = "explore";
-
-  const grid = $("#grid");
-  const loadMore = $("#loadMore");
-  const explorerContainer = $("#explorerContainer");
-  const viewGrid = $("#viewGrid");
-  const viewExplore = $("#viewExplore");
-  const canvasControls = $("#canvasControls");
-  const trayToolbar = $("#trayToolbar");
-
-  if (grid) grid.style.display = "none";
-  if (loadMore) loadMore.hidden = true;
-  if (explorerContainer) explorerContainer.style.display = "";
-  if (canvasControls) canvasControls.style.display = "none";
-  if (trayToolbar) trayToolbar.style.display = "none";
-  const explorerControls = $("#explorerControls");
-  if (explorerControls) {
-    explorerControls.style.display = "";
-    const slider = $("#explorerSpreadSlider");
-    if (slider && !slider.dataset.wired) {
-      slider.dataset.wired = "1";
-      slider.addEventListener("input", (e) => {
-        if (window.Explorer) window.Explorer.setSpread(parseFloat(e.target.value));
-      });
-    }
-    const labelsToggle = $("#explorerLabelsToggle");
-    if (labelsToggle && !labelsToggle.dataset.wired) {
-      labelsToggle.dataset.wired = "1";
-      labelsToggle.addEventListener("change", (e) => {
-        if (window.Explorer) window.Explorer.setLabels(e.target.checked);
-      });
-    }
-    const resetBtn = $("#explorerResetBtn");
-    if (resetBtn && !resetBtn.dataset.wired) {
-      resetBtn.dataset.wired = "1";
-      resetBtn.addEventListener("click", () => {
-        if (window.Explorer) window.Explorer.resetCamera();
-      });
-    }
-  }
-  if (viewGrid) { viewGrid.classList.remove("active"); viewGrid.setAttribute("aria-pressed", "false"); }
-  if (viewExplore) { viewExplore.classList.add("active"); viewExplore.setAttribute("aria-pressed", "true"); }
-
-  const explorer = window.Explorer;
-  if (!explorer) return;
-
-  if (!_explorerInited) {
-    explorer.init("explorerContainer");
-    explorer.onClickNode((nodeId, node) => {
-      const asset = state.assets.find((a) => a.id === nodeId);
-      if (asset) openModal(asset);
-    });
-    explorer.onSelect((ids) => {
-      state.selected = new Set(ids);
-      ids.forEach((id) => updateCardState(id));
-      setStats();
-    });
-    _explorerInited = true;
-  }
-
-  explorer.resume();
-
-  if (!_explorerLoading) {
-    _explorerLoading = true;
-    try {
-      const params = new URLSearchParams();
-      if (state.activeCollectionId) params.set("collection_id", state.activeCollectionId);
-      const res = await fetch(`/api/explorer/layout?${params}`);
-      if (res.ok) {
-        const data = await res.json();
-        explorer.loadData(data);
-        // Apply current filter/search state
-        _syncExplorerFilter();
-      }
-    } catch (e) {
-      console.error("[Explorer] Failed to load layout:", e);
-    } finally {
-      _explorerLoading = false;
-    }
-  }
-}
-
-function switchToGrid() {
-  if (state.view === "grid") return;
-  state.view = "grid";
-
-  const grid = $("#grid");
-  const explorerContainer = $("#explorerContainer");
-  const viewGrid = $("#viewGrid");
-  const viewExplore = $("#viewExplore");
-  const canvasControls = $("#canvasControls");
-  const trayToolbar = $("#trayToolbar");
-
-  if (grid) grid.style.display = "";
-  if (explorerContainer) explorerContainer.style.display = "none";
-  if (canvasControls) canvasControls.style.display = "";
-  if (trayToolbar) trayToolbar.style.display = "";
-  const explorerControlsEl = $("#explorerControls");
-  if (explorerControlsEl) explorerControlsEl.style.display = "none";
-  if (viewGrid) { viewGrid.classList.add("active"); viewGrid.setAttribute("aria-pressed", "true"); }
-  if (viewExplore) { viewExplore.classList.remove("active"); viewExplore.setAttribute("aria-pressed", "false"); }
-
-  updateLoadMoreButton();
-  if (window.Explorer) window.Explorer.pause();
-}
-
-function _syncExplorerFilter() {
-  if (state.view !== "explore" || !window.Explorer) return;
-  const q = (state.q || "").trim().toLowerCase();
-  if (q && !state.semanticMode) {
-    const matched = state.assets.filter((a) => (a.title || "").toLowerCase().includes(q)).map((a) => a.id);
-    window.Explorer.highlight(matched.length ? matched : null);
-  } else {
-    window.Explorer.highlight(null);
-  }
-  if (state.activeCollectionId) {
-    const ids = state.assets.map((a) => a.id);
-    window.Explorer.setFilter(ids);
-  } else {
-    window.Explorer.setFilter(null);
-  }
-}
-
-const viewGridBtn = $("#viewGrid");
-const viewExploreBtn = $("#viewExplore");
-const viewReviewBtn = $("#viewReview");
-if (viewGridBtn) viewGridBtn.addEventListener("click", switchToGrid);
-if (viewExploreBtn) viewExploreBtn.addEventListener("click", switchToExplore);
-if (viewReviewBtn) viewReviewBtn.addEventListener("click", () => {
-  const viewCollection = getViewCollection();
-  if (viewCollection) {
-    const dataUrl = `/api/cluster/review?collection_id=${encodeURIComponent(viewCollection.id)}&include_neighbors=0`;
-    window.open(`/tools/cluster_explorer.html?data=${encodeURIComponent(dataUrl)}`, "_blank");
-  } else {
-    window.open(`/tools/cluster_explorer.html`, "_blank");
-  }
-});
+})();

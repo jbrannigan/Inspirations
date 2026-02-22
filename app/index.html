@@ -3,16 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Inspirations — Local App</title>
+    <title>Inspirations</title>
     <link rel="stylesheet" href="/app/styles.css" />
-    <script type="importmap">
-    {
-      "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-      }
-    }
-    </script>
   </head>
   <body>
     <header class="topbar">
@@ -20,158 +12,177 @@
         <div class="logo"></div>
         <div>
           <div class="title">Inspirations</div>
-          <div class="subtitle">Curate • Annotate • Share</div>
         </div>
       </div>
-      <div class="actions">
-        <div class="searchPanel">
-          <div class="searchInputRow">
-            <input id="search" placeholder="Search ideas (e.g., warm oak kitchen)" />
-            <div class="searchHelpWrap">
-              <button
-                id="searchHelp"
-                class="searchHelp"
-                type="button"
-                aria-label="Advanced search help"
-                aria-controls="searchHelpTooltip"
-                aria-expanded="false"
-                title='Tip: start with "sem:" to run semantic search (example: sem: warm oak kitchen)'
-              >
-                ?
-              </button>
-              <div id="searchHelpTooltip" class="searchHelpTooltip" role="tooltip">
-                Advanced search: type <code>sem:</code> before your phrase to find visually similar items.
-                Example: <code>sem: warm oak kitchen</code>
-              </div>
-            </div>
-          </div>
-          <div id="canvasNarrative" class="muted">The canvas is loading…</div>
-          <div class="mobileTools" aria-label="Mobile canvas tools">
-            <button id="openLeftSidebar" type="button">Filters</button>
-            <button id="openRightSidebar" type="button">Tray</button>
-          </div>
-        </div>
-        <button id="addScanPdf" class="topActionBtn" type="button">Add Scan PDF</button>
-        <button id="addPhotos" class="topActionBtn" type="button">Add Photos</button>
-        <a href="/app/admin.html" class="adminNav">Admin</a>
+      <div class="chat-bar">
+        <input
+          type="text"
+          id="chatInput"
+          autocomplete="off"
+          placeholder="Try: 'make a collection called Kitchen Faves' or 'show keepers'"
+        />
+        <button id="chatSend" class="chat-send-btn" type="button">→</button>
+      </div>
+      <div class="header-actions">
+        <input id="search" type="search" placeholder="Search items…" autocomplete="off" />
+        <button id="reviewBtn" class="review-launch-btn" type="button">Review</button>
+        <button id="addScanPdf" class="header-btn" type="button">Add Scan</button>
+        <button id="addPhotos" class="header-btn" type="button">Add Photos</button>
+        <a href="/app/admin.html" class="header-btn adminLink">Admin</a>
       </div>
     </header>
 
-    <div class="layout three">
-      <aside id="leftSidebar" class="sidebar sidebarLeft">
-        <div class="mobileDrawerHeader">
-          <strong>Groups</strong>
-          <button id="closeLeftSidebar" type="button">Close</button>
-        </div>
-        <div class="section">
-          <div class="sectionTitle">Groups</div>
-          <input id="groupSearch" class="groupSearchInput" placeholder="Search groups…" type="search" autocomplete="off" />
-          <div id="groups" class="groupsList"></div>
-          <div class="row mt-2">
-            <button id="newCollection">+ New Group</button>
-            <button id="deleteCollection">Delete</button>
+    <div id="chatResponse" class="chat-response-bar" hidden></div>
+
+    <div class="layout">
+      <!-- Left sidebar -->
+      <aside class="sidebar">
+        <div class="sidebar-section">
+          <h3 class="sidebar-heading">Sources</h3>
+          <div id="sourceChips" class="chip-group">
+            <button class="filter-chip active" data-source="">All</button>
           </div>
-          <div class="muted mt-2" id="collectionHint">No group selected.</div>
         </div>
-        <div class="section">
-          <button type="button" id="filtersToggle" class="filterToggle filtersToggle">
-            <span>Filters <span id="filtersBadge" class="filtersBadge"></span></span>
-            <span class="filterChevron" id="filtersChevron">▸</span>
-          </button>
-          <div id="filters" style="display:none">
-            <div class="muted">Loading filters…</div>
+        <div class="sidebar-section">
+          <h3 class="sidebar-heading">Status</h3>
+          <div id="statusChips" class="chip-group">
+            <button class="filter-chip active" data-triage="">All items</button>
+            <button class="filter-chip" data-triage="pending">Pending</button>
+            <button class="filter-chip" data-triage="keeper">Keepers ✓</button>
+            <button class="filter-chip" data-triage="hidden">Hidden</button>
+            <button class="filter-chip" data-triage="needs-comment">Needs comment 💬</button>
           </div>
+        </div>
+        <div class="sidebar-section">
+          <h3 class="sidebar-heading">Boards</h3>
+          <div id="boardList" class="board-list">
+            <div class="muted sidebar-loading">Loading…</div>
+          </div>
+        </div>
+        <div class="sidebar-section">
+          <h3 class="sidebar-heading">Collections</h3>
+          <div id="collectionList" class="collection-list">
+            <div class="muted sidebar-loading">Loading…</div>
+          </div>
+          <button id="newCollection" class="new-item-btn" type="button">+ New Collection</button>
         </div>
       </aside>
 
+      <!-- Main content -->
       <main class="content">
-        <div class="toolbar">
-          <div class="toolbarMeta">
-            <div class="row toolbarTopRow">
-              <div id="stats" class="muted">Loading...</div>
-              <div id="explorerControls" class="explorerToolbarControls" style="display:none">
-                <span class="explorerToolbarLabel">Spread</span>
-                <input type="range" id="explorerSpreadSlider" min="0.5" max="5" step="0.1" value="1.5" class="explorerToolbarRange">
-                <label class="explorerToolbarCheck">
-                  <input type="checkbox" id="explorerLabelsToggle" checked>
-                  <span>Labels</span>
-                </label>
-                <button id="explorerResetBtn" class="explorerToolbarBtn" type="button">Reset view</button>
-              </div>
-              <div class="viewToggle" id="viewToggle" role="group" aria-label="View mode">
-                <button type="button" id="viewGrid" class="active" aria-pressed="true">Grid</button>
-                <button type="button" id="viewExplore" aria-pressed="false">Explore</button>
-                <button type="button" id="viewReview" aria-pressed="false">Review</button>
-              </div>
-            </div>
-            <div id="canvasControls" class="row toolbar-section">
-              <button id="toggleLabelMode" type="button">AI Tags: Any</button>
-              <button id="showAll">Show All</button>
-              <button id="showTrayCanvas">Show Tray Canvas</button>
-              <div class="zoomControl" id="zoomControl" role="group" aria-label="Grid zoom">
-                <button type="button" data-zoom="s">S</button>
-                <button type="button" data-zoom="m">M</button>
-                <button type="button" data-zoom="l">L</button>
-                <button type="button" data-zoom="xl">XL</button>
-              </div>
-            </div>
-          </div>
+        <div class="stats-bar">
+          <span id="stats" class="stats-count">Loading…</span>
+          <span id="canvasNarrative" class="stats-narrative"></span>
+        </div>
 
-          <!-- Selection actions: hidden when nothing selected -->
-          <div id="selectionBar" class="toolbar-section" hidden>
-            <div class="toolbar-divider"></div>
-            <div class="row">
-              <span class="toolbar-label" id="selectionLabel">0 selected</span>
-              <button id="addSelectedToCollection" class="primaryAction" disabled>Add to Collection</button>
-              <button id="addSelected" disabled>Add to Tray</button>
-              <button id="removeSelectedFromCollection" disabled>Remove from Collection</button>
-              <button id="removeSelectedFromTray" disabled>Remove from Tray</button>
-              <button id="clearSelection">Clear</button>
-            </div>
-          </div>
-
-          <!-- Bulk/tray actions -->
-          <div id="trayToolbar" class="toolbar-section">
-            <div class="row">
-              <button id="selectAll">Select All</button>
-              <button id="addFiltered" disabled>Add Filtered</button>
-              <button id="createFromTrayTop" disabled>Create Collection</button>
-              <button id="addTrayToCollectionTop" disabled>Add Tray to Collection</button>
-              <button id="clearTrayTop" disabled>Clear Tray</button>
-            </div>
+        <!-- Browse view -->
+        <div id="browseView">
+          <div id="grid" class="grid"></div>
+          <div class="load-more-wrap">
+            <button id="loadMore" hidden type="button">Load More</button>
           </div>
         </div>
-        <div id="grid" class="grid"></div>
-        <div id="explorerContainer" class="explorerContainer" style="display:none;"></div>
-        <div class="row mt-3">
-          <button id="loadMore" hidden>Load More</button>
+
+        <!-- Review view (card-by-card triage) -->
+        <div id="reviewView" hidden>
+          <div class="review-header">
+            <button id="reviewBack" class="review-back-btn" type="button">← Back to browsing</button>
+            <span id="reviewCounter" class="review-counter"></span>
+            <div class="review-progress-track">
+              <div id="reviewProgressBar" class="review-progress-bar"></div>
+            </div>
+          </div>
+
+          <div id="reviewCard" class="review-card">
+            <div class="review-image">
+              <img id="reviewImg" alt="" />
+            </div>
+            <div class="review-info">
+              <h2 id="reviewTitle" class="review-title"></h2>
+              <p id="reviewMeta" class="review-meta"></p>
+              <p id="reviewDesc" class="review-desc"></p>
+              <a id="reviewSourceLink" href="#" target="_blank" rel="noopener" class="review-source-link">View on source ↗</a>
+            </div>
+          </div>
+
+          <div class="review-actions">
+            <button id="reviewHideBtn" class="review-btn review-btn-hide" type="button" title="Hide (← or S)">
+              <span class="review-btn-icon">✗</span>
+              <span class="review-btn-label">Hide</span>
+            </button>
+            <button id="reviewSkipBtn" class="review-btn review-btn-skip" type="button" title="Skip (Space or ↓)">
+              <span class="review-btn-icon">→</span>
+              <span class="review-btn-label">Skip</span>
+            </button>
+            <div class="review-keep-wrap">
+              <button id="reviewKeepBtn" class="review-btn review-btn-keep" type="button" title="Keep (→ or K)">
+                <span class="review-btn-icon">♥</span>
+                <span class="review-btn-label">Love it</span>
+              </button>
+              <label class="comment-later-label">
+                <input type="checkbox" id="commentLater" />
+                Comment later
+              </label>
+            </div>
+          </div>
+
+          <button id="reviewUndo" class="review-undo-btn" type="button" title="Undo (Z)">↩ Undo</button>
+
+          <!-- Review complete -->
+          <div id="reviewComplete" class="review-complete" hidden>
+            <h2 class="review-complete-title">All done!</h2>
+            <p id="reviewCompleteDesc"></p>
+            <div id="reviewCompleteStats" class="review-complete-stats"></div>
+            <div class="review-complete-actions">
+              <button id="reviewSkippedBtn" type="button">Review skipped items</button>
+              <button id="reviewExitBtn" class="primary-btn" type="button">Back to browsing</button>
+            </div>
+          </div>
         </div>
       </main>
-
-      <aside id="rightSidebar" class="sidebar sidebarRight">
-        <div class="mobileDrawerHeader">
-          <strong>Curate Tray</strong>
-          <button id="closeRightSidebar" type="button">Close</button>
-        </div>
-        <div class="section">
-          <div class="sectionTitle">Curate Tray</div>
-          <div class="muted" id="trayCount">0 items</div>
-          <div class="row mt-2 flex-wrap">
-            <button id="createFromTray" disabled>Create Collection</button>
-            <button id="addTrayToCollection" disabled>Add Tray to Collection</button>
-            <button id="clearTray" disabled>Clear Tray</button>
-          </div>
-          <div id="tray" class="list mt-2"></div>
-          <div class="muted mt-2">
-            Tray is your “shopping cart” for what you want to share. Use “Show Tray Canvas” to curate visually.
-            In the tray list, tap an item to preview it and use Remove to take it out.
-          </div>
-        </div>
-      </aside>
     </div>
 
-    <button id="mobileOverlay" class="mobileOverlay" type="button" aria-label="Close side panels"></button>
+    <!-- Detail modal -->
+    <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modalContent">
+        <div class="modalHeader">
+          <div class="modal-title-block">
+            <div id="modalTitle" class="modalTitle"></div>
+            <div id="modalMeta" class="muted"></div>
+          </div>
+          <div class="modal-header-actions">
+            <button id="modalKeepBtn" class="modal-triage-btn modal-keep-btn" type="button">✓ Keep</button>
+            <button id="modalHideBtn" class="modal-triage-btn modal-hide-btn" type="button">✗ Hide</button>
+            <button id="viewSourceBtn" class="header-btn" type="button">View Source</button>
+            <button id="printAssetBtn" class="header-btn" type="button">Print</button>
+          </div>
+          <button id="closeModal" class="modalCloseX" type="button" aria-label="Close">&times;</button>
+        </div>
+        <div class="modalBody">
+          <div class="imageStage" id="imageStage">
+            <img id="modalImage" alt="" />
+            <div id="floatingNote" class="floatingNote hidden">
+              <textarea id="floatingText" placeholder="Type note…"></textarea>
+            </div>
+          </div>
+          <div class="notes">
+            <div class="sectionTitle">Annotations</div>
+            <div id="annList" class="list"></div>
+            <div class="muted">Click on the image to add a note.</div>
+            <div class="sectionTitle mt-3">Notes</div>
+            <textarea id="assetNotes" placeholder="General notes about this image…"></textarea>
+            <div class="muted mt-2">
+              Source: <a id="sourceLink" href="#" target="_blank" rel="noopener">Open original</a>
+            </div>
+            <div class="mt-2" id="sourceSiteRow" hidden>
+              <a id="sourceSiteLink" href="#" target="_blank" rel="noopener" class="source-site-link">Original site ↗</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
 
+    <!-- Scan import modal -->
     <div id="scanImportModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="scanImportTitle">
       <div class="modalContent scanImportContent">
         <div class="modalHeader">
@@ -191,20 +202,19 @@
             <input id="scanDetectDelimiters" type="checkbox" checked />
             <span>Split into separate scan documents when blank separator pages are detected</span>
           </label>
-          <div class="muted">Default is on. Turn off only when the PDF should stay as one continuous document.</div>
           <label class="scanOptionRow">
             <input id="scanUseFormParser" type="checkbox" />
             <span>Use Form Parser (experimental structured extraction)</span>
           </label>
-          <div class="muted">Backfill for older scans is nice to have. This applies to new uploads only.</div>
           <div class="scanImportActions">
             <button id="cancelScanImport" type="button">Cancel</button>
-            <button id="runScanImport" type="button" disabled>Import</button>
+            <button id="runScanImport" type="button" class="primary-btn" disabled>Import</button>
           </div>
         </div>
       </div>
     </div>
 
+    <!-- Photo import modal -->
     <div id="photoImportModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="photoImportTitle">
       <div class="modalContent scanImportContent">
         <div class="modalHeader">
@@ -220,45 +230,9 @@
             <span class="fileDropHint">Single-file import (image formats).</span>
             <input id="photoInput" type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.heif,.tif,.tiff" />
           </label>
-          <div class="muted">Photo imports are tagged as source: photo and record type: photo.</div>
           <div class="scanImportActions">
             <button id="cancelPhotoImport" type="button">Cancel</button>
-            <button id="runPhotoImport" type="button" disabled>Import</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div id="modal" class="modal hidden">
-      <div class="modalContent">
-        <div class="modalHeader">
-          <div>
-            <div id="modalTitle" class="modalTitle"></div>
-            <div id="modalMeta" class="muted"></div>
-          </div>
-          <div class="row modalActions">
-            <button id="hideAssetBtn" type="button">Hide</button>
-            <button id="viewSourceBtn" type="button">View Source</button>
-            <button id="printAssetBtn" type="button">Print</button>
-          </div>
-          <button id="closeModal" class="modalCloseX" type="button" aria-label="Close">&times;</button>
-        </div>
-        <div class="modalBody">
-          <div class="imageStage" id="imageStage">
-            <img id="modalImage" alt="" />
-            <div id="floatingNote" class="floatingNote hidden">
-              <textarea id="floatingText" placeholder="Type note…"></textarea>
-            </div>
-          </div>
-          <div class="notes">
-            <div class="sectionTitle">Annotations</div>
-            <div id="annList" class="list"></div>
-            <div class="muted">Click on the image to add a note.</div>
-            <div class="sectionTitle mt-3">General Notes</div>
-            <textarea id="assetNotes" placeholder="General notes about this image…"></textarea>
-            <div class="muted mt-2">
-              Source: <a id="sourceLink" href="#" target="_blank" rel="noopener">Open original</a>
-            </div>
+            <button id="runPhotoImport" type="button" class="primary-btn" disabled>Import</button>
           </div>
         </div>
       </div>
@@ -267,6 +241,5 @@
     <div id="toastContainer" class="toast-container" aria-live="polite"></div>
     <script src="/app/shared.js"></script>
     <script src="/app/app.js"></script>
-    <script type="module" src="/app/explorer.js"></script>
   </body>
 </html>
