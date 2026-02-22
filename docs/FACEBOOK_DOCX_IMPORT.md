@@ -193,6 +193,25 @@ For each filtered entry, create a DB row:
 
 **Dedup key:** Unique index `(source, source_ref)`. Use `INSERT OR IGNORE` to prevent duplicates on re-run.
 
+### Cross-Importer Dedup Warning
+
+The old JSON importer (`facebook_saved.py`) and this Word doc importer generate **different `source_ref` values** for the same Facebook item when no URL is present. The JSON importer hashes the entire JSON blob; this importer hashes `title|collection`. So the unique constraint won't catch duplicates between the two importers for URL-less items.
+
+**Mitigation:** Before running this importer, delete any existing Facebook data from a prior JSON import:
+
+```python
+# At the start of import_facebook_docx(), before inserting anything:
+cursor = db.execute("SELECT COUNT(*) FROM assets WHERE source = 'facebook'")
+existing = cursor.fetchone()[0]
+if existing > 0:
+    print(f"[cleanup] Removing {existing} existing Facebook rows from prior import")
+    db.execute("DELETE FROM collection_items WHERE asset_id IN (SELECT id FROM assets WHERE source = 'facebook')")
+    db.execute("DELETE FROM assets WHERE source = 'facebook'")
+    db.commit()
+```
+
+This is safe because the old JSON import only had 75 usable URLs out of 8,535 items — the Word doc supersedes it entirely with better data (real URLs, embedded images, collection assignments).
+
 ## Image Extraction
 
 For entries with an associated image path (like `media/image123.jpeg`):

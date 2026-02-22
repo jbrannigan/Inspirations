@@ -288,6 +288,16 @@ def import_facebook_docx(
 ) -> dict[str, Any]:
     imported_at = _now_iso()
 
+    # Remove any existing Facebook rows from a prior import to avoid cross-importer
+    # dedup drift (JSON importer and DOCX importer hash source_ref differently).
+    existing = int(db.query_value("SELECT COUNT(*) FROM assets WHERE source = 'facebook'") or 0)
+    if existing > 0:
+        db.exec(
+            "DELETE FROM collection_items WHERE asset_id IN"
+            " (SELECT id FROM assets WHERE source = 'facebook')"
+        )
+        db.exec("DELETE FROM assets WHERE source = 'facebook'")
+
     with zipfile.ZipFile(docx_path) as z:
         all_entries = _parse_entries(z)
         total_parsed = len(all_entries)

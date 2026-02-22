@@ -337,9 +337,10 @@ class TestFacebookDocxImport(unittest.TestCase):
         report1 = self._run(docx)
         report2 = self._run(docx)
 
+        # delete-before-insert: prior rows are wiped so both runs import fresh
         self.assertEqual(report1["imported_assets"], 1)
-        self.assertEqual(report2["imported_assets"], 0)
-        self.assertEqual(report2["existing_assets"], 1)
+        self.assertEqual(report2["imported_assets"], 1)
+        self.assertEqual(report2["existing_assets"], 0)
 
         rows = self._query("select count(*) as n from assets where source='facebook'")
         self.assertEqual(rows[0]["n"], 1)
