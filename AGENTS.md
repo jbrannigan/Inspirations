@@ -6,6 +6,13 @@
 
 ---
 
+## Agent Roles (Rebuild)
+
+- **Opus** — Browser scraping (Pinterest + Facebook), hard research, architectural decisions.
+  Produces scrape JSON files in `data/scrape/`.
+- **Sonnet** — Code implementation from specs. Implements `docs/SCRAPE_REBUILD_SPEC.md`.
+  Cheaper and faster for structured coding work.
+
 ## Architecture Guardrails
 
 - **Backend:** Python standard library only. No Flask, Django, FastAPI, or similar.
@@ -29,15 +36,18 @@
   human-readable-only output.
 - **Security:** Validate all external URLs through `security.py`. Never bypass
   safe-URL checks.
+- **UX tone:** Friendly, not techy. The curator app should feel warm and approachable,
+  not like a developer tool.
 
 ## File & Directory Conventions
 
 - `data/`, `store/`, `imports/` are local-only and never committed.
+- `data/scrape/` holds browser-scraped JSON files.
 - New Python modules go in `src/inspirations/`.
 - New frontend files go in `app/`.
 - Operational scripts go in `tools/`.
-- Documentation goes in `docs/`.
+- Documentation goes in `docs/`. Old docs archived in `docs/archive/`.
 - Do not create top-level files without user approval.
 
 ---
-*Last updated: 2026-02-18*
+*Last updated: 2026-02-22*

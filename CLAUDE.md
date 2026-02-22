@@ -4,7 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Local-first inspiration library for home design research. Ingests Pinterest exports, Facebook saved items, and scanned pages into a single SQLite-backed catalog with local media storage. Features AI tagging via Gemini, search/filtering, collections, tray workflows, and per-image annotations. The frontend is a vanilla JS web app served by Python's standard library HTTP server.
+Local-first inspiration library for home design research. The project is undergoing a **scrape-first rebuild** (Feb 2026): browser-scraping Pinterest and Facebook directly for richer metadata, rebuilding the database, and adding a keeper/hidden triage workflow with natural-language collection management. The frontend is a vanilla JS web app served by Python's standard library HTTP server.
+
+## Current State: Rebuild In Progress
+
+The project is transitioning from ZIP-import-based ingestion to browser-scrape-based ingestion. The implementation spec for the rebuild is at `docs/SCRAPE_REBUILD_SPEC.md`. Old documentation is archived in `docs/archive/`.
+
+### What's happening:
+1. **Opus** (browser agent) scrapes Pinterest boards and Facebook saved items into JSON files in `data/scrape/`
+2. **Sonnet** implements code from the spec: new importers, schema changes, triage backend/frontend, dead code cleanup
+3. After both finish, `inspirations rebuild-db` nukes and reimports everything
+
+### Key files for the rebuild:
+- `docs/SCRAPE_REBUILD_SPEC.md` — Complete implementation spec (Parts 0-7)
+- `data/scrape/pinterest_scrape.json` — Scraped Pinterest data (Opus produces this)
+- `data/scrape/facebook_scrape_*.json` — Scraped Facebook data (Opus produces this)
+- `data/scrape/pinterest_image_map.json` — Maps image URLs to existing stored files
 
 ## Common Commands
 
@@ -27,7 +42,7 @@ PYTHONPATH=src python3 -m unittest tests.test_store -v
 ```bash
 PYTHONPATH=src python3 -m inspirations <subcommand>
 ```
-Subcommands: `init`, `list`, `import pinterest`, `import facebook`, `import scans`, `thumbs`, `ai tag`, `ai errors`, `ai embed`, `ai similar`, `export html`, `export portal`, `serve`
+Subcommands: `init`, `list`, `import pinterest-scrape`, `import facebook-scrape`, `rebuild-db`, `thumbs`, `ai tag`, `ai errors`, `ai embed`, `ai similar`, `export html`, `export portal`, `serve`
 
 ### Start the dev server with auto-reload
 ```bash
@@ -51,33 +66,35 @@ PYTHONPATH=src python3 -m inspirations ai tag --provider gemini --api-key "$GEMI
 
 - **`cli.py`** — Argparse-based CLI entry point. All commands output JSON.
 - **`db.py`** — Thin SQLite3 wrapper with context manager, row factories, schema creation and migration.
-- **`store.py`** — Query builders for assets, collections, tray items. Multi-source filtering, full-text search, AI field aggregation.
+- **`store.py`** — Query builders for assets, collections, tray items. Multi-source filtering, full-text search, AI field aggregation. Includes triage status support.
 - **`storage.py`** — Download originals from URLs. Safe URL validation (blocks private IPs), content-type detection, SHA256 deduplication.
 - **`security.py`** — URL validation helpers used by the download pipeline.
 - **`thumbnails.py`** — Auto-detects system tools (`sips` on macOS, `magick` on Linux), Pillow fallback.
-- **`ai.py`** — AI tagging pipeline. Mock labeler (keyword heuristic) and Gemini integration. Primary model: `gemini-2.5-flash`, fallback to `gemini-2.0-flash` on `RECITATION` errors. Includes preflight checks and label flattening.
-- **`export.py`** — Share-by-export utilities. Generates single-file HTML galleries and a browse-only static share portal export (`export portal`) with semantic search disabled.
-- **`server.py`** — Standard library `HTTPServer`. REST API endpoints (`/api/assets`, `/api/search/similar`, `/api/facets`, `/api/collections`, `/api/tray`, `/api/annotations`) plus media serving and static files. Sends `Cache-Control: no-store` for API/static responses to avoid stale frontend bundles during local iteration.
+- **`ai.py`** — AI tagging pipeline. Gemini integration. Primary model: `gemini-2.5-flash`, fallback to `gemini-2.0-flash` on `RECITATION` errors.
+- **`export.py`** — Share-by-export utilities. Generates single-file HTML galleries and static share portal.
+- **`server.py`** — Standard library `HTTPServer`. REST API endpoints plus media serving and static files.
 - **`devserver.py`** — File-watching wrapper for auto-reload during development.
-- **`importers/`** — Adapter pattern: `pinterest_crawler.py`, `facebook_saved.py`, `scans.py`. Each normalizes source data into consistent `Asset` records. Imports are idempotent.
+- **`importers/`** — Adapter pattern. Each normalizes source data into consistent `Asset` records. Imports are idempotent.
+  - `pinterest_scrape.py` — Imports browser-scraped Pinterest JSON (new)
+  - `facebook_scrape.py` — Imports browser-scraped Facebook JSON with base64 images (new)
+  - `scans.py` — Imports local scan inbox (images and PDFs)
 
 ### Frontend (`app/`)
 
-Vanilla HTML/CSS/JS, no build step. Three-column layout: sidebar filters/collections, asset grid, tray sidebar. `app.js` handles all API communication, grid rendering, modals with annotations, and collection management. `admin.html`/`admin.js` for password-protected delete operations.
-
-### Operational Tools (`tools/`)
-
-`tagging_pipeline.py` (orchestration with preflight/cost estimation), `tagging_runner.py` (interactive concurrent runner), `tagging_batch.py` (batch job management), `session_sync.py` (status snapshot for handoff).
+Vanilla HTML/CSS/JS, no build step. The app has two main workflows:
+1. **Collection browsing + triage** — View collections as tile grids, natural-language collection management via chat prompt, keeper/hidden/skip review workflow with annotation marking
+2. **Share export** — Generate HTML artifacts for sharing curated collections with designers
 
 ### Data Model (SQLite)
 
-Core tables: `assets` (source, URLs, stored paths, SHA256, notes, AI summary, plus `media_status`/`content_kind`/`creator_name`/`source_domain`/`source_name` metadata), `collections` + `collection_items` (curated sets with position ordering), `annotations` (point-based x/y notes on images), `tray_items` (temporary staging), `source_collections` (imported source taxonomy names, currently Facebook collection names). AI tables: `asset_ai` (full responses), `asset_labels` (flattened labels with confidence), `asset_ai_errors` (failed attempts), `ai_runs` (batch metadata).
+Core tables: `assets` (source, URLs, stored paths, SHA256, scraped metadata like `seo_alt_text`, `post_text`, `hashtags`, `dominant_color`, plus `triage_status`/`triage_at`), `collections` + `collection_items`, `annotations`, `tray_items`, `source_collections`. AI tables: `asset_ai`, `asset_labels`, `asset_ai_errors`, `ai_runs`.
 
 ### Data Directories (not committed)
 
-- `data/` — SQLite database and batch artifacts
+- `data/` — SQLite database, scrape JSON files, batch artifacts
+- `data/scrape/` — Browser-scraped JSON (Pinterest + Facebook)
 - `store/` — Downloaded originals and thumbnails
-- `imports/` — Local input datasets
+- `imports/` — Local input datasets (scans)
 
 ## Shared Standards
 
@@ -102,4 +119,9 @@ If the dev server command, port, or startup requirements change, update that con
 - Tests use Python's built-in `unittest` (no pytest).
 - The package is run via `PYTHONPATH=src python3 -m inspirations` (or editable install via `pip install -e .`).
 - `data/`, `store/`, `imports/` are local-only and never committed.
-- `docs/pr_summary.md` must be updated when behavior changes.
+
+## Future Work (TODO)
+
+- **Consuming UX**: Design the experience for people receiving shared collections (the decorator/designer view). How they browse, filter, and interact with curated inspiration sets. This is a separate concern from the curation app.
+- **Natural-language collection management**: Chat-style prompt in the app to manage collections ("move all kitchen items to a new collection", "combine these two collections", etc.)
+- **Annotation workflow**: After triage, mark items for annotation/comment, then walk through commenting on marked items.

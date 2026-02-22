@@ -292,6 +292,8 @@ def list_assets(
     content_kind: str = "",
     creator: str = "",
     collection_id: str = "",
+    triage_status: str = "",
+    needs_annotation: bool = False,
     include_hidden: bool = False,
     limit: int = 200,
     offset: int = 0,
@@ -366,6 +368,25 @@ def list_assets(
         joins.append("join collection_items ci on ci.asset_id = a.id")
         clauses.append("ci.collection_id = ?")
         params.append(collection_id)
+    if triage_status:
+        statuses = [s.strip() for s in triage_status.split(",") if s.strip()]
+        if "pending" in statuses:
+            others = [s for s in statuses if s != "pending"]
+            if others:
+                clauses.append(
+                    "(a.triage_status is null or a.triage_status in (%s))"
+                    % ",".join(["?"] * len(others))
+                )
+                params.extend(others)
+            else:
+                clauses.append("a.triage_status is null")
+        else:
+            clauses.append("a.triage_status in (%s)" % ",".join(["?"] * len(statuses)))
+            params.extend(statuses)
+    if needs_annotation:
+        clauses.append("a.needs_annotation = 1")
+    if not include_hidden:
+        clauses.append("(a.triage_status is null or a.triage_status != 'hidden')")
     hidden_collection_id = db.query_value("select id from collections where lower(name)='hidden' limit 1")
     if hidden_collection_id and not include_hidden and collection_id != hidden_collection_id:
         clauses.append(
@@ -386,7 +407,8 @@ def list_assets(
            (select ai.model from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_model,
            (select ai.provider from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_provider,
            (select ai.created_at from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_created_at,
-           a.created_at, a.imported_at, a.image_url, a.stored_path, a.thumb_path
+           a.created_at, a.imported_at, a.image_url, a.stored_path, a.thumb_path,
+           a.triage_status, a.needs_annotation, a.source_url, a.seo_alt_text
     from assets a
     {join_sql}
     {where}
@@ -484,6 +506,13 @@ def list_facets(db: Db, *, source: str = "", media_status: str = "") -> dict[str
         tuple(context_params),
     )
 
+    triage_rows = db.query(
+        """select coalesce(triage_status, 'pending') as val, count(*) as cnt
+           from assets
+           group by coalesce(triage_status, 'pending')
+           order by cnt desc"""
+    )
+
     return {
         "sources": [dict(r) for r in sources],
         "boards": [dict(r) for r in boards],
@@ -492,7 +521,84 @@ def list_facets(db: Db, *, source: str = "", media_status: str = "") -> dict[str
         "content_kinds": [dict(r) for r in content_kinds],
         "content_kinds_context": [dict(r) for r in content_kinds_context],
         "creators": [dict(r) for r in creators],
+        "triage_statuses": [{"value": r["val"], "count": r["cnt"]} for r in triage_rows],
     }
+
+
+def set_triage_status(
+    db: Db,
+    asset_id: str,
+    status: str | None,
+    needs_annotation: int | None = None,
+) -> None:
+    """Set triage status for a single asset.
+
+    status: 'keeper' | 'hidden' | None (resets to pending).
+    needs_annotation: 0 or 1, set when user checks 'Comment later' during review.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    if status is None:
+        db.exec(
+            "update assets set triage_status = null, triage_at = ?, needs_annotation = 0 where id = ?",
+            (now, asset_id),
+        )
+    else:
+        annotation_val = needs_annotation if needs_annotation is not None else 0
+        db.exec(
+            "update assets set triage_status = ?, triage_at = ?, needs_annotation = ? where id = ?",
+            (status, now, annotation_val, asset_id),
+        )
+
+
+def bulk_set_triage_status(db: Db, asset_ids: list[str], status: str | None) -> int:
+    """Set triage status for multiple assets. Returns count updated."""
+    if not asset_ids:
+        return 0
+    now = datetime.now(timezone.utc).isoformat()
+    placeholders = ",".join(["?"] * len(asset_ids))
+    if status is None:
+        db.exec(
+            f"update assets set triage_status = null, triage_at = ? where id in ({placeholders})",
+            (now, *asset_ids),
+        )
+    else:
+        db.exec(
+            f"update assets set triage_status = ?, triage_at = ? where id in ({placeholders})",
+            (status, now, *asset_ids),
+        )
+    return len(asset_ids)
+
+
+def triage_stats(db: Db) -> dict[str, Any]:
+    """Return triage progress stats, overall and per-board."""
+    rows = db.query(
+        """
+        select
+            board,
+            count(*) as total,
+            sum(case when triage_status = 'keeper' then 1 else 0 end) as keepers,
+            sum(case when triage_status = 'hidden' then 1 else 0 end) as hidden,
+            sum(case when triage_status is null then 1 else 0 end) as pending,
+            sum(case when needs_annotation = 1 then 1 else 0 end) as needs_comment
+        from assets
+        group by board
+        order by count(*) desc
+        """
+    )
+    boards = [dict(r) for r in rows]
+    totals = db.query(
+        """
+        select
+            count(*) as total,
+            sum(case when triage_status = 'keeper' then 1 else 0 end) as keepers,
+            sum(case when triage_status = 'hidden' then 1 else 0 end) as hidden,
+            sum(case when triage_status is null then 1 else 0 end) as pending,
+            sum(case when needs_annotation = 1 then 1 else 0 end) as needs_comment
+        from assets
+        """
+    )
+    overall = dict(totals[0]) if totals else {}
+    return {"overall": overall, "boards": boards}
 
 
 def list_collections(db: Db) -> list[dict[str, Any]]:
