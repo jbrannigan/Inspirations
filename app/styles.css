@@ -690,9 +690,10 @@ textarea { width: 100%; min-height: 90px; border: 1px solid var(--border); borde
 .explorerToolbarSpread {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: var(--fs-sm);
-  color: var(--text-secondary);
+  gap: 8px;
+  flex: 1;          /* fill horizontal space between stats and view toggle */
+  min-width: 0;
+  padding: 0 12px;
 }
 .explorerToolbarSpread span {
   font-size: var(--fs-xs);
@@ -702,7 +703,9 @@ textarea { width: 100%; min-height: 90px; border: 1px solid var(--border); borde
   white-space: nowrap;
 }
 .explorerToolbarSpread input[type="range"] {
-  width: 90px;
+  flex: 1;
+  min-width: 80px;
+  max-width: 220px;
   accent-color: var(--accent);
   cursor: pointer;
 }
