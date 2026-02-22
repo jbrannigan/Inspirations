@@ -2490,11 +2490,13 @@ async function switchToExplore() {
   const viewGrid = $("#viewGrid");
   const viewExplore = $("#viewExplore");
   const canvasControls = $("#canvasControls");
+  const trayToolbar = $("#trayToolbar");
 
   if (grid) grid.style.display = "none";
   if (loadMore) loadMore.hidden = true;
   if (explorerContainer) explorerContainer.style.display = "";
   if (canvasControls) canvasControls.style.display = "none";
+  if (trayToolbar) trayToolbar.style.display = "none";
   const explorerControls = $("#explorerControls");
   if (explorerControls) {
     explorerControls.style.display = "";
@@ -2567,20 +2569,22 @@ function switchToGrid() {
   state.view = "grid";
 
   const grid = $("#grid");
-  const loadMore = $("#loadMore");
   const explorerContainer = $("#explorerContainer");
   const viewGrid = $("#viewGrid");
   const viewExplore = $("#viewExplore");
   const canvasControls = $("#canvasControls");
+  const trayToolbar = $("#trayToolbar");
 
   if (grid) grid.style.display = "";
   if (explorerContainer) explorerContainer.style.display = "none";
   if (canvasControls) canvasControls.style.display = "";
+  if (trayToolbar) trayToolbar.style.display = "";
   const explorerControlsEl = $("#explorerControls");
   if (explorerControlsEl) explorerControlsEl.style.display = "none";
   if (viewGrid) { viewGrid.classList.add("active"); viewGrid.setAttribute("aria-pressed", "true"); }
   if (viewExplore) { viewExplore.classList.remove("active"); viewExplore.setAttribute("aria-pressed", "false"); }
 
+  updateLoadMoreButton();
   if (window.Explorer) window.Explorer.pause();
 }
 
