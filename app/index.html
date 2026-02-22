@@ -89,9 +89,14 @@
           <div class="toolbarMeta">
             <div class="row toolbarTopRow">
               <div id="stats" class="muted">Loading...</div>
-              <div id="explorerSpreadControl" class="explorerToolbarSpread" style="display:none" aria-label="Spread">
-                <span>Spread</span>
-                <input type="range" id="explorerSpreadSlider" min="0.5" max="5" step="0.1" value="1.5">
+              <div id="explorerControls" class="explorerToolbarControls" style="display:none">
+                <span class="explorerToolbarLabel">Spread</span>
+                <input type="range" id="explorerSpreadSlider" min="0.5" max="5" step="0.1" value="1.5" class="explorerToolbarRange">
+                <label class="explorerToolbarCheck">
+                  <input type="checkbox" id="explorerLabelsToggle" checked>
+                  <span>Labels</span>
+                </label>
+                <button id="explorerResetBtn" class="explorerToolbarBtn" type="button">Reset view</button>
               </div>
               <div class="viewToggle" id="viewToggle" role="group" aria-label="View mode">
                 <button type="button" id="viewGrid" class="active" aria-pressed="true">Grid</button>

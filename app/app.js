@@ -2495,14 +2495,28 @@ async function switchToExplore() {
   if (loadMore) loadMore.hidden = true;
   if (explorerContainer) explorerContainer.style.display = "";
   if (zoomControl) zoomControl.style.display = "none";
-  const explorerSpreadControl = $("#explorerSpreadControl");
-  if (explorerSpreadControl) {
-    explorerSpreadControl.style.display = "";
+  const explorerControls = $("#explorerControls");
+  if (explorerControls) {
+    explorerControls.style.display = "";
     const slider = $("#explorerSpreadSlider");
     if (slider && !slider.dataset.wired) {
       slider.dataset.wired = "1";
       slider.addEventListener("input", (e) => {
         if (window.Explorer) window.Explorer.setSpread(parseFloat(e.target.value));
+      });
+    }
+    const labelsToggle = $("#explorerLabelsToggle");
+    if (labelsToggle && !labelsToggle.dataset.wired) {
+      labelsToggle.dataset.wired = "1";
+      labelsToggle.addEventListener("change", (e) => {
+        if (window.Explorer) window.Explorer.setLabels(e.target.checked);
+      });
+    }
+    const resetBtn = $("#explorerResetBtn");
+    if (resetBtn && !resetBtn.dataset.wired) {
+      resetBtn.dataset.wired = "1";
+      resetBtn.addEventListener("click", () => {
+        if (window.Explorer) window.Explorer.resetCamera();
       });
     }
   }
@@ -2562,8 +2576,8 @@ function switchToGrid() {
   if (grid) grid.style.display = "";
   if (explorerContainer) explorerContainer.style.display = "none";
   if (zoomControl) zoomControl.style.display = "";
-  const explorerSpreadControlEl = $("#explorerSpreadControl");
-  if (explorerSpreadControlEl) explorerSpreadControlEl.style.display = "none";
+  const explorerControlsEl = $("#explorerControls");
+  if (explorerControlsEl) explorerControlsEl.style.display = "none";
   if (viewGrid) { viewGrid.classList.add("active"); viewGrid.setAttribute("aria-pressed", "true"); }
   if (viewExplore) { viewExplore.classList.remove("active"); viewExplore.setAttribute("aria-pressed", "false"); }
 

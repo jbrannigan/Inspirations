@@ -686,105 +686,50 @@ textarea { width: 100%; min-height: 90px; border: 1px solid var(--border); borde
   height: 100% !important;
 }
 
-/* ── Explorer toolbar spread control ────────────────────────────────────── */
-.explorerToolbarSpread {
+/* ── Explorer toolbar controls ───────────────────────────────────────────── */
+.explorerToolbarControls {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex: 1;          /* fill horizontal space between stats and view toggle */
+  flex: 1;
   min-width: 0;
   padding: 0 12px;
 }
-.explorerToolbarSpread span {
+.explorerToolbarLabel {
   font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--muted);
   white-space: nowrap;
 }
-.explorerToolbarSpread input[type="range"] {
+.explorerToolbarRange {
   flex: 1;
   min-width: 80px;
   max-width: 220px;
   accent-color: var(--accent);
   cursor: pointer;
 }
-
-/* ── Explorer controls panel ─────────────────────────────────────────────── */
-.explorerControlsPanel {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: var(--shadow-md);
-  z-index: 10;
-  min-width: 180px;
-}
-.explorerPanelToggle {
-  background: none;
-  border: none;
-  padding: 8px 12px;
-  font-size: 16px;
-  cursor: pointer;
-  display: block;
-  width: 100%;
-  text-align: left;
-  color: var(--text-secondary);
-  border-radius: 8px;
-}
-.explorerPanelToggle:hover {
-  background: var(--panel-hover);
-  color: var(--text);
-}
-.explorerPanelBody {
-  padding: 8px 12px 12px;
-  border-top: 1px solid var(--border);
+.explorerToolbarCheck {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.explorerControl {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  font-size: var(--fs-sm);
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-.explorerControl span:first-child {
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--muted);
-}
-.explorerControl input[type="range"] {
-  width: 100%;
-  accent-color: var(--accent);
-}
-.explorerCheckbox {
-  flex-direction: row;
   align-items: center;
-  gap: 6px;
-}
-.explorerCheckbox span {
-  color: var(--text);
-  text-transform: none;
-  letter-spacing: 0;
+  gap: 4px;
   font-size: var(--fs-sm);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
 }
-.explorerBtn {
+.explorerToolbarBtn {
   background: var(--surface-subtle);
   border: 1px solid var(--border);
   border-radius: 5px;
-  padding: 5px 10px;
+  padding: 3px 8px;
   font-size: var(--fs-sm);
   cursor: pointer;
   color: var(--text);
   font-family: inherit;
+  white-space: nowrap;
   transition: background 0.15s;
 }
-.explorerBtn:hover {
+.explorerToolbarBtn:hover {
   background: var(--panel-hover);
 }

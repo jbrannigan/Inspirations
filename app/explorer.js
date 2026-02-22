@@ -128,9 +128,6 @@
     _container.style.position = "relative";
     _container.appendChild(_lassoEl);
 
-    // Controls panel
-    _buildControlsPanel();
-
     // Event listeners
     window.addEventListener("resize", _onResize);
     _renderer.domElement.addEventListener("click", _onClick);
@@ -140,36 +137,6 @@
     window.addEventListener("mouseup", _onLassoEnd);
 
     _animFrameId = requestAnimationFrame(_renderLoop);
-  }
-
-  // ─── Controls panel ──────────────────────────────────────────────────────
-
-  function _buildControlsPanel() {
-    const panel = document.createElement("div");
-    panel.id = "explorerControlsPanel";
-    panel.className = "explorerControlsPanel";
-    panel.innerHTML = `
-      <button class="explorerPanelToggle" id="explorerPanelToggle" title="Toggle controls">⚙</button>
-      <div class="explorerPanelBody" id="explorerPanelBody">
-        <label class="explorerControl explorerCheckbox">
-          <input type="checkbox" id="explorerLabels" checked>
-          <span>Cluster labels</span>
-        </label>
-        <button id="explorerResetCamera" class="explorerBtn">Reset camera</button>
-      </div>
-    `;
-    _container.appendChild(panel);
-
-    let open = true;
-    panel.querySelector("#explorerPanelToggle").addEventListener("click", () => {
-      open = !open;
-      panel.querySelector("#explorerPanelBody").style.display = open ? "" : "none";
-    });
-    panel.querySelector("#explorerLabels").addEventListener("change", (e) => {
-      _showLabels = e.target.checked;
-      _updateLabelVisibility();
-    });
-    panel.querySelector("#explorerResetCamera").addEventListener("click", resetCamera);
   }
 
   function _updateLabelVisibility() {
@@ -610,5 +577,10 @@
     _repositionNodes();
   }
 
-  window.Explorer = { init, loadData, setFilter, highlight, onSelect, onClickNode, resetCamera, setSpread, pause, resume, destroy };
+  function setLabels(visible) {
+    _showLabels = !!visible;
+    _updateLabelVisibility();
+  }
+
+  window.Explorer = { init, loadData, setFilter, highlight, onSelect, onClickNode, resetCamera, setSpread, setLabels, pause, resume, destroy };
 })();
