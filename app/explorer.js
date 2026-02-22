@@ -45,8 +45,8 @@
   let _lassoEl = null;
 
   // LOD thresholds (distance from camera to node).
-  // Data is normalized to ±15 units; camera starts at z=75, so the
-  // closest nodes are ~60 units away. These values must exceed that.
+  // Data is normalized to ±15 units × spread. Camera z is computed
+  // dynamically to fill ~75% of the viewport.
   const LOD_FAR = 120;
   const LOD_MED = 65;
   const LOD_CLOSE = 35;
@@ -108,7 +108,7 @@
     _scene = new THREE.Scene();
 
     _camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 2000);
-    _camera.position.set(0, 0, 75);
+    _camera.position.set(0, 0, _computeInitialZ(w, h));
 
     _controls = new OrbitControls(_camera, _renderer.domElement);
     _controls.enableDamping = true;
@@ -538,9 +538,27 @@
     _clickCallback = callback;
   }
 
+  function _computeInitialZ(w, h) {
+    // Position camera so the scene (±15 units × spread) fills ~75% of the shorter viewport dimension.
+    const fovRad = (60 * Math.PI) / 180;
+    const fullFrustumFactor = 2 * Math.tan(fovRad / 2); // ≈ 1.155
+    const sceneDiameter = 2 * 15 * _spread;
+    const aspect = w / h;
+    const fill = 0.75;
+    if (aspect >= 1) {
+      // Landscape: height is limiting dimension
+      return sceneDiameter / (fill * fullFrustumFactor);
+    } else {
+      // Portrait: width is limiting dimension
+      return sceneDiameter / (fill * fullFrustumFactor * aspect);
+    }
+  }
+
   function resetCamera() {
     if (!_camera || !_controls) return;
-    _camera.position.set(0, 0, 75);
+    const w = _container.clientWidth || window.innerWidth;
+    const h = _container.clientHeight || window.innerHeight;
+    _camera.position.set(0, 0, _computeInitialZ(w, h));
     _controls.target.set(0, 0, 0);
     _controls.update();
   }
