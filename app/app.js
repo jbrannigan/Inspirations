@@ -2495,6 +2495,17 @@ async function switchToExplore() {
   if (loadMore) loadMore.hidden = true;
   if (explorerContainer) explorerContainer.style.display = "";
   if (zoomControl) zoomControl.style.display = "none";
+  const explorerSpreadControl = $("#explorerSpreadControl");
+  if (explorerSpreadControl) {
+    explorerSpreadControl.style.display = "";
+    const slider = $("#explorerSpreadSlider");
+    if (slider && !slider.dataset.wired) {
+      slider.dataset.wired = "1";
+      slider.addEventListener("input", (e) => {
+        if (window.Explorer) window.Explorer.setSpread(parseFloat(e.target.value));
+      });
+    }
+  }
   if (viewGrid) { viewGrid.classList.remove("active"); viewGrid.setAttribute("aria-pressed", "false"); }
   if (viewExplore) { viewExplore.classList.add("active"); viewExplore.setAttribute("aria-pressed", "true"); }
 
@@ -2551,6 +2562,8 @@ function switchToGrid() {
   if (grid) grid.style.display = "";
   if (explorerContainer) explorerContainer.style.display = "none";
   if (zoomControl) zoomControl.style.display = "";
+  const explorerSpreadControlEl = $("#explorerSpreadControl");
+  if (explorerSpreadControlEl) explorerSpreadControlEl.style.display = "none";
   if (viewGrid) { viewGrid.classList.add("active"); viewGrid.setAttribute("aria-pressed", "true"); }
   if (viewExplore) { viewExplore.classList.remove("active"); viewExplore.setAttribute("aria-pressed", "false"); }
 

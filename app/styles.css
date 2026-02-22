@@ -686,6 +686,27 @@ textarea { width: 100%; min-height: 90px; border: 1px solid var(--border); borde
   height: 100% !important;
 }
 
+/* ── Explorer toolbar spread control ────────────────────────────────────── */
+.explorerToolbarSpread {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+.explorerToolbarSpread span {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.explorerToolbarSpread input[type="range"] {
+  width: 90px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 /* ── Explorer controls panel ─────────────────────────────────────────────── */
 .explorerControlsPanel {
   position: absolute;

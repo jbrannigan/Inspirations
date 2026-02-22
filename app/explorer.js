@@ -151,10 +151,6 @@
     panel.innerHTML = `
       <button class="explorerPanelToggle" id="explorerPanelToggle" title="Toggle controls">⚙</button>
       <div class="explorerPanelBody" id="explorerPanelBody">
-        <label class="explorerControl">
-          <span>Spread</span>
-          <input type="range" id="explorerSpread" min="0.5" max="5" step="0.1" value="1.5">
-        </label>
         <label class="explorerControl explorerCheckbox">
           <input type="checkbox" id="explorerLabels" checked>
           <span>Cluster labels</span>
@@ -168,10 +164,6 @@
     panel.querySelector("#explorerPanelToggle").addEventListener("click", () => {
       open = !open;
       panel.querySelector("#explorerPanelBody").style.display = open ? "" : "none";
-    });
-    panel.querySelector("#explorerSpread").addEventListener("input", (e) => {
-      _spread = parseFloat(e.target.value);
-      _repositionNodes();
     });
     panel.querySelector("#explorerLabels").addEventListener("change", (e) => {
       _showLabels = e.target.checked;
@@ -544,7 +536,7 @@
     const fullFrustumFactor = 2 * Math.tan(fovRad / 2); // ≈ 1.155
     const sceneDiameter = 2 * 15 * _spread;
     const aspect = w / h;
-    const fill = 0.75;
+    const fill = 1.5;
     if (aspect >= 1) {
       // Landscape: height is limiting dimension
       return sceneDiameter / (fill * fullFrustumFactor);
@@ -613,5 +605,10 @@
   }
 
   // ─── Expose ───────────────────────────────────────────────────────────────
-  window.Explorer = { init, loadData, setFilter, highlight, onSelect, onClickNode, resetCamera, pause, resume, destroy };
+  function setSpread(val) {
+    _spread = parseFloat(val);
+    _repositionNodes();
+  }
+
+  window.Explorer = { init, loadData, setFilter, highlight, onSelect, onClickNode, resetCamera, setSpread, pause, resume, destroy };
 })();
