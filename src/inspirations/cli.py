@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from .db import Db, ensure_schema
+from .importers.facebook_docx import import_facebook_docx
 from .importers.facebook_saved import import_facebook_saved_zip
 from .importers.pinterest_crawler import import_pinterest_crawler_zip
 from .importers.scans import import_scans_inbox
@@ -105,6 +106,24 @@ def cmd_import_facebook(args: argparse.Namespace) -> int:
                 retry_non_image=args.retry_non_image,
             )
         report["downloaded"] = dl
+
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_import_facebook_docx(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    store_dir = _p(args.store)
+    docx_path = _p(args.docx)
+
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = import_facebook_docx(
+            db=db,
+            docx_path=docx_path,
+            store_dir=store_dir,
+            collections_filter=args.collections_filter,
+        )
 
     print(json.dumps(report, indent=2))
     return 0
@@ -351,6 +370,21 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--max-pages", type=int, default=0, help="Max pages per PDF (0 = all)")
     sc.add_argument("--limit", type=int, default=0, help="Limit files (0 = no limit)")
     sc.set_defaults(func=cmd_import_scans)
+
+
+    fb_docx = sub.add_parser(
+        "import-facebook-docx", help="Import Facebook saves from Word doc (DOCX)"
+    )
+    fb_docx.add_argument("--docx", required=True, help="Path to DOCX file")
+    fb_docx.add_argument("--db", default="data/inspirations.sqlite", help="SQLite db path")
+    fb_docx.add_argument("--store", default="store", help="Directory for originals/thumbnails")
+    fb_docx.add_argument(
+        "--collections-filter",
+        choices=["home-design", "all"],
+        default="home-design",
+        help="Which collections to import (default: home-design)",
+    )
+    fb_docx.set_defaults(func=cmd_import_facebook_docx)
 
     thumbs = sub.add_parser("thumbs", help="Generate thumbnails from stored originals/pages")
     thumbs.add_argument("--size", type=int, default=512, help="Max dimension in pixels")
