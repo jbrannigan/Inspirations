@@ -2489,12 +2489,12 @@ async function switchToExplore() {
   const explorerContainer = $("#explorerContainer");
   const viewGrid = $("#viewGrid");
   const viewExplore = $("#viewExplore");
-  const zoomControl = $("#zoomControl");
+  const canvasControls = $("#canvasControls");
 
   if (grid) grid.style.display = "none";
   if (loadMore) loadMore.hidden = true;
   if (explorerContainer) explorerContainer.style.display = "";
-  if (zoomControl) zoomControl.style.display = "none";
+  if (canvasControls) canvasControls.style.display = "none";
   const explorerControls = $("#explorerControls");
   if (explorerControls) {
     explorerControls.style.display = "";
@@ -2571,11 +2571,11 @@ function switchToGrid() {
   const explorerContainer = $("#explorerContainer");
   const viewGrid = $("#viewGrid");
   const viewExplore = $("#viewExplore");
-  const zoomControl = $("#zoomControl");
+  const canvasControls = $("#canvasControls");
 
   if (grid) grid.style.display = "";
   if (explorerContainer) explorerContainer.style.display = "none";
-  if (zoomControl) zoomControl.style.display = "";
+  if (canvasControls) canvasControls.style.display = "";
   const explorerControlsEl = $("#explorerControls");
   if (explorerControlsEl) explorerControlsEl.style.display = "none";
   if (viewGrid) { viewGrid.classList.add("active"); viewGrid.setAttribute("aria-pressed", "true"); }
