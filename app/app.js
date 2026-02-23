@@ -80,7 +80,10 @@ function previewForAsset(a) {
 }
 
 function displayTitle(a) {
-  return (a.title || "").trim() || "(untitled)";
+  return (a.title || "").trim()
+    || (a.seo_alt_text || "").trim()
+    || (a.board || "").trim()
+    || "(untitled)";
 }
 
 function sourceHost(url) {
@@ -280,7 +283,7 @@ function buildCard(a) {
     </div>
     <div class="card-footer">
       <span class="card-title">${escapeHtml(displayTitle(a))}</span>
-      <span class="card-source">${escapeHtml(a.source || "")}</span>
+      <span class="card-source">${escapeHtml(a.board || a.source || "")}${a.content_kind && a.content_kind !== "pin" ? ` · ${escapeHtml(a.content_kind)}` : ""}</span>
     </div>
   `;
 
@@ -489,6 +492,84 @@ async function openModal(asset) {
     img.style.display = url ? "block" : "none";
   }
 
+  // Content kind badge
+  const badgeWrap = $("#modalBadge");
+  if (badgeWrap) {
+    const kind = (asset.content_kind || "").trim();
+    const kindLabels = { pin: "Pin", reel: "Reel", video: "Video", photo: "Photo", scan: "Scan", link: "Link", post: "Post" };
+    if (kind) {
+      badgeWrap.textContent = kindLabels[kind.toLowerCase()] || kind;
+      badgeWrap.hidden = false;
+    } else {
+      badgeWrap.hidden = true;
+    }
+  }
+
+  // Creator
+  const creatorEl = $("#modalCreator");
+  if (creatorEl) {
+    const creator = (asset.creator_name || "").trim();
+    creatorEl.textContent = creator ? `by ${creator}` : "";
+    creatorEl.hidden = !creator;
+  }
+
+  // Description (post_text / closeup_desc / seo_alt_text)
+  const descEl = $("#modalDescription");
+  if (descEl) {
+    const desc = (asset.post_text || "").trim()
+      || (asset.closeup_desc || "").trim()
+      || (asset.seo_alt_text || "").trim();
+    descEl.textContent = desc;
+    descEl.hidden = !desc;
+  }
+
+  // Hashtags
+  const hashtagsEl = $("#modalHashtags");
+  if (hashtagsEl) {
+    const raw = (asset.hashtags || "").trim();
+    if (raw) {
+      const tags = raw.split(",").map(t => t.trim()).filter(Boolean);
+      hashtagsEl.innerHTML = tags.map(t => `<span class="hashtag-chip">${escapeHtml(t)}</span>`).join(" ");
+      hashtagsEl.hidden = false;
+    } else {
+      hashtagsEl.innerHTML = "";
+      hashtagsEl.hidden = true;
+    }
+  }
+
+  // Engagement stats
+  const engagementEl = $("#modalEngagement");
+  if (engagementEl) {
+    let engHtml = "";
+    try {
+      const eng = asset.engagement_json ? JSON.parse(asset.engagement_json) : null;
+      if (eng) {
+        const parts = [];
+        if (eng.repins != null) parts.push(`${eng.repins} repins`);
+        if (eng.comments != null) parts.push(`${eng.comments} comments`);
+        if (eng.likes != null) parts.push(`${eng.likes} likes`);
+        if (eng.reactions != null) parts.push(`${eng.reactions} reactions`);
+        if (eng.shares != null) parts.push(`${eng.shares} shares`);
+        engHtml = parts.join(" · ");
+      }
+    } catch {}
+    engagementEl.textContent = engHtml;
+    engagementEl.hidden = !engHtml;
+  }
+
+  // Image dimensions
+  const dimsEl = $("#modalDimensions");
+  if (dimsEl) {
+    const w = asset.image_width;
+    const h = asset.image_height;
+    if (w && h) {
+      dimsEl.textContent = `${w} × ${h}`;
+      dimsEl.hidden = false;
+    } else {
+      dimsEl.hidden = true;
+    }
+  }
+
   // Source link
   const sourceLink = $("#sourceLink");
   if (sourceLink) {
@@ -508,12 +589,18 @@ async function openModal(asset) {
     sourceSiteRow.hidden = true;
   }
 
-  // View source button
+  // View source button — show only for scans (as "View Original"), hide for social
   const viewSourceBtn = $("#viewSourceBtn");
   if (viewSourceBtn) {
     const ref = asset.source_ref || "";
-    viewSourceBtn.onclick = () => { if (ref) window.open(ref, "_blank", "noopener"); };
-    viewSourceBtn.disabled = !ref;
+    if (asset.source === "scan") {
+      viewSourceBtn.textContent = "View Original";
+      viewSourceBtn.onclick = () => { if (ref) window.open(ref, "_blank", "noopener"); };
+      viewSourceBtn.disabled = !ref;
+      viewSourceBtn.hidden = false;
+    } else {
+      viewSourceBtn.hidden = true;
+    }
   }
 
   // Print button
@@ -691,7 +778,12 @@ function renderAnnotations() {
 function scheduleAnnotationUpdate(annId, patch) {
   clearTimeout(state.noteTimers[`ann_${annId}`]);
   state.noteTimers[`ann_${annId}`] = setTimeout(async () => {
-    try { await api(`/api/annotations/${annId}`, { method: "PUT", body: JSON.stringify(patch) }); } catch {}
+    try {
+      await api(`/api/annotations/${annId}`, { method: "PUT", body: JSON.stringify(patch) });
+    } catch (e) {
+      console.error("Annotation save failed:", e);
+      Shared.showToast("Annotation save failed — will retry on next edit", { type: "error" });
+    }
   }, 600);
 }
 
@@ -1162,13 +1254,13 @@ window.addEventListener("keydown", (e) => {
 
 // ─── Chat bar ────────────────────────────────────────────────────────────────────
 
-function addChatResponse(text) {
+function addChatResponse(text, duration) {
   const bar = $("#chatResponse");
   if (!bar) return;
   bar.textContent = text;
   bar.hidden = false;
   clearTimeout(addChatResponse._timer);
-  addChatResponse._timer = setTimeout(() => { if (bar) bar.hidden = true; }, 6000);
+  addChatResponse._timer = setTimeout(() => { if (bar) bar.hidden = true; }, duration || 6000);
 }
 
 async function processChat(text) {
@@ -1235,7 +1327,7 @@ async function processChat(text) {
     return;
   }
 
-  addChatResponse("I didn't understand that. Try: 'make a collection called Kitchen' or 'show keepers'.");
+  addChatResponse("I didn't understand that. Try: 'make a collection called Kitchen', 'show keepers', 'find cabinets', or 'review'.", 12000);
 }
 
 const chatInput = $("#chatInput");

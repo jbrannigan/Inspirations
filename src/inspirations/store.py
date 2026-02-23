@@ -352,7 +352,8 @@ def list_assets(
               a.title like ?
               or a.description like ?
               or a.board like ?
-              or a.source_ref like ?
+              or a.seo_alt_text like ?
+              or a.post_text like ?
               or a.notes like ?
               or a.ai_summary like ?
               or a.creator_name like ?
@@ -363,7 +364,7 @@ def list_assets(
             """
         )
         qv = f"%{q}%"
-        params += [qv, qv, qv, qv, qv, qv, qv, qv, qv, qv]
+        params += [qv, qv, qv, qv, qv, qv, qv, qv, qv, qv, qv]
     if collection_id:
         joins.append("join collection_items ci on ci.asset_id = a.id")
         clauses.append("ci.collection_id = ?")
@@ -408,7 +409,9 @@ def list_assets(
            (select ai.provider from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_provider,
            (select ai.created_at from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_created_at,
            a.created_at, a.imported_at, a.image_url, a.stored_path, a.thumb_path,
-           a.triage_status, a.needs_annotation, a.source_url, a.seo_alt_text
+           a.triage_status, a.needs_annotation, a.source_url, a.seo_alt_text,
+           a.post_text, a.hashtags, a.engagement_json, a.dominant_color,
+           a.image_width, a.image_height, a.closeup_desc
     from assets a
     {join_sql}
     {where}

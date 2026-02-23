@@ -161,6 +161,50 @@ def cmd_rebuild_db(args: argparse.Namespace) -> int:
         r = generate_thumbnails(db, store_dir=store_dir)
     summary["thumbnails"] = r
 
+    # Step 7: Create collections from boards
+    print("[rebuild-db] Creating collections from boards", file=sys.stderr)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        boards = db.query(
+            "select distinct board from assets where board is not null and board != '' order by board"
+        )
+        collections_created = 0
+        collection_items_total = 0
+        for row in boards:
+            board_name = row["board"]
+            col = create_collection(db, name=board_name)
+            asset_rows = db.query("select id from assets where board = ?", (board_name,))
+            asset_ids = [r["id"] for r in asset_rows]
+            n = add_items_to_collection(db, collection_id=col["id"], asset_ids=asset_ids)
+            collections_created += 1
+            collection_items_total += n
+        print(f"[rebuild-db] Created {collections_created} collections, {collection_items_total} items linked", file=sys.stderr)
+    summary["collections"] = {"created": collections_created, "items": collection_items_total}
+
+    # Step 8: Null out bad Facebook images (SHA256 appearing on 5+ assets = wrong capture)
+    print("[rebuild-db] Checking for duplicate Facebook images", file=sys.stderr)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        bad_rows = db.query(
+            """
+            select sha256, count(*) as cnt
+            from assets
+            where source = 'facebook' and sha256 is not null and sha256 != ''
+            group by sha256
+            having count(*) >= 5
+            """
+        )
+        nulled = 0
+        for row in bad_rows:
+            db.exec(
+                "update assets set stored_path = null, thumb_path = null where source = 'facebook' and sha256 = ?",
+                (row["sha256"],),
+            )
+            nulled += row["cnt"]
+        if nulled:
+            print(f"[rebuild-db] Nulled stored_path/thumb_path for {nulled} bad Facebook images", file=sys.stderr)
+    summary["bad_facebook_images_nulled"] = nulled
+
     print(json.dumps(summary, indent=2))
     return 0
 
