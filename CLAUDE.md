@@ -4,22 +4,40 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Local-first inspiration library for home design research. The project is undergoing a **scrape-first rebuild** (Feb 2026): browser-scraping Pinterest and Facebook directly for richer metadata, rebuilding the database, and adding a keeper/hidden triage workflow with natural-language collection management. The frontend is a vanilla JS web app served by Python's standard library HTTP server.
+Local-first inspiration library for home design research. Browser-scraped data from Pinterest and Facebook, plus local scans, with a keeper/hidden triage workflow and natural-language collection management. The frontend is a vanilla JS web app served by Python's standard library HTTP server.
 
-## Current State: Rebuild In Progress
+## Current State: Post-Rebuild (Feb 2026)
 
-The project is transitioning from ZIP-import-based ingestion to browser-scrape-based ingestion. The implementation spec for the rebuild is at `docs/SCRAPE_REBUILD_SPEC.md`. Old documentation is archived in `docs/archive/`.
+The scrape-first rebuild is complete. The database has been rebuilt from browser-scraped data:
 
-### What's happening:
-1. **Opus** (browser agent) scrapes Pinterest boards and Facebook saved items into JSON files in `data/scrape/`
-2. **Sonnet** implements code from the spec: new importers, schema changes, triage backend/frontend, dead code cleanup
-3. After both finish, `inspirations rebuild-db` nukes and reimports everything
+- **6,295 assets total**: 3,783 Pinterest pins, 2,405 Facebook saved items, 107 scans
+- **6,070 thumbnails** generated
+- **92 collections** auto-created from board names
+- **986 bad Facebook images** nulled (duplicate SHA256 captures replaced with thumbnail_url fallback)
 
-### Key files for the rebuild:
-- `docs/SCRAPE_REBUILD_SPEC.md` — Complete implementation spec (Parts 0-7)
-- `data/scrape/pinterest_scrape.json` — Scraped Pinterest data (Opus produces this)
-- `data/scrape/facebook_scrape_*.json` — Scraped Facebook data (Opus produces this)
+### Recent changes (PRs #49, #50):
+- Pagination (`has_more` flag) — all 6,295 items accessible via Load More
+- Collections auto-created from `board` values during rebuild
+- Pinterest title fallback to `seo_alt_text` (fixes "(untitled)" tiles)
+- Facebook `thumbnail_url` stored as `image_url` fallback for bad captures
+- Post-rebuild step nulls out bad Facebook images (SHA256 appearing 5+ times)
+- Search now includes `seo_alt_text` and `post_text`, excludes `source_ref`
+- Detail modal shows: content kind badge, creator, description, hashtags, engagement stats, dimensions
+- Tiles show board name and content kind badge
+- "View Source" hidden for social items, renamed "View Original" for scans
+- Default dev server port changed to 8001
+
+### Known issues / limitations:
+- **~174 Pinterest images failed download** — these show thumbnail fallback only
+- **Facebook images rely on thumbnail_url** — ~800 items had wrong captures (login screens, group covers); they now fall back to the live thumbnail URL which requires internet
+- **Chat parser has limited regex coverage** — many natural phrases don't match; fallback message shows help text for 12s
+- **Annotation save errors** — now logged and surfaced via toast, but root cause (intermittent failures) not fully diagnosed
+
+### Key data files (not committed):
+- `data/scrape/pinterest_scrape.json` — Scraped Pinterest data
+- `data/scrape/facebook_scrape_*.json` — Scraped Facebook data
 - `data/scrape/pinterest_image_map.json` — Maps image URLs to existing stored files
+- `docs/SCRAPE_REBUILD_SPEC.md` — Original implementation spec (Parts 0-7)
 
 ## Common Commands
 
@@ -51,9 +69,9 @@ PYTHONPATH=src python3 -m inspirations serve --reload
 
 ### Start the server for phone/tablet LAN testing
 ```bash
-PYTHONPATH=src python3 -m inspirations serve --host 0.0.0.0 --port 8000
+PYTHONPATH=src python3 -m inspirations serve --host 0.0.0.0 --port 8001
 ```
-Then open `http://<hostname>.local:8000` or `http://<lan-ip>:8000`.
+Then open `http://<hostname>.local:8001` or `http://<lan-ip>:8001`.
 
 ### AI tagging (Gemini)
 ```bash
