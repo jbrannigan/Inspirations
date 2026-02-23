@@ -26,7 +26,8 @@ def import_pinterest_scrape(
 ) -> dict[str, Any]:
     """Import pins from browser scrape JSON, matching existing images by URL."""
 
-    pins: list[dict[str, Any]] = json.loads(json_path.read_text(encoding="utf-8"))
+    raw = json.loads(json_path.read_text(encoding="utf-8"))
+    pins: list[dict[str, Any]] = raw.get("pins", raw) if isinstance(raw, dict) else raw
 
     # Load image map if provided: {image_url: {stored_path, sha256}}
     image_map: dict[str, dict[str, str]] = {}
@@ -123,9 +124,9 @@ def import_pinterest_scrape(
                 str(uuid.uuid4()),
                 "pinterest",
                 source_ref,
-                (pin.get("title") or "").strip() or None,
+                (pin.get("title") or "").strip() or (pin.get("seo_alt_text") or "").strip() or None,
                 (pin.get("description") or "").strip() or None,
-                (pin.get("board_name") or "").strip() or None,
+                (pin.get("board_name") or pin.get("board") or "").strip() or None,
                 (pin.get("created_at") or "").strip() or None,
                 now,
                 image_url,

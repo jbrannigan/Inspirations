@@ -144,6 +144,7 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/assets":
             q = parse_qs(parsed.query)
+            page_limit = int(q.get("limit", [str(DEFAULT_ASSETS_PAGE_SIZE)])[0])
             assets = self._with_db(
                 list_assets,
                 q=q.get("q", [""])[0],
@@ -158,10 +159,13 @@ class ApiHandler(BaseHTTPRequestHandler):
                 triage_status=q.get("triage_status", [""])[0],
                 needs_annotation=_parse_bool_param(q.get("needs_annotation", [""])[0], default=False),
                 include_hidden=_parse_bool_param(q.get("include_hidden", [""])[0], default=False),
-                limit=int(q.get("limit", [str(DEFAULT_ASSETS_PAGE_SIZE)])[0]),
+                limit=page_limit + 1,
                 offset=int(q.get("offset", ["0"])[0]),
             )
-            return _send(self, 200, {"assets": assets})
+            has_more = len(assets) > page_limit
+            if has_more:
+                assets = assets[:page_limit]
+            return _send(self, 200, {"assets": assets, "has_more": has_more})
 
         if parsed.path == "/api/search/similar":
             q = parse_qs(parsed.query)

@@ -774,6 +774,47 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .source-site-link:hover { text-decoration: underline; }
 
+/* ── Modal metadata enrichment ────────────────────────────────────────────── */
+.content-kind-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.modal-description {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 6px;
+}
+.modal-hashtags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.hashtag-chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+}
+.modal-engagement {
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.modal-dimensions {
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+
 /* ── Scan import ───────────────────────────────────────────────────────────── */
 .scanImportContent { width: min(560px, 92vw); }
 .scanImportBody { margin-top: 10px; display: grid; gap: 10px; }

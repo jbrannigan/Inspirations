@@ -127,6 +127,7 @@ def import_facebook_scrape(
             insert or ignore into assets (
                 id, source, source_ref, title, description, post_text,
                 board, created_at, imported_at,
+                image_url,
                 stored_path, sha256,
                 media_status, content_kind,
                 creator_name, hashtags,
@@ -136,6 +137,7 @@ def import_facebook_scrape(
             ) values (
                 ?,?,?,?,?,?,
                 ?,?,?,
+                ?,
                 ?,?,
                 ?,?,
                 ?,?,
@@ -154,6 +156,7 @@ def import_facebook_scrape(
                 (post.get("collection_name") or "").strip() or None,
                 _parse_date(post.get("date")),
                 now,
+                (post.get("thumbnail_url") or "").strip() or None,
                 stored_path,
                 sha256,
                 media_status,
