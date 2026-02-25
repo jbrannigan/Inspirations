@@ -178,6 +178,19 @@ def ensure_schema(db: Db) -> None:
             "triage_status": "text",
             "triage_at": "text",
             "needs_annotation": "integer",
+            # Categorization
+            "category": "text",  # 'home_design' or 'other'
+            # Review flags (e.g. wrong thumbnail)
+            "flagged": "integer default 0",
+            "flagged_by": "text",
+            "flagged_note": "text",
+            # Anomaly tags (Jim's "needs diagnosis" markers)
+            "tagged": "integer default 0",
+            "tagged_by": "text",
+            "tagged_note": "text",
+            # Video reel metadata
+            "stored_video_path": "text",
+            "video_duration": "real",
         },
     )
     db.exec("create unique index if not exists ux_assets_source_ref on assets(source, source_ref);")
@@ -341,4 +354,31 @@ def ensure_schema(db: Db) -> None:
         """
     )
     db.exec("create index if not exists ix_source_collections_source on source_collections(source);")
+
+    # Actors (magic-link auth for collaboration)
+    db.exec(
+        """
+        create table if not exists actors (
+          id text primary key,
+          name text not null,
+          token text not null unique,
+          role text not null default 'collaborator',
+          created_at text not null
+        );
+        """
+    )
+    db.exec("create unique index if not exists ux_actors_token on actors(token);")
+
+    # Add attribution + question columns to annotations
+    _ensure_columns(
+        db,
+        "annotations",
+        {
+            "actor_id": "text",
+            "actor_name": "text",
+            "annotation_type": "text",
+            "resolved": "integer default 0",
+        },
+    )
+
     _backfill_assets_metadata(db)

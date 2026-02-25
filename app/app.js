@@ -5,6 +5,7 @@ const state = {
   currentBoard: null,           // board filter (null = all)
   currentSource: null,          // source filter (null = all)
   currentCollection: null,      // collection ID filter
+  currentCatalogFile: null,     // catalog dimension file (e.g. "room/bathroom.md")
   triageFilter: "",             // "" | "pending" | "keeper" | "hidden" | "needs-comment"
 
   // Assets
@@ -24,9 +25,10 @@ const state = {
   reviewKept: 0,
   reviewHidden: 0,
 
-  // Collections + facets
+  // Collections + facets + catalog
   collections: [],
   facets: { sources: [], boards: [] },
+  catalogTree: [],
 
   // Modal + annotations
   modalAsset: null,
@@ -42,6 +44,17 @@ const state = {
   photoImportBusy: false,
   scanImportFile: null,
   photoImportFile: null,
+
+  // Canvas review mode
+  canvasReview: false,          // true when canvas review overlay is active
+  canvasSelected: new Set(),    // set of selected asset IDs
+
+  // Actor / collaboration
+  actor: null,                  // { id, name, role, token } or null
+  hiddenTree: null,             // hidden items tree for sidebar (owners only)
+  expandedTreeNodes: new Set(), // track which tree nodes are expanded by user
+  openQuestions: [],             // open question annotations (owners only)
+  questionPollTimer: null,
 };
 
 const ASSETS_PAGE_SIZE = 240;
@@ -80,9 +93,16 @@ function previewForAsset(a) {
 }
 
 function displayTitle(a) {
-  return (a.title || "").trim()
-    || (a.seo_alt_text || "").trim()
+  const title = (a.title || "").trim();
+  const ai = (a.ai_summary || "").trim();
+  const alt = (a.seo_alt_text || "").trim().replace(/^This may contain:\s*/i, "");
+  // Junk titles: bare domains, parking pages, etc.
+  const isJunk = title && /^(https?:\/\/|www\.)|\.(com|org|net|co)\b/i.test(title)
+    && title.length < 40;
+  const bestTitle = (!title || isJunk) ? (ai || alt || title) : title;
+  return bestTitle
     || (a.board || "").trim()
+    || (a.creator_name ? `via ${a.creator_name}` : "")
     || "(untitled)";
 }
 
@@ -160,6 +180,9 @@ async function loadAssets(opts = {}) {
   } else if (state.triageFilter === "hidden") {
     params.set("triage_status", "hidden");
     params.set("include_hidden", "1");
+  } else if (state.triageFilter === "flagged") {
+    params.set("flagged", "1");
+    params.set("include_hidden", "1");
   } else if (state.triageFilter) {
     params.set("triage_status", state.triageFilter);
   }
@@ -170,7 +193,14 @@ async function loadAssets(opts = {}) {
 
   try {
     let data;
-    if (semQ) {
+    if (state.currentCatalogFile) {
+      // Dimension browsing: load items from catalog file
+      const catParams = new URLSearchParams();
+      catParams.set("file", state.currentCatalogFile);
+      catParams.set("limit", ASSETS_PAGE_SIZE);
+      catParams.set("offset", state.offset);
+      data = await api(`/api/catalog/items?${catParams}`);
+    } else if (semQ) {
       const res = await fetch(`/api/search/similar?${params}`);
       if (!res.ok) throw new Error(await res.text());
       data = await res.json();
@@ -187,11 +217,13 @@ async function loadAssets(opts = {}) {
       state.assets = newAssets;
     }
     state.hasMore = !!(data.has_more);
+    state.totalCount = data.total || null;
     state.offset += newAssets.length;
 
     renderGrid();
     updateStats();
     updateLoadMoreBtn();
+    updateFilterIndicator();
   } catch (e) {
     if (seq !== state.assetsRequestSeq) return;
     const grid = $("#grid");
@@ -211,7 +243,16 @@ function updateLoadMoreBtn() {
 
 function updateStats() {
   const statsEl = $("#stats");
-  if (statsEl) statsEl.textContent = `${state.assets.length} items shown`;
+  if (!statsEl) return;
+  const shown = state.assets.length;
+  const total = state.totalCount;
+  if (state.hasMore && total) {
+    statsEl.textContent = `${shown} of ${total} items`;
+  } else if (state.hasMore) {
+    statsEl.textContent = `${shown} items shown — more available`;
+  } else {
+    statsEl.textContent = `${shown} items`;
+  }
 }
 
 // ─── Grid rendering ─────────────────────────────────────────────────────────────
@@ -232,6 +273,9 @@ function renderGrid() {
   const grid = $("#grid");
   if (!grid) return;
   grid.innerHTML = "";
+  // Maintain canvas review class across re-renders
+  const browseView = $("#browseView");
+  if (browseView) browseView.classList.toggle("canvas-review-active", state.canvasReview);
 
   if (!state.assets.length) {
     grid.innerHTML = '<div class="empty-state">No items match your current filters.</div>';
@@ -251,13 +295,26 @@ function buildCard(a) {
   const imgUrl = previewForAsset(a);
   const ts = a.triage_status || "";
   const needsComment = a.needs_annotation == 1;
+  const flagged = a.flagged == 1;
+  const tagged = a.tagged == 1;
+
+  // Triage/flag/tag badges — owner-only
+  let tagBadgeHtml = "";
   let badgeHtml = "";
-  if (ts === "keeper" && needsComment) {
-    badgeHtml = '<span class="triage-badge needs-comment" title="Keeper — comment later"></span>';
-  } else if (ts === "keeper") {
-    badgeHtml = '<span class="triage-badge keeper" title="Keeper"></span>';
-  } else if (ts === "hidden") {
-    badgeHtml = '<span class="triage-badge hidden-status" title="Hidden"></span>';
+  if (isOwner()) {
+    // Tagged badge (Jim's anomaly markers for Claude Code diagnosis)
+    if (tagged) {
+      tagBadgeHtml = '<span class="triage-badge tagged" title="Tagged for diagnosis"></span>';
+    }
+    if (flagged) {
+      badgeHtml = '<span class="triage-badge flagged" title="Flagged for review"></span>';
+    } else if (ts === "keeper" && needsComment) {
+      badgeHtml = '<span class="triage-badge needs-comment" title="Keeper — needs comment"></span>';
+    } else if (ts === "keeper") {
+      badgeHtml = '<span class="triage-badge keeper" title="Keeper"></span>';
+    } else if (ts === "hidden") {
+      badgeHtml = '<span class="triage-badge hidden-status" title="Hidden"></span>';
+    }
   }
 
   const isScan = a.source === "scan";
@@ -273,22 +330,37 @@ function buildCard(a) {
     </div>`;
   }
 
+  const sourceLabel = { pinterest: "Pin", facebook: "FB", scan: "Scan", photo: "Photo" }[a.source] || a.source || "";
+  const quickTagHtml = state.actor
+    ? `<button class="card-quick-tag${tagged ? " tagged" : ""}" title="${tagged ? "Remove tag" : "Tag for diagnosis"}" type="button">🏷️</button>`
+    : "";
+
+  const selectedClass = state.canvasReview && state.canvasSelected.has(a.id) ? " canvas-selected" : "";
+  el.className = "card" + selectedClass;
+
   el.innerHTML = `
     <div class="card-image">
+      <div class="card-checkbox"></div>
       ${imgUrl
         ? `<img src="${escapeHtml(imgUrl)}" loading="lazy" alt="" />`
         : `<div class="card-placeholder">${escapeHtml(displayTitle(a))}</div>`}
-      ${badgeHtml}
+      ${tagBadgeHtml}${badgeHtml}
+      <span class="source-badge source-${escapeHtml(a.source || "")}">${escapeHtml(sourceLabel)}</span>
+      ${quickTagHtml}
       ${scanNavHtml}
     </div>
     <div class="card-footer">
       <span class="card-title">${escapeHtml(displayTitle(a))}</span>
-      <span class="card-source">${escapeHtml(a.board || a.source || "")}${a.content_kind && a.content_kind !== "pin" ? ` · ${escapeHtml(a.content_kind)}` : ""}</span>
+      <span class="card-source">${escapeHtml([a.board, a.creator_name].filter(Boolean).join(" · "))}</span>
     </div>
   `;
 
   el.onclick = (e) => {
     if (e.target.closest(".scan-nav-btn")) return;
+    if (state.canvasReview) {
+      toggleCanvasSelection(a.id, el);
+      return;
+    }
     openModal(a);
   };
 
@@ -311,86 +383,612 @@ function buildCard(a) {
     if (next) next.addEventListener("click", (e) => { e.stopPropagation(); pageIdx = Math.min(memberIds.length - 1, pageIdx + 1); updateNav(); });
   }
 
+  // Quick-tag button wiring (Jim's anomaly tagging)
+  const quickTagBtn = el.querySelector(".card-quick-tag");
+  if (quickTagBtn) {
+    quickTagBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const newTagged = a.tagged ? 0 : 1;
+      try {
+        await api(`/api/assets/${encodeURIComponent(a.id)}/tag`, {
+          method: "POST",
+          body: JSON.stringify({ tagged: newTagged }),
+        });
+        a.tagged = newTagged;
+        // Toggle tag badge on card
+        const cardImg = el.querySelector(".card-image");
+        const oldBadge = el.querySelector(".triage-badge.tagged");
+        if (oldBadge) oldBadge.remove();
+        if (newTagged && cardImg) {
+          const badge = document.createElement("span");
+          badge.className = "triage-badge tagged";
+          badge.title = "Tagged for diagnosis";
+          cardImg.prepend(badge);
+        }
+        // Update quick-tag button state
+        quickTagBtn.classList.toggle("tagged", !!newTagged);
+        quickTagBtn.title = newTagged ? "Remove tag" : "Tag for diagnosis";
+        Shared.showToast(newTagged ? "Tagged for diagnosis" : "Tag removed", { type: "success", duration: 2000 });
+      } catch (err) {
+        Shared.showToast(`Tag failed: ${formatApiError(err)}`, { type: "error" });
+      }
+    });
+  }
+
   return el;
 }
 
-// ─── Facets + sidebar ───────────────────────────────────────────────────────────
+// ─── Catalog tree + sidebar ──────────────────────────────────────────────────
 
 async function loadFacets() {
   try {
-    const data = await api("/api/facets");
-    state.facets = data;
-    renderSourceChips(data.sources || []);
-    renderBoardList(data.boards || []);
+    const params = new URLSearchParams();
+    if (state.currentSource) params.set("source", state.currentSource);
+    const qs = params.toString();
+    const data = await api(`/api/facets${qs ? "?" + qs : ""}`);
+    const facets = data.facets || data;
+    state.facets = facets;
   } catch (e) {
     console.error("Failed to load facets:", e);
   }
 }
 
-function renderSourceChips(sources) {
-  const wrap = $("#sourceChips");
-  if (!wrap) return;
-  wrap.innerHTML = "";
-
-  const allBtn = document.createElement("button");
-  allBtn.className = `filter-chip${!state.currentSource ? " active" : ""}`;
-  allBtn.dataset.source = "";
-  allBtn.textContent = "All";
-  allBtn.onclick = () => setSourceFilter(null);
-  wrap.appendChild(allBtn);
-
-  for (const s of sources) {
-    const src = s.source || s.value || "";
-    if (!src) continue;
-    const btn = document.createElement("button");
-    btn.className = `filter-chip${state.currentSource === src ? " active" : ""}`;
-    btn.dataset.source = src;
-    const label = { pinterest: "Pinterest", facebook: "Facebook", scan: "Scans", photo: "Photos" }[src] || src;
-    btn.textContent = `${label} (${s.count || 0})`;
-    btn.onclick = () => setSourceFilter(src);
-    wrap.appendChild(btn);
+async function loadCatalogTree() {
+  try {
+    const data = await api("/api/catalog/tree");
+    state.catalogTree = data.tree || [];
+    renderCatalogTree();
+  } catch (e) {
+    console.error("Failed to load catalog tree:", e);
+    const wrap = $("#catalogTree");
+    if (wrap) wrap.innerHTML = '<div class="muted sidebar-loading">Tree unavailable.</div>';
   }
 }
 
-function renderBoardList(boards) {
-  const wrap = $("#boardList");
+function renderCatalogTree() {
+  const wrap = $("#catalogTree");
   if (!wrap) return;
   wrap.innerHTML = "";
 
-  if (!boards.length) {
-    wrap.innerHTML = '<div class="muted sidebar-loading">No boards yet.</div>';
+  const tree = state.catalogTree || [];
+  if (!tree.length) {
+    wrap.innerHTML = '<div class="muted sidebar-loading">No catalog yet.</div>';
     return;
   }
 
+  // "All items" node at top
   const allBtn = document.createElement("button");
-  allBtn.className = `board-chip${!state.currentBoard ? " active" : ""}`;
-  allBtn.innerHTML = `<span>All boards</span>`;
-  allBtn.onclick = () => setBoardFilter(null);
+  allBtn.className = `tree-leaf${!state.currentSource && !state.currentBoard && !state.currentCollection && !state.currentCatalogFile ? " active" : ""}`;
+  allBtn.innerHTML = `<span>All Items</span>`;
+  allBtn.onclick = () => {
+    state.currentSource = null;
+    state.currentBoard = null;
+    state.currentCollection = null;
+    state.currentCatalogFile = null;
+    state.offset = 0;
+    renderCatalogTree();
+    loadAssets();
+  };
   wrap.appendChild(allBtn);
 
-  for (const b of boards) {
-    const board = b.board || b.value || "";
-    if (!board) continue;
-    const btn = document.createElement("button");
-    btn.className = `board-chip${state.currentBoard === board ? " active" : ""}`;
-    btn.innerHTML = `<span>${escapeHtml(board)}</span><span class="count">${b.count || 0}</span>`;
-    btn.onclick = () => setBoardFilter(board);
-    wrap.appendChild(btn);
+  for (const node of tree) {
+    if (node.type === "source") {
+      wrap.appendChild(buildSourceNode(node));
+    } else if (node.type === "dimension") {
+      wrap.appendChild(buildDimensionNode(node));
+    } else if (node.type === "collections_group") {
+      wrap.appendChild(buildCollectionsGroupNode(node));
+    }
+  }
+}
+
+function buildSourceNode(node) {
+  const el = document.createElement("div");
+  el.className = "tree-node";
+
+  const isActiveSource = state.currentSource === node.label.toLowerCase() && !state.currentBoard;
+  const toggle = document.createElement("button");
+  toggle.className = `tree-toggle${isActiveSource ? " active" : ""}`;
+  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span>${escapeHtml(node.label)}</span><span class="tree-count">${node.count}</span>`;
+
+  const children = document.createElement("div");
+  children.className = "tree-children";
+
+  // Check if any child is active — auto-expand
+  const hasActiveChild = (node.children || []).some(
+    (c) => state.currentBoard === (c.label || "").toLowerCase().replace(/ /g, "-") || state.currentBoard === c.label
+  );
+  const nodeKey = node.id;
+  if (hasActiveChild || isActiveSource) {
+    state.expandedTreeNodes.add(nodeKey);
+  }
+  if (state.expandedTreeNodes.has(nodeKey)) {
+    toggle.classList.add("expanded");
+    children.classList.add("open");
+  }
+
+  toggle.onclick = () => {
+    const isOpen = children.classList.contains("open");
+    if (isOpen) {
+      children.classList.remove("open");
+      toggle.classList.remove("expanded");
+      state.expandedTreeNodes.delete(nodeKey);
+    } else {
+      children.classList.add("open");
+      toggle.classList.add("expanded");
+      state.expandedTreeNodes.add(nodeKey);
+    }
+  };
+
+  // Double-click filters to just the source
+  toggle.ondblclick = () => {
+    state.currentSource = node.label.toLowerCase();
+    state.currentBoard = null;
+    state.currentCollection = null;
+    state.currentCatalogFile = null;
+    state.offset = 0;
+    renderCatalogTree();
+    loadAssets();
+  };
+
+  for (const child of (node.children || [])) {
+    const leaf = document.createElement("button");
+    const boardName = child.label;
+    const boardDbName = child.board_name || "";  // original board name from DB
+    const isCatchAll = boardDbName.startsWith("(");  // (small boards), (unsorted reels), etc.
+
+    // For catch-all entries, use catalog file mode; for regular boards, filter by source+board
+    const isActive = isCatchAll
+      ? state.currentCatalogFile === child.file
+      : (state.currentSource === node.label.toLowerCase()
+        && state.currentBoard
+        && state.currentBoard.toLowerCase() === boardDbName.toLowerCase());
+
+    leaf.className = `tree-leaf${isActive ? " active" : ""}`;
+    leaf.innerHTML = `<span>${escapeHtml(boardName)}</span><span class="tree-count">${child.count}</span>`;
+    leaf.onclick = () => {
+      if (isCatchAll) {
+        // Use catalog file mode for catch-all entries
+        state.currentSource = null;
+        state.currentBoard = null;
+        state.currentCollection = null;
+        state.currentCatalogFile = child.file;
+      } else {
+        // Direct source+board filter for named boards
+        state.currentSource = node.label.toLowerCase();
+        state.currentBoard = boardDbName;
+        state.currentCollection = null;
+        state.currentCatalogFile = null;
+      }
+      state.offset = 0;
+      renderCatalogTree();
+      loadAssets();
+    };
+    // Context menu for bulk triage (owner-only)
+    if (!isCatchAll) {
+      const _src = node.label.toLowerCase();
+      const _brd = boardDbName;
+      addTreeHideToggle(leaf, () => ({ source: _src, board: _brd }));
+    }
+    children.appendChild(leaf);
+  }
+
+  // Context menu for the entire source (owner-only)
+  addTreeHideToggle(toggle, () => ({ source: node.label.toLowerCase() }));
+
+  el.appendChild(toggle);
+  el.appendChild(children);
+  return el;
+}
+
+function buildDimensionNode(node) {
+  const el = document.createElement("div");
+  el.className = "tree-node";
+
+  const toggle = document.createElement("button");
+  toggle.className = "tree-toggle";
+  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span>${escapeHtml(node.label)}</span><span class="tree-count">${node.count}</span>`;
+
+  const children = document.createElement("div");
+  children.className = "tree-children";
+
+  // Check if any child is active — auto-expand
+  const hasActiveChild = (node.children || []).some(
+    (c) => state.currentCatalogFile === c.file
+  );
+  const nodeKey = node.id;
+  if (hasActiveChild) {
+    state.expandedTreeNodes.add(nodeKey);
+  }
+  if (state.expandedTreeNodes.has(nodeKey)) {
+    toggle.classList.add("expanded");
+    children.classList.add("open");
+  }
+
+  toggle.onclick = () => {
+    const isOpen = children.classList.contains("open");
+    if (isOpen) {
+      children.classList.remove("open");
+      toggle.classList.remove("expanded");
+      state.expandedTreeNodes.delete(nodeKey);
+    } else {
+      children.classList.add("open");
+      toggle.classList.add("expanded");
+      state.expandedTreeNodes.add(nodeKey);
+    }
+  };
+
+  for (const child of (node.children || [])) {
+    const leaf = document.createElement("button");
+    const isActive = state.currentCatalogFile === child.file;
+    leaf.className = `tree-leaf${isActive ? " active" : ""}`;
+    leaf.innerHTML = `<span>${escapeHtml(child.label)}</span><span class="tree-count">${child.count}</span>`;
+    leaf.onclick = () => {
+      state.currentSource = null;
+      state.currentBoard = null;
+      state.currentCollection = null;
+      state.currentCatalogFile = child.file;
+      state.offset = 0;
+      renderCatalogTree();
+      loadAssets();
+    };
+    children.appendChild(leaf);
+  }
+
+  el.appendChild(toggle);
+  el.appendChild(children);
+  return el;
+}
+
+function buildCollectionsGroupNode(node) {
+  const el = document.createElement("div");
+  el.className = "tree-node";
+
+  const toggle = document.createElement("button");
+  toggle.className = "tree-toggle";
+  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span>Collections</span><span class="tree-count">${node.count}</span>`;
+
+  const children = document.createElement("div");
+  children.className = "tree-children";
+
+  const hasActiveChild = (node.children || []).some((c) => state.currentCollection === c.collection_id);
+  const nodeKey = "collections";
+  if (hasActiveChild) {
+    state.expandedTreeNodes.add(nodeKey);
+  }
+  if (state.expandedTreeNodes.has(nodeKey)) {
+    toggle.classList.add("expanded");
+    children.classList.add("open");
+  }
+
+  toggle.onclick = () => {
+    const isOpen = children.classList.contains("open");
+    if (isOpen) {
+      children.classList.remove("open");
+      toggle.classList.remove("expanded");
+      state.expandedTreeNodes.delete(nodeKey);
+    } else {
+      children.classList.add("open");
+      toggle.classList.add("expanded");
+      state.expandedTreeNodes.add(nodeKey);
+    }
+  };
+
+  for (const child of (node.children || [])) {
+    const leaf = document.createElement("button");
+    const isActive = state.currentCollection === child.collection_id;
+    leaf.className = `tree-leaf${isActive ? " active" : ""}`;
+    leaf.innerHTML = `<span>${escapeHtml(child.label)}</span><span class="tree-count">${child.count}</span>`;
+    leaf.onclick = () => {
+      state.currentSource = null;
+      state.currentBoard = null;
+      state.currentCollection = child.collection_id;
+      state.currentCatalogFile = null;
+      state.offset = 0;
+      renderCatalogTree();
+      loadAssets();
+    };
+    // Context menu for bulk triage on collections (owner-only)
+    const _colId = child.collection_id;
+    addTreeHideToggle(leaf, () => ({ collection_id: _colId }));
+    children.appendChild(leaf);
+  }
+
+  el.appendChild(toggle);
+  el.appendChild(children);
+  return el;
+}
+
+// ─── Bulk triage from sidebar (owner-only) ───────────────────────────────────
+
+// Track which tree node keys have been bulk-hidden (for undo)
+// Key: serialized filter params string; Value: array of asset IDs that were hidden
+const _bulkHiddenByNode = {};
+
+function _nodeKey(filterParams) {
+  return JSON.stringify(filterParams, Object.keys(filterParams).sort());
+}
+
+function addTreeHideToggle(el, getFilterParams) {
+  if (!isOwner()) return;
+  const btn = document.createElement("button");
+  btn.className = "tree-hide-toggle";
+  btn.title = "Hide all items in this folder";
+  const key = _nodeKey(getFilterParams());
+  const isHidden = !!_bulkHiddenByNode[key];
+  btn.innerHTML = "✗";
+  btn.classList.toggle("tree-hide-active", isHidden);
+
+  btn.onclick = async (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const currentKey = _nodeKey(getFilterParams());
+    if (_bulkHiddenByNode[currentKey]) {
+      // UNDO: reset items back to pending
+      await bulkTriageFromTree(null, getFilterParams(), currentKey);
+    } else {
+      // HIDE: hide all items
+      await bulkTriageFromTree("hidden", getFilterParams(), currentKey);
+    }
+  };
+  el.style.position = "relative";
+  el.appendChild(btn);
+}
+
+async function bulkTriageFromTree(status, filterParams, nodeKey) {
+  const isHiding = status === "hidden";
+  const isUndoing = status === null && _bulkHiddenByNode[nodeKey];
+  try {
+    let ids;
+    if (isUndoing) {
+      // Use the saved IDs to undo
+      ids = _bulkHiddenByNode[nodeKey];
+    } else {
+      // Fetch all matching IDs from the server
+      const params = new URLSearchParams(filterParams);
+      params.set("limit", "5000");
+      params.set("offset", "0");
+      params.set("include_hidden", "1");
+      const data = await api(`/api/assets?${params}`);
+      ids = (data.assets || []).map((a) => a.id);
+    }
+    if (!ids || !ids.length) {
+      Shared.showToast("No items in this folder.", { type: "info" });
+      return;
+    }
+    await api("/api/assets/triage/bulk", {
+      method: "POST",
+      body: JSON.stringify({ ids, status }),
+    });
+
+    if (isHiding) {
+      _bulkHiddenByNode[nodeKey] = ids;
+      Shared.showToast(`${ids.length} item${ids.length === 1 ? "" : "s"} hidden.`, { type: "success" });
+    } else if (isUndoing) {
+      delete _bulkHiddenByNode[nodeKey];
+      Shared.showToast(`${ids.length} item${ids.length === 1 ? "" : "s"} restored.`, { type: "success" });
+    }
+
+    // Refresh grid + tree
+    await loadAssets();
+    if (isOwner()) loadHiddenTree();
+    // Update toggle button states in the sidebar
+    $$(".tree-hide-toggle").forEach((btn) => {
+      const parentEl = btn.closest(".tree-leaf") || btn.closest(".tree-toggle");
+      // Re-render will handle this, but force visual update on current toggles
+    });
+    renderCatalogTree();
+    if (isOwner() && state.hiddenTree) renderHiddenTree();
+  } catch (e) {
+    Shared.showToast(`Bulk triage failed: ${formatApiError(e)}`, { type: "error" });
   }
 }
 
 function setSourceFilter(source) {
   state.currentSource = source || null;
+  state.currentBoard = null;
+  state.currentCatalogFile = null;
   state.offset = 0;
-  renderSourceChips(state.facets.sources || []);
+  renderCatalogTree();
   loadAssets();
 }
 
 function setBoardFilter(board) {
   state.currentBoard = board || null;
+  state.currentCatalogFile = null;
   state.offset = 0;
-  renderBoardList(state.facets.boards || []);
+  renderCatalogTree();
   loadAssets();
+}
+
+function showDynamicSidebar(heading, items) {
+  const section = $("#dynamicSidebarSection");
+  const headingEl = $("#dynamicSidebarHeading");
+  const content = $("#dynamicSidebarContent");
+  if (!section || !headingEl || !content) return;
+  headingEl.textContent = heading;
+  content.innerHTML = "";
+  for (const item of items) {
+    const btn = document.createElement("button");
+    btn.className = "tree-leaf";
+    btn.innerHTML = `<span>${escapeHtml(item.label)}</span>${item.count != null ? `<span class="tree-count">${item.count}</span>` : ""}`;
+    if (item.onclick) btn.onclick = item.onclick;
+    content.appendChild(btn);
+  }
+  section.hidden = false;
+}
+
+function hideDynamicSidebar() {
+  const section = $("#dynamicSidebarSection");
+  if (section) section.hidden = true;
+}
+
+// ─── Hidden tree (owner-only) ──────────────────────────────────────────────────
+
+async function loadHiddenTree() {
+  try {
+    const data = await api("/api/hidden/tree");
+    state.hiddenTree = data;
+    renderHiddenTree();
+  } catch {
+    state.hiddenTree = null;
+  }
+}
+
+function renderHiddenTree() {
+  const wrap = $("#catalogTree");
+  if (!wrap || !state.hiddenTree) return;
+  const tree = state.hiddenTree;
+  if (!tree.total) return;
+
+  const el = document.createElement("div");
+  el.className = "tree-node tree-hidden-section";
+
+  const toggle = document.createElement("button");
+  toggle.className = "tree-toggle";
+  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-hidden-label">&#128065;&#xFE0E; Hidden</span><span class="tree-count">${tree.total}</span>`;
+
+  const children = document.createElement("div");
+  children.className = "tree-children";
+
+  // "All Hidden" leaf
+  const allHidden = state.triageFilter === "hidden" && !state.currentSource && !state.currentBoard;
+  const allLeaf = document.createElement("button");
+  allLeaf.className = `tree-leaf tree-hidden-folder${allHidden ? " active" : ""}`;
+  allLeaf.innerHTML = `<span>All Hidden</span><span class="tree-count">${tree.total}</span>`;
+  allLeaf.onclick = () => {
+    state.currentSource = null;
+    state.currentBoard = null;
+    state.currentCollection = null;
+    state.currentCatalogFile = null;
+    state.triageFilter = "hidden";
+    state.offset = 0;
+    renderCatalogTree();
+    renderHiddenTree();
+    loadAssets();
+  };
+  children.appendChild(allLeaf);
+
+  for (const src of (tree.sources || [])) {
+    for (const b of (src.boards || [])) {
+      const leaf = document.createElement("button");
+      const isActive = state.triageFilter === "hidden" && state.currentSource === src.source && state.currentBoard === b.board;
+      leaf.className = `tree-leaf tree-hidden-folder${isActive ? " active" : ""}`;
+      leaf.innerHTML = `<span>${escapeHtml(src.source)} / ${escapeHtml(b.board)}</span><span class="tree-count">${b.count}</span>`;
+      leaf.onclick = () => {
+        state.currentSource = src.source;
+        state.currentBoard = b.board;
+        state.currentCollection = null;
+        state.currentCatalogFile = null;
+        state.triageFilter = "hidden";
+        state.offset = 0;
+        renderCatalogTree();
+        renderHiddenTree();
+        loadAssets();
+      };
+      children.appendChild(leaf);
+    }
+  }
+
+  const nodeKey = "hidden-tree";
+  if (allHidden || state.triageFilter === "hidden") {
+    state.expandedTreeNodes.add(nodeKey);
+  }
+  if (state.expandedTreeNodes.has(nodeKey)) {
+    toggle.classList.add("expanded");
+    children.classList.add("open");
+  }
+
+  toggle.onclick = () => {
+    const isOpen = children.classList.contains("open");
+    if (isOpen) {
+      state.expandedTreeNodes.delete(nodeKey);
+    } else {
+      state.expandedTreeNodes.add(nodeKey);
+    }
+    children.classList.toggle("open");
+    toggle.classList.toggle("expanded");
+  };
+
+  el.appendChild(toggle);
+  el.appendChild(children);
+  wrap.appendChild(el);
+}
+
+// ─── Question badge + polling (owner-only) ──────────────────────────────────────
+
+async function pollQuestions() {
+  try {
+    const data = await api("/api/questions/dashboard");
+    state.openQuestions = data.questions || [];
+    renderQuestionBadge();
+  } catch {
+    // silent
+  }
+}
+
+function renderQuestionBadge() {
+  let badge = $("#questionBadge");
+  if (!badge) {
+    // Create badge element in header if it doesn't exist
+    const header = $(".top-bar") || $("header");
+    if (!header) return;
+    badge = document.createElement("button");
+    badge.id = "questionBadge";
+    badge.className = "question-badge";
+    badge.title = "Open questions from collaborators";
+    badge.onclick = toggleQuestionPanel;
+    header.appendChild(badge);
+  }
+  const count = state.openQuestions.length;
+  badge.hidden = count === 0;
+  badge.innerHTML = `<span class="question-badge-icon">?</span><span class="question-badge-count">${count}</span>`;
+}
+
+function toggleQuestionPanel() {
+  let panel = $("#questionPanel");
+  if (panel) {
+    panel.remove();
+    return;
+  }
+  panel = document.createElement("div");
+  panel.id = "questionPanel";
+  panel.className = "question-panel";
+
+  const header = document.createElement("div");
+  header.className = "question-panel-header";
+  header.innerHTML = `<strong>Open Questions (${state.openQuestions.length})</strong>`;
+  const closeBtn = document.createElement("button");
+  closeBtn.textContent = "\u00d7";
+  closeBtn.className = "question-panel-close";
+  closeBtn.onclick = () => panel.remove();
+  header.appendChild(closeBtn);
+  panel.appendChild(header);
+
+  if (!state.openQuestions.length) {
+    panel.innerHTML += '<div class="question-panel-empty">No open questions!</div>';
+  } else {
+    for (const q of state.openQuestions) {
+      const item = document.createElement("div");
+      item.className = "question-panel-item";
+      item.innerHTML = `
+        <div class="question-panel-item-meta">${escapeHtml(q.actor_name || "Anonymous")} &middot; ${escapeHtml(q.asset_title || "Untitled")}</div>
+        <div class="question-panel-item-text">${escapeHtml(q.text || "(no text)")}</div>
+      `;
+      item.onclick = () => {
+        panel.remove();
+        // Navigate to the asset
+        const asset = state.assets.find((a) => a.id === q.asset_id);
+        if (asset) { openModal(asset); }
+        else { Shared.showToast("Loading item...", { type: "info", duration: 2000 }); }
+      };
+      panel.appendChild(item);
+    }
+  }
+
+  const badge = $("#questionBadge");
+  if (badge) badge.parentElement.appendChild(panel);
+  else document.body.appendChild(panel);
 }
 
 // ─── Triage status filter ───────────────────────────────────────────────────────
@@ -414,46 +1012,20 @@ async function loadCollections() {
   try {
     const data = await api("/api/collections");
     state.collections = data.collections || [];
-    renderCollectionList();
   } catch (e) {
     console.error("Failed to load collections:", e);
   }
 }
 
-function renderCollectionList() {
-  const wrap = $("#collectionList");
-  if (!wrap) return;
-  wrap.innerHTML = "";
-
-  const visible = state.collections.filter((c) => (c.name || "").toLowerCase() !== "hidden");
-
-  if (!visible.length) {
-    wrap.innerHTML = '<div class="muted sidebar-loading">No collections yet.</div>';
-    return;
-  }
-
-  // "All" (deselect collection)
-  if (state.currentCollection) {
-    const allBtn = document.createElement("button");
-    allBtn.className = "collection-chip";
-    allBtn.textContent = "← All items";
-    allBtn.onclick = () => setCollectionFilter(null);
-    wrap.appendChild(allBtn);
-  }
-
-  for (const c of visible) {
-    const btn = document.createElement("button");
-    btn.className = `collection-chip${state.currentCollection === c.id ? " active" : ""}`;
-    btn.innerHTML = `<span>${escapeHtml(c.name)}</span><span class="count">${c.count || 0}</span>`;
-    btn.onclick = () => setCollectionFilter(c.id);
-    wrap.appendChild(btn);
-  }
-}
-
 function setCollectionFilter(collectionId) {
   state.currentCollection = collectionId || null;
+  if (collectionId) {
+    state.currentSource = null;
+    state.currentBoard = null;
+    state.currentCatalogFile = null;
+  }
   state.offset = 0;
-  renderCollectionList();
+  renderCatalogTree();
   loadAssets();
 }
 
@@ -463,6 +1035,7 @@ $("#newCollection").addEventListener("click", async () => {
   try {
     await api("/api/collections", { method: "POST", body: JSON.stringify({ name: name.trim() }) });
     await loadCollections();
+    await loadCatalogTree();
     Shared.showToast(`Created collection "${name.trim()}"`, { type: "success" });
   } catch (e) {
     Shared.showToast(`Failed: ${formatApiError(e)}`, { type: "error" });
@@ -574,8 +1147,13 @@ async function openModal(asset) {
   const sourceLink = $("#sourceLink");
   if (sourceLink) {
     const ref = asset.source_ref || "";
-    sourceLink.href = ref || "#";
-    sourceLink.textContent = ref ? (asset.source === "scan" ? "Open PDF" : `Open ${asset.source || "original"}`) : "No source";
+    if (asset.source === "scan" && ref) {
+      sourceLink.href = `/media/${asset.id}?kind=pdf`;
+      sourceLink.textContent = "Open PDF";
+    } else {
+      sourceLink.href = ref || "#";
+      sourceLink.textContent = ref ? `Open ${asset.source || "original"}` : "No source";
+    }
   }
 
   // Source site link (Pinterest/Facebook external URL)
@@ -592,11 +1170,10 @@ async function openModal(asset) {
   // View source button — show only for scans (as "View Original"), hide for social
   const viewSourceBtn = $("#viewSourceBtn");
   if (viewSourceBtn) {
-    const ref = asset.source_ref || "";
-    if (asset.source === "scan") {
+    if (asset.source === "scan" && asset.source_ref) {
       viewSourceBtn.textContent = "View Original";
-      viewSourceBtn.onclick = () => { if (ref) window.open(ref, "_blank", "noopener"); };
-      viewSourceBtn.disabled = !ref;
+      viewSourceBtn.onclick = () => { window.open(`/media/${asset.id}?kind=pdf`, "_blank", "noopener"); };
+      viewSourceBtn.disabled = false;
       viewSourceBtn.hidden = false;
     } else {
       viewSourceBtn.hidden = true;
@@ -614,12 +1191,50 @@ async function openModal(asset) {
     notesArea.oninput = () => scheduleNotesUpdate(asset.id, notesArea.value);
   }
 
+  // Keeper star in modal title
+  const keeperStar = $("#modalKeeperStar");
+  if (keeperStar) keeperStar.hidden = asset.triage_status !== "keeper";
+
   // Triage buttons
   updateModalTriageButtons(asset.triage_status);
   const keepBtn = $("#modalKeepBtn");
   const hideBtn = $("#modalHideBtn");
   if (keepBtn) keepBtn.onclick = async () => { await setTriageFromModal(asset, "keeper"); };
   if (hideBtn) hideBtn.onclick = async () => { await setTriageFromModal(asset, "hidden"); };
+
+  // Flag button
+  const flagBtn = $("#modalFlagBtn");
+  if (flagBtn) {
+    flagBtn.classList.toggle("active", !!asset.flagged);
+    flagBtn.textContent = asset.flagged ? "🚩 Flagged" : "🚩 Flag";
+    flagBtn.onclick = async () => {
+      const newFlagged = asset.flagged ? 0 : 1;
+      try {
+        await api(`/api/assets/${encodeURIComponent(asset.id)}/flag`, {
+          method: "POST",
+          body: JSON.stringify({ flagged: newFlagged }),
+        });
+        asset.flagged = newFlagged;
+        flagBtn.classList.toggle("active", !!newFlagged);
+        flagBtn.textContent = newFlagged ? "🚩 Flagged" : "🚩 Flag";
+        // Update card badge
+        const card = $(`[data-id="${asset.id}"]`);
+        if (card) {
+          const oldBadge = card.querySelector(".triage-badge.flagged");
+          if (oldBadge) oldBadge.remove();
+          if (newFlagged) {
+            const badge = document.createElement("span");
+            badge.className = "triage-badge flagged";
+            badge.title = "Flagged for review";
+            card.querySelector(".card-image").prepend(badge);
+          }
+        }
+        Shared.showToast(newFlagged ? "Flagged for review" : "Flag removed", { type: "success" });
+      } catch (e) {
+        Shared.showToast(`Failed: ${formatApiError(e)}`, { type: "error" });
+      }
+    };
+  }
 
   // Scan page nav
   const imageStage = $("#imageStage");
@@ -668,6 +1283,9 @@ async function setTriageFromModal(asset, status) {
     });
     asset.triage_status = newStatus;
     updateModalTriageButtons(newStatus);
+    // Update keeper star in modal title
+    const keeperStar = $("#modalKeeperStar");
+    if (keeperStar) keeperStar.hidden = newStatus !== "keeper";
     // Update badge on card
     const card = $(`[data-id="${asset.id}"]`);
     if (card) {
@@ -677,12 +1295,12 @@ async function setTriageFromModal(asset, status) {
         const badge = document.createElement("span");
         badge.className = "triage-badge keeper";
         badge.title = "Keeper";
-        card.querySelector(".card-image").appendChild(badge);
+        card.querySelector(".card-image").prepend(badge);
       } else if (newStatus === "hidden") {
         const badge = document.createElement("span");
         badge.className = "triage-badge hidden-status";
         badge.title = "Hidden";
-        card.querySelector(".card-image").appendChild(badge);
+        card.querySelector(".card-image").prepend(badge);
       }
     }
     const msg = newStatus === "keeper" ? "Marked as keeper" : newStatus === "hidden" ? "Hidden" : "Reset to pending";
@@ -751,12 +1369,21 @@ function renderAnnotations() {
   if (!wrap) return;
   wrap.innerHTML = "";
   state.annotations.forEach((ann, idx) => {
+    const isQuestion = ann.annotation_type === "question";
+    const isResolved = isQuestion && ann.resolved;
     const el = document.createElement("div");
-    el.className = `listItem annItem${state.activeAnnotationId === ann.id ? " active" : ""}`;
+    el.className = `listItem annItem${state.activeAnnotationId === ann.id ? " active" : ""}${isQuestion ? " ann-question" : ""}${isResolved ? " ann-resolved" : ""}`;
+
+    const marker = isQuestion ? "?" : `#${idx + 1}`;
+    const actorLabel = ann.actor_name ? `<span class="ann-actor">${escapeHtml(ann.actor_name)}</span>` : "";
+    const resolveBtn = isQuestion && state.actor && state.actor.role === "owner"
+      ? `<button class="iconBtn ann-resolve" data-resolve="${ann.id}" title="${isResolved ? "Unresolve" : "Resolve"}" type="button">${isResolved ? "&#9745;" : "&#9744;"}</button>`
+      : "";
+
     el.innerHTML = `
       <div class="annHeader">
-        <strong>#${idx + 1}</strong>
-        <button class="iconBtn danger" data-del="${ann.id}" type="button">×</button>
+        <strong>${marker}</strong>${actorLabel}${resolveBtn}
+        <button class="iconBtn danger" data-del="${ann.id}" type="button">\u00d7</button>
       </div>
       <textarea data-ann="${ann.id}">${escapeHtml(ann.text || "")}</textarea>
     `;
@@ -771,6 +1398,21 @@ function renderAnnotations() {
       e.stopPropagation();
       await deleteAnnotationWithUndo(ann);
     };
+    const resolveEl = el.querySelector("[data-resolve]");
+    if (resolveEl) {
+      resolveEl.onclick = async (e) => {
+        e.stopPropagation();
+        const newVal = ann.resolved ? 0 : 1;
+        try {
+          await api(`/api/annotations/${ann.id}`, { method: "PUT", body: JSON.stringify({ resolved: newVal }) });
+          ann.resolved = newVal;
+          renderAnnotations();
+          renderMarkers();
+        } catch (err) {
+          Shared.showToast(`Failed to update: ${formatApiError(err)}`, { type: "error" });
+        }
+      };
+    }
     wrap.appendChild(el);
   });
 }
@@ -868,15 +1510,18 @@ function renderMarkers() {
   const stage = $("#imageStage");
   if (!stage) return;
   state.annotations.forEach((ann, idx) => {
+    const isQuestion = ann.annotation_type === "question";
+    const isResolved = isQuestion && ann.resolved;
     const m = document.createElement("div");
-    m.className = "marker";
+    m.className = `marker${isQuestion ? " marker-question" : ""}${isResolved ? " marker-resolved" : ""}`;
     const pt = normalizedToStagePoint(ann.x, ann.y);
     m.style.left = `${pt.left}px`;
     m.style.top = `${pt.top}px`;
     m.dataset.id = ann.id;
-    m.style.background = markerColor(idx);
+    m.style.background = isQuestion ? "#e67e22" : markerColor(idx);
+    const markerLabel = isQuestion ? "?" : `${idx + 1}`;
     m.innerHTML = `
-      <span style="color:#F2F2F6">${idx + 1}</span>
+      <span style="color:#F2F2F6">${markerLabel}</span>
       <div class="badgeIcons">
         <button class="ok" data-ok="${ann.id}" aria-label="Done" type="button">
           <svg viewBox="0 0 16 16" width="12" height="12"><path d="M3.2 8.4l2.3 2.3L12.8 3.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -908,9 +1553,12 @@ if (imageStageEl) {
     if (e.target.closest(".marker") || e.target.closest(".floatingNote")) return;
     const point = stagePointToNormalized(e.clientX, e.clientY);
     if (!point) return;
+    // Check if "question mode" toggle is active
+    const qToggle = $("#annQuestionToggle");
+    const annotation_type = qToggle && qToggle.checked ? "question" : "note";
     const res = await api("/api/annotations", {
       method: "POST",
-      body: JSON.stringify({ asset_id: state.modalAsset.id, x: point.x, y: point.y, text: "" }),
+      body: JSON.stringify({ asset_id: state.modalAsset.id, x: point.x, y: point.y, text: "", annotation_type }),
     });
     state.annotations.push(res.annotation);
     state.activeAnnotationId = res.annotation.id;
@@ -979,6 +1627,14 @@ function enterReview() {
   if (reviewComplete) reviewComplete.hidden = true;
   if (reviewCard) reviewCard.hidden = false;
 
+  // Update back button label based on whether we came from canvas review
+  const backBtn = $("#reviewBack");
+  if (backBtn) backBtn.textContent = state.canvasReview ? "← Back to grid" : "← Back to browsing";
+
+  // Hide canvas action bar while in one-by-one (it'll come back when we return to grid)
+  const actionBar = $("#canvasActionBar");
+  if (actionBar) actionBar.hidden = true;
+
   renderReviewCard();
 }
 
@@ -988,7 +1644,15 @@ function exitReview() {
   const reviewView = $("#reviewView");
   if (browseView) browseView.hidden = false;
   if (reviewView) reviewView.hidden = true;
-  loadAssets();
+
+  if (state.canvasReview) {
+    // Return to canvas review grid — re-show action bar, keep review state
+    const actionBar = $("#canvasActionBar");
+    if (actionBar) actionBar.hidden = false;
+    loadAssets();
+  } else {
+    loadAssets();
+  }
 }
 
 function renderReviewCard() {
@@ -1011,7 +1675,11 @@ function renderReviewCard() {
   }
 
   const titleEl = $("#reviewTitle");
-  if (titleEl) titleEl.textContent = displayTitle(item);
+  if (titleEl) {
+    const keeperPrefix = item.triage_status === "keeper" ? "★ " : "";
+    titleEl.textContent = keeperPrefix + displayTitle(item);
+    titleEl.style.color = item.triage_status === "keeper" ? "#b8860b" : "";
+  }
 
   const metaEl = $("#reviewMeta");
   if (metaEl) {
@@ -1154,9 +1822,160 @@ function showReviewComplete() {
   }
 }
 
-// Review button wiring
+// ─── Canvas Review Mode ──────────────────────────────────────────────────────
+
+function enterCanvasReview() {
+  if (!state.assets.length) {
+    Shared.showToast("No items to review.", { type: "info" });
+    return;
+  }
+  state.canvasReview = true;
+  state.canvasSelected.clear();
+
+  const browseView = $("#browseView");
+  if (browseView) browseView.classList.add("canvas-review-active");
+
+  const actionBar = $("#canvasActionBar");
+  if (actionBar) actionBar.hidden = false;
+
+  // Highlight grid button to indicate active review
+  const gridBtn = $("#viewGrid");
+  if (gridBtn) gridBtn.classList.add("reviewing");
+
+  updateCanvasSelectionCount();
+  Shared.showToast("Review mode — click cards to select, then act on selection.", { type: "info" });
+}
+
+function exitCanvasReview() {
+  state.canvasReview = false;
+  state.canvasSelected.clear();
+
+  const browseView = $("#browseView");
+  if (browseView) browseView.classList.remove("canvas-review-active");
+
+  const actionBar = $("#canvasActionBar");
+  if (actionBar) actionBar.hidden = true;
+
+  // Remove review highlight from grid button
+  const gridBtn = $("#viewGrid");
+  if (gridBtn) gridBtn.classList.remove("reviewing");
+
+  $$(".card.canvas-selected").forEach((c) => c.classList.remove("canvas-selected"));
+}
+
+function toggleCanvasSelection(id, cardEl) {
+  if (state.canvasSelected.has(id)) {
+    state.canvasSelected.delete(id);
+    if (cardEl) cardEl.classList.remove("canvas-selected");
+  } else {
+    state.canvasSelected.add(id);
+    if (cardEl) cardEl.classList.add("canvas-selected");
+  }
+  updateCanvasSelectionCount();
+}
+
+function selectAllCanvas() {
+  state.assets.forEach((a) => state.canvasSelected.add(a.id));
+  $$(".card").forEach((c) => {
+    const id = c.dataset.id;
+    if (id && state.canvasSelected.has(id)) c.classList.add("canvas-selected");
+  });
+  updateCanvasSelectionCount();
+}
+
+function clearCanvasSelection() {
+  state.canvasSelected.clear();
+  $$(".card.canvas-selected").forEach((c) => c.classList.remove("canvas-selected"));
+  updateCanvasSelectionCount();
+}
+
+function updateCanvasSelectionCount() {
+  const count = state.canvasSelected.size;
+  const el = $("#canvasSelectionCount");
+  if (el) el.textContent = `${count} selected`;
+  const hasSelection = count > 0;
+  ["#canvasKeep", "#canvasHide", "#canvasFlag"].forEach((sel) => {
+    const btn = $(sel);
+    if (btn) btn.disabled = !hasSelection;
+  });
+}
+
+async function canvasBulkKeep() {
+  const ids = Array.from(state.canvasSelected);
+  if (!ids.length) return;
+  try {
+    await api("/api/assets/triage/bulk", {
+      method: "POST",
+      body: JSON.stringify({ ids, status: "keeper" }),
+    });
+    ids.forEach((id) => {
+      const a = state.assets.find((x) => x.id === id);
+      if (a) a.triage_status = "keeper";
+    });
+    Shared.showToast(`${ids.length} item${ids.length === 1 ? "" : "s"} marked as keepers.`, { type: "success" });
+    clearCanvasSelection();
+    renderGrid();
+  } catch (e) {
+    Shared.showToast(`Bulk keep failed: ${formatApiError(e)}`, { type: "error" });
+  }
+}
+
+async function canvasBulkHide() {
+  const ids = Array.from(state.canvasSelected);
+  if (!ids.length) return;
+  try {
+    await api("/api/assets/triage/bulk", {
+      method: "POST",
+      body: JSON.stringify({ ids, status: "hidden" }),
+    });
+    Shared.showToast(`${ids.length} item${ids.length === 1 ? "" : "s"} hidden.`, { type: "success" });
+    clearCanvasSelection();
+    await loadAssets();
+  } catch (e) {
+    Shared.showToast(`Bulk hide failed: ${formatApiError(e)}`, { type: "error" });
+  }
+}
+
+async function canvasBulkFlag() {
+  const ids = Array.from(state.canvasSelected);
+  if (!ids.length) return;
+  try {
+    await api("/api/assets/flag/bulk", {
+      method: "POST",
+      body: JSON.stringify({ ids, flagged: 1 }),
+    });
+    ids.forEach((id) => {
+      const a = state.assets.find((x) => x.id === id);
+      if (a) a.flagged = 1;
+    });
+    Shared.showToast(`${ids.length} item${ids.length === 1 ? "" : "s"} flagged for review.`, { type: "success" });
+    clearCanvasSelection();
+    renderGrid();
+  } catch (e) {
+    Shared.showToast(`Bulk flag failed: ${formatApiError(e)}`, { type: "error" });
+  }
+}
+
+// Canvas review action bar wiring
+const canvasKeepBtn = $("#canvasKeep");
+if (canvasKeepBtn) canvasKeepBtn.addEventListener("click", canvasBulkKeep);
+const canvasHideBtn = $("#canvasHide");
+if (canvasHideBtn) canvasHideBtn.addEventListener("click", canvasBulkHide);
+const canvasFlagBtn = $("#canvasFlag");
+if (canvasFlagBtn) canvasFlagBtn.addEventListener("click", canvasBulkFlag);
+const canvasClearBtn = $("#canvasClear");
+if (canvasClearBtn) canvasClearBtn.addEventListener("click", clearCanvasSelection);
+const canvasToOneByOneBtn = $("#canvasToOneByOne");
+if (canvasToOneByOneBtn) canvasToOneByOneBtn.addEventListener("click", () => {
+  exitCanvasReview();
+  enterReview();
+});
+const canvasExitReviewBtn = $("#canvasExitReview");
+if (canvasExitReviewBtn) canvasExitReviewBtn.addEventListener("click", exitCanvasReview);
+
+// Review button — canvas review is the default
 const reviewBtn = $("#reviewBtn");
-if (reviewBtn) reviewBtn.addEventListener("click", enterReview);
+if (reviewBtn) reviewBtn.addEventListener("click", enterCanvasReview);
 
 const reviewBackBtn = $("#reviewBack");
 if (reviewBackBtn) reviewBackBtn.addEventListener("click", exitReview);
@@ -1209,11 +2028,24 @@ window.addEventListener("keydown", (e) => {
     if (!$("#modal").classList.contains("hidden")) { closeModal(); return; }
     if (!$("#scanImportModal").classList.contains("hidden") && !state.scanImportBusy) { closeScanImportModal(); return; }
     if (!$("#photoImportModal").classList.contains("hidden") && !state.photoImportBusy) { closePhotoImportModal(); return; }
+    if (state.canvasReview) { exitCanvasReview(); return; }
     if (state.view === "review") { exitReview(); return; }
     return;
   }
 
-  // Review mode shortcuts (only when review is active and no modal/input focused)
+  // Canvas review shortcuts
+  if (state.canvasReview) {
+    const tag = (e.target && e.target.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select") return;
+    if (!$("#modal").classList.contains("hidden")) return;
+    if ((e.ctrlKey || e.metaKey) && e.key === "a") {
+      e.preventDefault();
+      selectAllCanvas();
+    }
+    return;
+  }
+
+  // One-by-one review mode shortcuts (only when review is active and no modal/input focused)
   if (state.view !== "review") return;
   const tag = (e.target && e.target.tagName || "").toLowerCase();
   if (tag === "input" || tag === "textarea" || tag === "select") return;
@@ -1254,9 +2086,26 @@ window.addEventListener("keydown", (e) => {
 
 // ─── Chat bar ────────────────────────────────────────────────────────────────────
 
+function showChatSpinner(text) {
+  const bar = $("#chatResponse");
+  if (!bar) return;
+  clearTimeout(addChatResponse._timer);
+  bar.innerHTML = `<span class="chat-spinner"></span>${escapeHtml(text || "Thinking…")}`;
+  bar.hidden = false;
+}
+
+function hideChatSpinner() {
+  const bar = $("#chatResponse");
+  if (!bar) return;
+  clearTimeout(addChatResponse._timer);
+  bar.hidden = true;
+  bar.innerHTML = "";
+}
+
 function addChatResponse(text, duration) {
   const bar = $("#chatResponse");
   if (!bar) return;
+  bar.innerHTML = "";
   bar.textContent = text;
   bar.hidden = false;
   clearTimeout(addChatResponse._timer);
@@ -1264,70 +2113,256 @@ function addChatResponse(text, duration) {
 }
 
 async function processChat(text) {
-  const lower = text.toLowerCase().trim();
-  if (!lower) return;
+  const trimmed = (text || "").trim();
+  if (!trimmed) return;
 
-  // Create collection
-  const createMatch = lower.match(/(?:make|create)\s+(?:a\s+)?(?:new\s+)?collection\s+(?:called\s+|named\s+)?["']?(.+?)["']?$/);
-  if (createMatch) {
-    const name = createMatch[1].trim();
-    try {
-      await api("/api/collections", { method: "POST", body: JSON.stringify({ name }) });
-      await loadCollections();
-      addChatResponse(`Created collection "${name}".`);
-    } catch (e) { addChatResponse(`Couldn't create collection: ${formatApiError(e)}`); }
-    return;
-  }
+  showChatSpinner("Thinking\u2026");
 
-  // Show keepers/pending/hidden
-  const statusMatch = lower.match(/(?:show|see|filter|find)\s+(?:me\s+)?(?:only\s+)?(?:the\s+)?(\bkeepers?\b|\bpending\b|\bhidden\b|\bneeds?\s+comment\b)/);
-  if (statusMatch) {
-    const s = statusMatch[1].replace(/\s+/g, "-");
-    const triageVal = s.startsWith("keeper") ? "keeper" : s === "pending" ? "pending" : s === "hidden" ? "hidden" : "needs-comment";
-    state.triageFilter = triageVal;
-    // Update chip
-    $$("[data-triage]").forEach((c) => {
-      const match = (c.dataset.triage === triageVal) || (triageVal === "needs-comment" && c.dataset.triage === "needs-comment");
-      c.classList.toggle("active", match);
+  try {
+    const data = await api("/api/chat", {
+      method: "POST",
+      body: JSON.stringify({ message: trimmed }),
     });
-    await loadAssets();
-    addChatResponse(`Showing ${triageVal} items.`);
-    return;
-  }
 
-  // Show collection
-  const showMatch = lower.match(/(?:show|open|view)\s+(?:me\s+)?(?:the\s+)?(?:collection\s+)?["']?(.+?)["']?(?:\s+collection)?$/);
-  if (showMatch) {
-    const name = showMatch[1].trim();
-    const col = state.collections.find((c) => c.name.toLowerCase().includes(name));
-    if (col) {
-      setCollectionFilter(col.id);
-      addChatResponse(`Showing collection "${col.name}".`);
-    } else {
-      addChatResponse(`No collection matching "${name}" found.`);
+    const action = data.action || "message";
+    const params = data.params || {};
+    const message = data.message || "";
+    const routingMessage = data.routing_message || "";
+
+    // Show routing acknowledgment while grid loads
+    if (routingMessage && action !== "message") {
+      showChatSpinner(routingMessage);
     }
-    return;
-  }
 
-  // Search
-  const searchMatch = lower.match(/(?:find|search(?:\s+for)?)\s+(.+)/);
-  if (searchMatch) {
-    const query = searchMatch[1].trim();
-    state.q = query;
-    const searchInput = $("#search");
-    if (searchInput) searchInput.value = query;
-    await loadAssets();
-    addChatResponse(`Searching for "${query}".`);
-    return;
-  }
+    await executeChatAction(action, params);
 
-  // Review
-  if (lower.match(/\breview\b/)) {
-    enterReview();
-    return;
-  }
+    hideChatSpinner();
 
-  addChatResponse("I didn't understand that. Try: 'make a collection called Kitchen', 'show keepers', 'find cabinets', or 'review'.", 12000);
+    if (message) {
+      addChatResponse(message, action === "message" ? 12000 : 6000);
+    }
+  } catch (e) {
+    hideChatSpinner();
+    const errMsg = formatApiError(e);
+    if (errMsg.includes("ANTHROPIC_API_KEY") || errMsg.includes("Anthropic")) {
+      addChatResponse("Chat requires an Anthropic API key. Set ANTHROPIC_API_KEY.", 12000);
+    } else {
+      addChatResponse(`Chat error: ${errMsg}`, 8000);
+    }
+  }
+}
+
+async function executeChatAction(action, params) {
+  switch (action) {
+    case "show_items": {
+      // Fetch specific items by ID prefix and display
+      const ids = (params.ids || []).join(",");
+      if (!ids) break;
+      try {
+        const data = await api(`/api/assets?ids=${encodeURIComponent(ids)}&include_hidden=1&limit=200`);
+        state.assets = data.assets || [];
+        state.hasMore = false;
+        state.offset = state.assets.length;
+        renderGrid();
+        updateStats();
+        updateLoadMoreBtn();
+      } catch (e) {
+        addChatResponse(`Failed to load items: ${formatApiError(e)}`, 8000);
+      }
+      break;
+    }
+    case "show_sidebar": {
+      const type = params.type || "";
+      if (type === "collections") {
+        await loadCollections();
+        const visible = state.collections.filter((c) => (c.name || "").toLowerCase() !== "hidden");
+        showDynamicSidebar("Collections", visible.map((c) => ({
+          label: c.name,
+          count: c.count || 0,
+          onclick: () => { setCollectionFilter(c.id); hideDynamicSidebar(); },
+        })));
+      } else if (type === "boards") {
+        const sourceFilter = (params.source || "").toLowerCase();
+        // Build board list from catalog tree
+        const boards = [];
+        for (const node of (state.catalogTree || [])) {
+          if (node.type !== "source") continue;
+          if (sourceFilter && node.label.toLowerCase() !== sourceFilter) continue;
+          for (const child of (node.children || [])) {
+            boards.push({
+              label: `${child.label} (${node.label})`,
+              count: child.count,
+              onclick: () => {
+                state.currentSource = node.label.toLowerCase();
+                const boardFilter = child.file ? child.file.split("/").pop().replace(".md", "").replace(/_/g, " ") : child.label.toLowerCase();
+                state.currentBoard = boardFilter;
+                state.currentCollection = null;
+                state.offset = 0;
+                renderCatalogTree();
+                loadAssets();
+                hideDynamicSidebar();
+              },
+            });
+          }
+        }
+        showDynamicSidebar(sourceFilter ? `${sourceFilter} Boards` : "All Boards", boards);
+      } else if (type === "sources") {
+        const sources = (state.catalogTree || [])
+          .filter((n) => n.type === "source")
+          .map((n) => ({
+            label: n.label,
+            count: n.count,
+            onclick: () => {
+              state.currentSource = n.label.toLowerCase();
+              state.currentBoard = null;
+              state.currentCollection = null;
+              state.offset = 0;
+              renderCatalogTree();
+              loadAssets();
+              hideDynamicSidebar();
+            },
+          }));
+        showDynamicSidebar("Sources", sources);
+      }
+      break;
+    }
+    case "filter": {
+      if (params.source !== undefined) {
+        state.currentSource = params.source || null;
+      }
+      if (params.board !== undefined) {
+        state.currentBoard = params.board || null;
+      }
+      if (params.triage_status !== undefined) {
+        state.triageFilter = params.triage_status || "";
+        $$("[data-triage]").forEach((c) => {
+          c.classList.toggle("active", c.dataset.triage === (params.triage_status || ""));
+        });
+      }
+      if (params.q !== undefined) {
+        state.q = params.q || "";
+        const si = $("#search");
+        if (si) si.value = state.q;
+      }
+      if (params.collection_id !== undefined) {
+        state.currentCollection = params.collection_id || null;
+      }
+      renderCatalogTree();
+      await loadAssets();
+      break;
+    }
+    case "search": {
+      state.q = params.q || "";
+      const si = $("#search");
+      if (si) si.value = state.q;
+      await loadAssets();
+      break;
+    }
+    case "semantic_search": {
+      state.q = `sem:${params.q || ""}`;
+      const si = $("#search");
+      if (si) si.value = state.q;
+      await loadAssets();
+      break;
+    }
+    case "create_collection": {
+      if (params.name) {
+        try {
+          await api("/api/collections", {
+            method: "POST",
+            body: JSON.stringify({ name: params.name }),
+          });
+          await loadCollections();
+          await loadCatalogTree();
+        } catch (e) {
+          addChatResponse(`Couldn't create collection: ${formatApiError(e)}`, 8000);
+        }
+      }
+      break;
+    }
+    case "show_collection": {
+      const name = (params.name || "").toLowerCase();
+      const col = state.collections.find(
+        (c) => c.name.toLowerCase() === name || c.name.toLowerCase().includes(name)
+      );
+      if (col) {
+        setCollectionFilter(col.id);
+      } else if (params.collection_id) {
+        setCollectionFilter(params.collection_id);
+      }
+      break;
+    }
+    case "enter_review": {
+      enterCanvasReview();
+      break;
+    }
+    case "clear_filters": {
+      state.currentSource = null;
+      state.currentBoard = null;
+      state.currentCollection = null;
+      state.currentCatalogFile = null;
+      state.triageFilter = "";
+      state.q = "";
+      const si = $("#search");
+      if (si) si.value = "";
+      $$("[data-triage]").forEach((c) => {
+        c.classList.toggle("active", c.dataset.triage === "");
+      });
+      renderCatalogTree();
+      await loadAssets();
+      break;
+    }
+    case "bulk_triage": {
+      const status = params.status || null;
+      // In canvas review with selection, act on selected items; otherwise all visible
+      const ids = (state.canvasReview && state.canvasSelected.size > 0)
+        ? Array.from(state.canvasSelected)
+        : state.assets.map((a) => a.id);
+      if (!ids.length) {
+        addChatResponse("No items visible to triage.", 6000);
+        break;
+      }
+      try {
+        await api("/api/assets/triage/bulk", {
+          method: "POST",
+          body: JSON.stringify({ ids, status }),
+        });
+        if (state.canvasReview) clearCanvasSelection();
+        await loadAssets();
+      } catch (e) {
+        addChatResponse(`Bulk triage failed: ${formatApiError(e)}`, 8000);
+      }
+      break;
+    }
+    case "bulk_flag": {
+      const ids = (state.canvasReview && state.canvasSelected.size > 0)
+        ? Array.from(state.canvasSelected)
+        : state.assets.map((a) => a.id);
+      if (!ids.length) {
+        addChatResponse("No items to flag.", 6000);
+        break;
+      }
+      try {
+        await api("/api/assets/flag/bulk", {
+          method: "POST",
+          body: JSON.stringify({ ids, flagged: 1 }),
+        });
+        if (state.canvasReview) clearCanvasSelection();
+        await loadAssets();
+      } catch (e) {
+        addChatResponse(`Bulk flag failed: ${formatApiError(e)}`, 8000);
+      }
+      break;
+    }
+    case "triage_by_query": {
+      // Server already applied the triage — just refresh the grid
+      await loadAssets();
+      break;
+    }
+    case "message":
+    default:
+      break;
+  }
 }
 
 const chatInput = $("#chatInput");
@@ -1342,6 +2377,136 @@ if (chatInput) chatInput.addEventListener("keydown", (e) => {
     const val = chatInput.value || "";
     if (val.trim()) { processChat(val.trim()); chatInput.value = ""; }
   }
+});
+
+// ─── View toggle (Grid / Explorer) ───────────────────────────────────────────────
+
+let explorerLoaded = false;
+let explorerData = null;
+
+const viewGridBtn = $("#viewGrid");
+const viewExplorerBtn = $("#viewExplorer");
+
+function setViewMode(mode) {
+  if (state.canvasReview) exitCanvasReview();
+  const browseView = $("#browseView");
+  const explorerView = $("#explorerView");
+
+  if (mode === "explorer") {
+    if (browseView) browseView.hidden = true;
+    if (explorerView) explorerView.hidden = false;
+    if (viewGridBtn) viewGridBtn.classList.remove("active");
+    if (viewExplorerBtn) viewExplorerBtn.classList.add("active");
+    loadExplorerView();
+  } else {
+    if (browseView) browseView.hidden = false;
+    if (explorerView) explorerView.hidden = true;
+    if (viewGridBtn) viewGridBtn.classList.add("active");
+    if (viewExplorerBtn) viewExplorerBtn.classList.remove("active");
+    if (window.Explorer && explorerLoaded) {
+      window.Explorer.pause();
+    }
+  }
+}
+
+async function loadExplorerView() {
+  if (!window.Explorer || typeof window.Explorer.init !== "function") {
+    Shared.showToast("Explorer requires Three.js — loading…", { type: "info", duration: 3000 });
+    return;
+  }
+
+  const container = $("#explorerContainer");
+  if (!container) return;
+
+  if (!explorerLoaded) {
+    window.Explorer.init(container);
+    window.Explorer.onClickNode((node) => {
+      // Open modal for clicked node
+      const asset = state.assets.find((a) => a.id === node.id);
+      if (asset) openModal(asset);
+    });
+    explorerLoaded = true;
+  } else {
+    window.Explorer.resume();
+  }
+
+  // Load layout data
+  try {
+    Shared.showToast("Loading semantic map…", { type: "info", duration: 2000 });
+    const params = new URLSearchParams();
+    if (state.currentCollection) params.set("collection_id", state.currentCollection);
+    const data = await api(`/api/explorer/layout?${params}`);
+    explorerData = data;
+    window.Explorer.loadData(data);
+  } catch (e) {
+    const msg = formatApiError(e);
+    if (msg.includes("embedding") || msg.includes("GEMINI")) {
+      Shared.showToast("Explorer needs embeddings. Run AI analysis first.", { type: "error", duration: 8000 });
+    } else {
+      Shared.showToast(`Explorer: ${msg}`, { type: "error" });
+    }
+  }
+}
+
+if (viewGridBtn) viewGridBtn.addEventListener("click", () => setViewMode("grid"));
+if (viewExplorerBtn) viewExplorerBtn.addEventListener("click", () => setViewMode("explorer"));
+
+// ─── Filter indicator ────────────────────────────────────────────────────────────
+
+function updateFilterIndicator() {
+  const bar = $("#filterIndicator");
+  const text = $("#filterIndicatorText");
+  if (!bar || !text) return;
+
+  const parts = [];
+
+  if (state.semanticMode) {
+    const semQ = semanticQueryFromInput(state.q);
+    parts.push(`Semantic search: "${semQ}"`);
+  }
+  if (state.currentSource && !state.currentCatalogFile) {
+    parts.push(`Source: ${state.currentSource}`);
+  }
+  if (state.currentBoard && !state.currentCatalogFile) {
+    parts.push(`Board: ${state.currentBoard}`);
+  }
+  if (state.currentCatalogFile) {
+    const name = state.currentCatalogFile.split("/").pop().replace(".md", "").replace(/_/g, " ");
+    parts.push(`Catalog: ${name}`);
+  }
+  if (state.currentCollection) {
+    const col = state.collections.find((c) => c.id === state.currentCollection);
+    parts.push(`Collection: ${col ? col.name : state.currentCollection.slice(0, 8)}`);
+  }
+  if (state.triageFilter) {
+    const labels = { pending: "Pending", keeper: "Keepers", hidden: "Hidden", "needs-comment": "Needs comment", flagged: "🚩 Flagged" };
+    parts.push(`Status: ${labels[state.triageFilter] || state.triageFilter}`);
+  }
+
+  if (parts.length === 0) {
+    bar.hidden = true;
+    return;
+  }
+  text.textContent = `Results filtered by ${parts.join(" + ")}`;
+  bar.hidden = false;
+}
+
+const clearFilterBtn = $("#clearFilterIndicator");
+if (clearFilterBtn) clearFilterBtn.addEventListener("click", () => {
+  state.currentSource = null;
+  state.currentBoard = null;
+  state.currentCollection = null;
+  state.currentCatalogFile = null;
+  state.triageFilter = "";
+  state.q = "";
+  const si = $("#search");
+  if (si) si.value = "";
+  $$("[data-triage]").forEach((c) => {
+    c.classList.toggle("active", c.dataset.triage === "");
+  });
+  renderCatalogTree();
+  updateFilterIndicator();
+  loadAssets();
 });
 
 // ─── Search ──────────────────────────────────────────────────────────────────────
@@ -1564,10 +2729,75 @@ setPhotoImportButtonState();
 
 wireStatusChips();
 
+function isOwner() {
+  return state.actor && state.actor.role === "owner";
+}
+
+function applyRoleVisibility() {
+  const owner = isOwner();
+
+  // Status chips: hide triage-specific chips for collaborators
+  const statusSection = $("#statusChips")?.closest(".sidebar-section");
+  if (statusSection) statusSection.hidden = !owner;
+
+  // Review button, import buttons, admin link — owner-only
+  const reviewBtnEl = $("#reviewBtn");
+  if (reviewBtnEl) reviewBtnEl.hidden = !owner;
+  const addScanEl = $("#addScanPdf");
+  if (addScanEl) addScanEl.hidden = !owner;
+  const addPhotosEl = $("#addPhotos");
+  if (addPhotosEl) addPhotosEl.hidden = !owner;
+  const adminEl = $(".adminLink");
+  if (adminEl) adminEl.hidden = !owner;
+
+  // Modal triage buttons — owner-only
+  const keepBtnEl = $("#modalKeepBtn");
+  const hideBtnEl = $("#modalHideBtn");
+  if (keepBtnEl) keepBtnEl.hidden = !owner;
+  if (hideBtnEl) hideBtnEl.hidden = !owner;
+
+  // Modal flag button — visible to all logged-in actors
+  const flagBtnEl = $("#modalFlagBtn");
+  if (flagBtnEl) flagBtnEl.hidden = !state.actor;
+
+  // Annotation question toggle — available to all (collaborators ask questions)
+  // Notes textarea — available to all
+
+  // New collection button — available to all logged-in actors
+  const newCollBtn = $("#newCollection");
+  if (newCollBtn) newCollBtn.hidden = !state.actor;
+}
+
+async function checkFlaggedCount() {
+  if (!isOwner()) return;
+  try {
+    const data = await api("/api/assets?flagged=1&limit=1");
+    const chip = $("#flaggedChip");
+    if (chip) chip.hidden = !(data.assets && data.assets.length > 0);
+  } catch { /* ignore */ }
+}
+
 (async () => {
   try {
-    await Promise.all([loadCollections(), loadFacets()]);
+    // Resolve current actor identity (magic link)
+    try {
+      const meData = await api("/api/me");
+      state.actor = meData.actor || null;
+    } catch { state.actor = null; }
+
+    // Apply role-based visibility before rendering
+    applyRoleVisibility();
+
+    await Promise.all([loadCollections(), loadFacets(), loadCatalogTree()]);
     await loadAssets();
+
+    // Owner-only features: hidden tree + question polling + flagged check
+    if (isOwner()) {
+      loadHiddenTree();
+      pollQuestions();
+      state.questionPollTimer = setInterval(pollQuestions, 60000);
+      checkFlaggedCount();
+    }
   } catch (e) {
     const grid = $("#grid");
     if (grid) grid.innerHTML = `<div class="empty-state">Unable to load: ${escapeHtml(formatApiError(e))}</div>`;

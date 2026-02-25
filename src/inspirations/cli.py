@@ -13,14 +13,19 @@ from .db import Db, ensure_schema
 from .importers.scans import import_scans_inbox
 from .importers.pinterest_scrape import import_pinterest_scrape
 from .importers.facebook_scrape import import_facebook_scrape
+from .importers.houzz import import_houzz_ideabook
 from .thumbnails import generate_thumbnails
 from .ai import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
+    apply_reel_recommendations,
+    download_facebook_reels,
     run_ai_error_triage,
     run_ai_labeler,
     run_gemini_text_embedder,
+    run_gemini_video_labeler,
     run_similarity_search,
 )
+from .catalog import generate_catalog
 from .export import export_html_gallery, export_static_share_portal
 from .server import run_server
 from .store import create_collection, add_items_to_collection
@@ -98,6 +103,24 @@ def cmd_import_facebook_scrape(args: argparse.Namespace) -> int:
             db=db,
             json_dir=json_dir,
             store_dir=store_dir,
+            limit=args.limit,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_import_houzz(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    store_dir = _p(args.store)
+    json_path = _p(args.json)
+
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = import_houzz_ideabook(
+            db=db,
+            json_path=json_path,
+            store_dir=store_dir,
+            download_images=not args.no_download,
             limit=args.limit,
         )
     print(json.dumps(report, indent=2))
@@ -204,6 +227,53 @@ def cmd_rebuild_db(args: argparse.Namespace) -> int:
         if nulled:
             print(f"[rebuild-db] Nulled stored_path/thumb_path for {nulled} bad Facebook images", file=sys.stderr)
     summary["bad_facebook_images_nulled"] = nulled
+
+    # Step 9: Dedup Facebook assets by SHA256 — keep the best version per SHA256
+    print("[rebuild-db] Deduplicating Facebook assets by SHA256", file=sys.stderr)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        dupe_groups = db.query(
+            """
+            select sha256, count(*) as cnt
+            from assets
+            where source = 'facebook' and sha256 is not null and sha256 != ''
+            group by sha256
+            having count(*) >= 2
+            """
+        )
+        total_removed = 0
+        for group in dupe_groups:
+            sha = group["sha256"]
+            rows = db.query(
+                """
+                select id, title, post_text, board, image_url, hashtags, creator_name
+                from assets
+                where source = 'facebook' and sha256 = ?
+                order by
+                    (case when title is not null and title != '' then 1 else 0 end)
+                    + (case when post_text is not null and post_text != '' then 1 else 0 end)
+                    + (case when board is not null and board != '' then 1 else 0 end)
+                    + (case when image_url is not null and image_url != '' then 1 else 0 end)
+                    + (case when hashtags is not null and hashtags != '' then 1 else 0 end)
+                    + (case when creator_name is not null and creator_name != '' then 1 else 0 end)
+                  desc,
+                  id asc
+                """,
+                (sha,),
+            )
+            if len(rows) <= 1:
+                continue
+            # rows[0] is the keeper (most metadata); delete the rest
+            remove_ids = [r["id"] for r in rows[1:]]
+            placeholders = ",".join(["?"] * len(remove_ids))
+            db.exec(f"delete from collection_items where asset_id in ({placeholders})", tuple(remove_ids))
+            db.exec(f"delete from tray_items where asset_id in ({placeholders})", tuple(remove_ids))
+            db.exec(f"delete from annotations where asset_id in ({placeholders})", tuple(remove_ids))
+            db.exec(f"delete from assets where id in ({placeholders})", tuple(remove_ids))
+            total_removed += len(remove_ids)
+        if total_removed:
+            print(f"[rebuild-db] Removed {total_removed} duplicate Facebook assets", file=sys.stderr)
+    summary["facebook_deduped"] = total_removed
 
     print(json.dumps(summary, indent=2))
     return 0
@@ -329,6 +399,65 @@ def cmd_ai_similar(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ai_reels(args: argparse.Namespace) -> int:
+    """Download, analyze, and apply recommendations for Facebook reels."""
+    db_path = _p(args.db)
+    store_dir = _p(args.store)
+    api_key = args.api_key or os.environ.get("GEMINI_API_KEY") or ""
+    do_download = not args.analyze_only and not args.apply_only
+    do_analyze = not args.download_only and not args.apply_only
+    do_apply = not args.download_only and not args.analyze_only
+
+    with Db(db_path) as db:
+        ensure_schema(db)
+
+        if do_download:
+            print("=== Phase 1: Downloading reels via yt-dlp ===")
+            dl_report = download_facebook_reels(
+                db,
+                store_dir,
+                limit=args.limit,
+                force=args.force,
+            )
+            print(json.dumps(dl_report, indent=2))
+            print()
+
+        if do_analyze:
+            if not api_key:
+                raise ValueError("Gemini API key required for analysis (set --api-key or GEMINI_API_KEY)")
+            print("=== Phase 2: Analyzing reels with Gemini ===")
+            analyze_report = run_gemini_video_labeler(
+                db,
+                api_key=api_key,
+                model=args.model or "gemini-2.5-flash",
+                limit=args.limit,
+                force=args.force,
+                store_dir=store_dir,
+            )
+            print(json.dumps(analyze_report, indent=2))
+            print()
+
+        if do_apply:
+            print("=== Phase 3: Applying recommendations ===")
+            apply_report = apply_reel_recommendations(
+                db,
+                dry_run=args.dry_run,
+            )
+            print(json.dumps(apply_report, indent=2))
+
+    return 0
+
+
+def cmd_catalog_generate(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    catalog_dir = _p(args.out)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = generate_catalog(db, catalog_dir)
+    print(json.dumps(report, indent=2))
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     db_path = _p(args.db)
     app_dir = _p(args.app)
@@ -436,6 +565,12 @@ def build_parser() -> argparse.ArgumentParser:
     fb_sc.add_argument("--limit", type=int, default=0, help="Limit posts (0 = no limit)")
     fb_sc.set_defaults(func=cmd_import_facebook_scrape)
 
+    hz = imp_sub.add_parser("houzz", help="Import Houzz ideabook from scraped JSON")
+    hz.add_argument("--json", required=True, help="Path to houzz_ideabook_final.json")
+    hz.add_argument("--no-download", action="store_true", help="Skip downloading images from Houzz CDN")
+    hz.add_argument("--limit", type=int, default=0, help="Limit items (0 = no limit)")
+    hz.set_defaults(func=cmd_import_houzz)
+
     sc = imp_sub.add_parser("scans", help="Import scans from an inbox folder")
     sc.add_argument("--inbox", required=True, help="Path to scans inbox folder")
     sc.add_argument("--format", default="jpg", help="Page image format: jpg or png")
@@ -503,6 +638,17 @@ def build_parser() -> argparse.ArgumentParser:
     embed.add_argument("--api-key", default="", help="Gemini API key (or set GEMINI_API_KEY)")
     embed.set_defaults(func=cmd_ai_embed)
 
+    reels = ai_sub.add_parser("reels", help="Download, analyze, and classify Facebook reels")
+    reels.add_argument("--limit", type=int, default=0, help="Limit reels (0 = no limit)")
+    reels.add_argument("--download-only", action="store_true", help="Only download, don't analyze or apply")
+    reels.add_argument("--analyze-only", action="store_true", help="Only analyze downloaded reels, don't download or apply")
+    reels.add_argument("--apply-only", action="store_true", help="Only apply existing analysis results")
+    reels.add_argument("--force", action="store_true", help="Re-process even if already done")
+    reels.add_argument("--dry-run", action="store_true", help="Show what would be applied without making changes")
+    reels.add_argument("--model", default="", help="Gemini model (default gemini-2.5-flash)")
+    reels.add_argument("--api-key", default="", help="Gemini API key (or set GEMINI_API_KEY)")
+    reels.set_defaults(func=cmd_ai_reels)
+
     similar = ai_sub.add_parser("similar", help="Run similarity search against stored embeddings")
     similar.add_argument("--query", required=True, help="Natural-language query text")
     similar.add_argument("--source", default="", help="Optional source filter")
@@ -520,6 +666,12 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild.add_argument("--facebook-json-dir", default="", help="Directory with facebook_scrape_*.json")
     rebuild.add_argument("--scan-inbox", default="", help="Scan inbox directory")
     rebuild.set_defaults(func=cmd_rebuild_db)
+
+    cat = sub.add_parser("catalog", help="Manage markdown catalog for AI chat")
+    cat_sub = cat.add_subparsers(dest="catalog_cmd")
+    cat_gen = cat_sub.add_parser("generate", help="Regenerate the full catalog from DB")
+    cat_gen.add_argument("--out", default="data/catalog", help="Output directory (default data/catalog)")
+    cat_gen.set_defaults(func=cmd_catalog_generate)
 
     pb = sub.add_parser("promote-boards", help="Convert boards to collections (one-time migration)")
     pb.add_argument("--db", required=True)
