@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "inspirations-dev",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "inspirations", "serve", "--port", "8001", "--reload"],
+      "port": 8001,
+      "env": {
+        "PYTHONPATH": "src"
+      }
+    }
+  ]
+}

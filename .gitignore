@@ -4,10 +4,12 @@ imports/
 store/
 exports/
 *.zip
+*.sqlite
 
 # Python
 __pycache__/
 *.py[cod]
+*.egg-info/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
@@ -19,3 +21,6 @@ venv/
 .env
 .env.*
 admin_password.txt
+
+# Generated / scratch
+tools/cluster_data.json
