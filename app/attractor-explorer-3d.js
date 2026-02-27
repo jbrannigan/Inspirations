@@ -729,7 +729,7 @@
       for (const n of _allNodes) srcCounts[n.source] = (srcCounts[n.source] || 0) + 1;
 
       const presentSrcs = srcOrder.filter((s) => srcCounts[s] > 0);
-if (presentSrcs.length > 0) {
+      if (presentSrcs.length > 0) {
         const group = document.createElement("div");
         group.className = "attractor-group";
         const lbl = document.createElement("span");
