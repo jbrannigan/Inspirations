@@ -18,21 +18,31 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .ai import DEFAULT_GEMINI_EMBEDDING_MODEL, run_similarity_search
+from .chat import process_chat_message
 from .db import Db, ensure_schema
 from .importers.scans import import_photos_inbox, import_scans_inbox
 from .store import (
     add_items_to_collection,
+    bulk_set_flag,
+    bulk_set_tag,
     bulk_set_triage_status,
+    create_actor,
     create_annotation,
     create_collection,
+    delete_actor,
     delete_annotation,
     delete_assets,
+    get_actor_by_token,
+    hidden_tree,
+    list_actors,
     list_annotations,
+    list_asset_ids,
     list_assets,
     list_collection_items,
     list_collections,
     delete_collection,
     list_facets,
+    list_open_questions,
     list_tray,
     add_to_tray,
     remove_from_tray,
@@ -47,12 +57,41 @@ from .store import (
     update_asset_notes,
 )
 from .explorer_layout import compute_layout
+from .feature_vectors import build_feature_vectors
 from .thumbnails import generate_thumbnails
 
 
 MAX_BODY = 2_000_000
 MAX_UPLOAD_BODY = 350_000_000
 DEFAULT_ASSETS_PAGE_SIZE = 240
+
+# ── API key helpers ──────────────────────────────────────────────────────────────
+
+_keychain_cache: dict[str, str] = {}
+
+
+def _keychain_get(service: str) -> str:
+    """Read a password from macOS Keychain (cached)."""
+    if service in _keychain_cache:
+        return _keychain_cache[service]
+    try:
+        val = subprocess.check_output(
+            ["security", "find-generic-password", "-s", service, "-w"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except Exception:
+        val = ""
+    _keychain_cache[service] = val
+    return val
+
+
+def _get_api_key(env_var: str, keychain_service: str) -> str:
+    """Return API key from env-var first, then macOS Keychain fallback."""
+    val = (os.environ.get(env_var) or "").strip()
+    if val:
+        return val
+    return _keychain_get(keychain_service)
 
 
 def _parse_bool_param(raw: str, *, default: bool = False) -> bool:
@@ -119,6 +158,20 @@ def _send(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
     handler.wfile.write(data)
 
 
+def _resolve_actor(handler: BaseHTTPRequestHandler) -> dict | None:
+    """Resolve actor from X-Actor-Token header or ?actor= query param."""
+    token = (handler.headers.get("X-Actor-Token") or "").strip()
+    if not token:
+        parsed = urlparse(handler.path)
+        q = parse_qs(parsed.query)
+        token = (q.get("actor", [""])[0] or "").strip()
+    if not token:
+        return None
+    with Db(handler.server.db_path) as db:
+        ensure_schema(db)
+        return get_actor_by_token(db, token=token)
+
+
 class ApiHandler(BaseHTTPRequestHandler):
     server_version = "Inspirations/0.1"
 
@@ -147,6 +200,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             page_limit = int(q.get("limit", [str(DEFAULT_ASSETS_PAGE_SIZE)])[0])
             assets = self._with_db(
                 list_assets,
+                ids=q.get("ids", [""])[0],
                 q=q.get("q", [""])[0],
                 source=q.get("source", [""])[0],
                 board=q.get("board", [""])[0],
@@ -157,22 +211,48 @@ class ApiHandler(BaseHTTPRequestHandler):
                 creator=q.get("creator", [""])[0],
                 collection_id=q.get("collection_id", [""])[0],
                 triage_status=q.get("triage_status", [""])[0],
+                category=q.get("category", [""])[0],
                 needs_annotation=_parse_bool_param(q.get("needs_annotation", [""])[0], default=False),
+                flagged_only=_parse_bool_param(q.get("flagged", [""])[0], default=False),
+                tagged_only=_parse_bool_param(q.get("tagged", [""])[0], default=False),
                 include_hidden=_parse_bool_param(q.get("include_hidden", [""])[0], default=False),
                 limit=page_limit + 1,
                 offset=int(q.get("offset", ["0"])[0]),
             )
-            has_more = len(assets) > page_limit
+            # Use pre-collapse row count when available (scan page collapse
+            # can reduce the list below the SQL limit even when more rows exist).
+            pre_collapse = assets[0].pop("_pre_collapse_count", len(assets)) if assets else 0
+            for a in assets:
+                a.pop("_pre_collapse_count", None)
+            total_count = assets[0].pop("_total_count", None) if assets else 0
+            for a in assets:
+                a.pop("_total_count", None)
+            has_more = pre_collapse > page_limit
             if has_more:
                 assets = assets[:page_limit]
-            return _send(self, 200, {"assets": assets, "has_more": has_more})
+            return _send(self, 200, {"assets": assets, "has_more": has_more, "total": total_count})
+
+        if parsed.path == "/api/asset-ids":
+            q = parse_qs(parsed.query)
+            ids = self._with_db(
+                list_asset_ids,
+                q=q.get("q", [""])[0],
+                source=q.get("source", [""])[0],
+                board=q.get("board", [""])[0],
+                collection_id=q.get("collection_id", [""])[0],
+                triage_status=q.get("triage_status", [""])[0],
+                needs_annotation=_parse_bool_param(q.get("needs_annotation", [""])[0], default=False),
+                flagged_only=_parse_bool_param(q.get("flagged", [""])[0], default=False),
+                include_hidden=_parse_bool_param(q.get("include_hidden", [""])[0], default=False),
+            )
+            return _send(self, 200, {"ids": ids})
 
         if parsed.path == "/api/search/similar":
             q = parse_qs(parsed.query)
             query_text = (q.get("q", [""])[0] or "").strip()
             if not query_text:
                 return _send(self, 400, {"error": "q is required"})
-            api_key = (os.environ.get("GEMINI_API_KEY") or "").strip()
+            api_key = _get_api_key("GEMINI_API_KEY", "inspirations_gemini_api_key")
             if not api_key:
                 return _send(self, 503, {"error": "GEMINI_API_KEY is required for semantic search"})
             source = (q.get("source", [""])[0] or "").strip()
@@ -265,6 +345,16 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return _send(self, 500, {"error": f"cluster review export failed: {e}"})
             return _send(self, 200, payload)
 
+        if parsed.path == "/api/explorer/attractor-data":
+            q = parse_qs(parsed.query)
+            pca_dims = int((q.get("dims", ["2"])[0] or "2").strip())
+            data_dir = Path(self.server.db_path).parent / "explorer_layouts"
+            try:
+                payload = self._with_db(build_feature_vectors, data_dir=data_dir, dims=pca_dims)
+            except Exception as e:
+                return _send(self, 500, {"error": f"attractor data failed: {e}"})
+            return _send(self, 200, payload)
+
         if parsed.path == "/api/explorer/layout":
             q = parse_qs(parsed.query)
             collection_id = (q.get("collection_id", [""])[0] or "").strip() or None
@@ -288,6 +378,55 @@ class ApiHandler(BaseHTTPRequestHandler):
             stats = self._with_db(triage_stats)
             return _send(self, 200, stats)
 
+        if parsed.path == "/api/catalog/tree":
+            catalog_dir = getattr(self.server, "catalog_dir", None)
+            if not catalog_dir:
+                return _send(self, 200, {"tree": []})
+            try:
+                tree = self._build_catalog_tree(Path(catalog_dir))
+            except Exception:
+                tree = []
+            # Adjust counts to exclude hidden items
+            try:
+                self._adjust_tree_counts_for_hidden(tree)
+            except Exception:
+                pass
+            return _send(self, 200, {"tree": tree})
+
+        if parsed.path == "/api/catalog/items":
+            # Load items by catalog file path — extracts 8-char IDs and returns matching assets
+            q = parse_qs(parsed.query)
+            catalog_dir = getattr(self.server, "catalog_dir", None)
+            file_param = q.get("file", [""])[0]
+            if not catalog_dir or not file_param:
+                return _send(self, 400, {"error": "file param required"})
+            catalog_path = Path(catalog_dir) / file_param
+            # Security: ensure path is within catalog_dir
+            try:
+                catalog_path = catalog_path.resolve()
+                if not str(catalog_path).startswith(str(Path(catalog_dir).resolve())):
+                    return _send(self, 400, {"error": "invalid file path"})
+            except Exception:
+                return _send(self, 400, {"error": "invalid file path"})
+            if not catalog_path.exists():
+                return _send(self, 404, {"error": "catalog file not found"})
+            # Extract 8-char IDs from lines like "- a7ae6384 | ..."
+            text = catalog_path.read_text(encoding="utf-8")
+            short_ids = re.findall(r"^- ([0-9a-f]{8}) \|", text, re.MULTILINE)
+            if not short_ids:
+                return _send(self, 200, {"assets": [], "has_more": False})
+            ids_str = ",".join(short_ids)
+            limit = int(q.get("limit", ["500"])[0])
+            offset = int(q.get("offset", ["0"])[0])
+            assets = self._with_db(
+                list_assets,
+                ids=ids_str,
+                include_hidden=True,
+                limit=limit,
+                offset=offset,
+            )
+            return _send(self, 200, {"assets": assets, "has_more": len(assets) >= limit})
+
         if parsed.path == "/api/tray":
             items = self._with_db(list_tray)
             return _send(self, 200, {"items": items})
@@ -303,6 +442,31 @@ class ApiHandler(BaseHTTPRequestHandler):
             asset_id = q.get("asset_id", [""])[0]
             anns = self._with_db(list_annotations, asset_id=asset_id)
             return _send(self, 200, {"annotations": anns})
+
+        if parsed.path == "/api/me":
+            actor = _resolve_actor(self)
+            return _send(self, 200, {"actor": actor})
+
+        if parsed.path == "/api/actors":
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
+            actors = self._with_db(list_actors)
+            return _send(self, 200, {"actors": actors})
+
+        if parsed.path == "/api/hidden/tree":
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
+            tree = self._with_db(hidden_tree)
+            return _send(self, 200, tree)
+
+        if parsed.path == "/api/questions/dashboard":
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
+            questions = self._with_db(list_open_questions)
+            return _send(self, 200, {"questions": questions, "total": len(questions)})
 
         self.send_error(404)
 
@@ -431,6 +595,21 @@ class ApiHandler(BaseHTTPRequestHandler):
             count = self._with_db(bulk_set_triage_status, asset_ids=ids, status=status)
             return _send(self, 200, {"updated": count})
 
+        if parsed.path == "/api/assets/flag/bulk":
+            ids = body.get("ids") or []
+            flagged = body.get("flagged", 1)
+            if not isinstance(ids, list):
+                return _send(self, 400, {"error": "ids must be list"})
+            actor = _resolve_actor(self)
+            actor_name = actor.get("name", "") if actor else ""
+            count = self._with_db(
+                bulk_set_flag,
+                asset_ids=ids,
+                flagged=1 if flagged else 0,
+                flagged_by=actor_name,
+            )
+            return _send(self, 200, {"updated": count})
+
         m = re.match(r"^/api/assets/([^/]+)/triage$", parsed.path)
         if m:
             asset_id = m.group(1)
@@ -439,6 +618,51 @@ class ApiHandler(BaseHTTPRequestHandler):
             if status not in ("keeper", "hidden", None):
                 return _send(self, 400, {"error": "status must be 'keeper', 'hidden', or null"})
             self._with_db(set_triage_status, asset_id=asset_id, status=status, needs_annotation=needs_annotation)
+            return _send(self, 200, {"ok": True})
+
+        m = re.match(r"^/api/assets/([^/]+)/flag$", parsed.path)
+        if m:
+            asset_id = m.group(1)
+            flagged = body.get("flagged", 1)
+            note = body.get("note", "")
+            actor = _resolve_actor(self)
+            actor_name = actor.get("name", "") if actor else ""
+            self._with_db(
+                lambda db: db.exec(
+                    "update assets set flagged=?, flagged_by=?, flagged_note=? where id=?",
+                    (1 if flagged else 0, actor_name, note, asset_id),
+                )
+            )
+            return _send(self, 200, {"ok": True})
+
+        if parsed.path == "/api/assets/tag/bulk":
+            ids = body.get("ids") or []
+            tagged = body.get("tagged", 1)
+            if not isinstance(ids, list):
+                return _send(self, 400, {"error": "ids must be list"})
+            actor = _resolve_actor(self)
+            actor_name = actor.get("name", "") if actor else ""
+            count = self._with_db(
+                bulk_set_tag,
+                asset_ids=ids,
+                tagged=1 if tagged else 0,
+                tagged_by=actor_name,
+            )
+            return _send(self, 200, {"updated": count})
+
+        m = re.match(r"^/api/assets/([^/]+)/tag$", parsed.path)
+        if m:
+            asset_id = m.group(1)
+            tagged = body.get("tagged", 1)
+            note = body.get("note", "")
+            actor = _resolve_actor(self)
+            actor_name = actor.get("name", "") if actor else ""
+            self._with_db(
+                lambda db: db.exec(
+                    "update assets set tagged=?, tagged_by=?, tagged_note=? where id=?",
+                    (1 if tagged else 0, actor_name, note, asset_id),
+                )
+            )
             return _send(self, 200, {"ok": True})
 
         m = re.match(r"^/api/assets/([^/]+)/hide$", parsed.path)
@@ -463,14 +687,62 @@ class ApiHandler(BaseHTTPRequestHandler):
                 {"ok": True, "hidden_collection_id": hidden["id"], "hidden_collection_name": hidden["name"]},
             )
 
+        if parsed.path == "/api/chat":
+            user_message = (body.get("message") or "").strip()
+            if not user_message:
+                return _send(self, 400, {"error": "message required"})
+            api_key = _get_api_key("ANTHROPIC_API_KEY", "inspirations_anthropic_api_key")
+            if not api_key:
+                return _send(self, 503, {"error": "Chat requires an Anthropic API key. Set ANTHROPIC_API_KEY."})
+            try:
+                catalog_dir = getattr(self.server, "catalog_dir", None)
+                result = self._with_db(
+                    process_chat_message,
+                    api_key=api_key,
+                    user_message=user_message,
+                    catalog_dir=catalog_dir,
+                )
+                return _send(self, 200, result)
+            except Exception as e:
+                return _send(self, 500, {"error": f"Chat failed: {e}"})
+
         if parsed.path == "/api/annotations":
             asset_id = (body.get("asset_id") or "").strip()
             x = body.get("x")
             y = body.get("y")
             if not asset_id or x is None or y is None:
                 return _send(self, 400, {"error": "asset_id, x, y required"})
-            ann = self._with_db(create_annotation, asset_id=asset_id, x=float(x), y=float(y), text=body.get("text") or "")
+            actor = _resolve_actor(self)
+            annotation_type = (body.get("annotation_type") or "note").strip()
+            if annotation_type not in ("note", "question"):
+                annotation_type = "note"
+            ann = self._with_db(
+                create_annotation,
+                asset_id=asset_id,
+                x=float(x),
+                y=float(y),
+                text=body.get("text") or "",
+                actor_id=actor["id"] if actor else None,
+                actor_name=actor["name"] if actor else None,
+                annotation_type=annotation_type,
+            )
+            # Fire-and-forget notification for questions
+            if annotation_type == "question":
+                _notify_question(actor, body.get("text") or "")
             return _send(self, 201, {"annotation": ann})
+
+        if parsed.path == "/api/actors":
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
+            name = (body.get("name") or "").strip()
+            if not name:
+                return _send(self, 400, {"error": "name required"})
+            role = (body.get("role") or "collaborator").strip()
+            if role not in ("owner", "collaborator"):
+                role = "collaborator"
+            new_actor = self._with_db(create_actor, name=name, role=role)
+            return _send(self, 201, {"actor": new_actor})
 
         self.send_error(404)
 
@@ -619,12 +891,16 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         m = re.match(r"^/api/annotations/([^/]+)$", parsed.path)
         if m:
+            resolved = body.get("resolved")
+            if resolved is not None:
+                resolved = int(resolved)
             self._with_db(
                 update_annotation,
                 annotation_id=m.group(1),
                 x=body.get("x"),
                 y=body.get("y"),
                 text=body.get("text"),
+                resolved=resolved,
             )
             return _send(self, 200, {"ok": True})
         self.send_error(404)
@@ -654,6 +930,13 @@ class ApiHandler(BaseHTTPRequestHandler):
         m = re.match(r"^/api/annotations/([^/]+)$", parsed.path)
         if m:
             self._with_db(delete_annotation, annotation_id=m.group(1))
+            return _send(self, 200, {"ok": True})
+        m = re.match(r"^/api/actors/([^/]+)$", parsed.path)
+        if m:
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
+            self._with_db(delete_actor, actor_id=m.group(1))
             return _send(self, 200, {"ok": True})
         self.send_error(404)
 
@@ -743,6 +1026,189 @@ class ApiHandler(BaseHTTPRequestHandler):
         with Db(self.server.db_path) as db:
             ensure_schema(db)
             return fn(db, **kwargs)
+
+    def _build_catalog_tree(self, catalog_dir: Path) -> list[dict]:
+        """Build a tree structure from the catalog for the sidebar browser."""
+        index_path = catalog_dir / "_index.md"
+        if not index_path.exists():
+            return []
+
+        tree: list[dict] = []
+        index_text = index_path.read_text(encoding="utf-8")
+
+        # Known real sources (filter by actual source name in DB)
+        real_sources = {"facebook", "houzz", "pinterest", "scan"}
+        # Dimension sections identified by "By " prefix
+        # "Other / Non-Home-Design" is also a dimension (hidden category)
+
+        current_section = None  # current section node being populated
+        current_section_type = None  # "source" | "dimension"
+        in_collections = False
+        in_triage = False
+
+        for line in index_text.splitlines():
+            line = line.strip()
+
+            # Triage section — stop processing
+            if line.startswith("## Triage"):
+                current_section = None
+                current_section_type = None
+                in_triage = True
+                continue
+            if in_triage:
+                continue
+
+            # Collections header
+            if line == "## Collections":
+                current_section = None
+                current_section_type = None
+                in_collections = True
+                continue
+
+            # Collection item: - "Name" (N items, id=...)
+            if in_collections and line.startswith("- \"") and "id=" in line:
+                name_match = re.match(r'^- "(.+?)"\s+\((\d+)\s+items?,\s+id=([^)]+)\)', line)
+                if name_match:
+                    cname = name_match.group(1)
+                    ccount = int(name_match.group(2))
+                    cid = name_match.group(3)
+                    if not tree or tree[-1].get("type") != "collections_group":
+                        tree.append({
+                            "id": "collections",
+                            "label": "Collections",
+                            "count": 0,
+                            "type": "collections_group",
+                            "children": [],
+                        })
+                    collections_node = tree[-1]
+                    collections_node["children"].append({
+                        "id": f"collection:{cid}",
+                        "label": cname,
+                        "count": ccount,
+                        "type": "collection",
+                        "collection_id": cid,
+                    })
+                    collections_node["count"] = len(collections_node["children"])
+                continue
+
+            # Section header: ## Facebook (1190 items) or ## By Room (5257 item-assignments)
+            if line.startswith("## ") and "(" in line:
+                in_collections = False
+                name = line[3:].strip()
+                count_match = re.search(r"\((\d+)\s+item", name)
+                count = int(count_match.group(1)) if count_match else 0
+                section_name = name.split("(")[0].strip()
+
+                # Determine if this is a real source or a dimension
+                section_lower = section_name.lower()
+                if section_lower in real_sources:
+                    current_section_type = "source"
+                    node_type = "source"
+                    node_id = f"source:{section_lower}"
+                else:
+                    current_section_type = "dimension"
+                    node_type = "dimension"
+                    # Normalize dimension name: "By Room" → "room", "Other / Non-Home-Design" → "other"
+                    dim_key = section_lower.replace("by ", "").split("/")[0].strip()
+                    node_id = f"dimension:{dim_key}"
+
+                current_section = {
+                    "id": node_id,
+                    "label": section_name,
+                    "count": count,
+                    "type": node_type,
+                    "children": [],
+                }
+                tree.append(current_section)
+                continue
+
+            # Table row: | path | category | count | topics |
+            if line.startswith("|") and current_section is not None:
+                parts = [p.strip() for p in line.split("|")]
+                if len(parts) < 5 or parts[1].startswith("File") or parts[1].startswith("---"):
+                    continue
+                file_path = parts[1]
+                category = parts[2]
+                try:
+                    item_count = int(parts[3])
+                except (ValueError, IndexError):
+                    item_count = 0
+                # Clean up category display
+                display = category.replace("-", " ").replace("_", " ").title()
+
+                child = {
+                    "label": display,
+                    "count": item_count,
+                    "file": file_path,
+                }
+
+                if current_section_type == "source":
+                    child["id"] = f"board:{file_path}"
+                    child["type"] = "board"
+                    child["source"] = current_section["label"].lower()
+                    child["board_name"] = category  # original board name from DB
+                else:
+                    child["id"] = f"dim:{file_path}"
+                    child["type"] = "dimension_item"
+
+                current_section["children"].append(child)
+                continue
+
+        return tree
+
+    def _adjust_tree_counts_for_hidden(self, tree: list[dict]) -> None:
+        """Subtract hidden-item counts so the browse tree shows only visible items."""
+        with Db(self.server.db_path) as db:
+            ensure_schema(db)
+            # Visible (non-hidden) counts per source
+            src_rows = db.query(
+                "select lower(source) as src, count(*) as n "
+                "from assets where triage_status is null or triage_status != 'hidden' "
+                "group by 1"
+            )
+            # Visible counts per source+board (for boards that exist in DB)
+            board_rows = db.query(
+                "select lower(source) as src, lower(coalesce(board,'')) as brd, count(*) as n "
+                "from assets where triage_status is null or triage_status != 'hidden' "
+                "group by 1, 2"
+            )
+        visible_by_source: dict[str, int] = {r["src"]: r["n"] for r in src_rows}
+        visible_by_board: dict[tuple[str, str], int] = {
+            (r["src"], r["brd"]): r["n"] for r in board_rows
+        }
+
+        for node in tree:
+            if node.get("type") != "source":
+                continue
+            src = node["label"].lower()
+            visible_total = visible_by_source.get(src)
+            if visible_total is None:
+                continue
+            # Set source-level count to visible total
+            node["count"] = visible_total
+            # Adjust known board children
+            accounted = 0
+            synthetic_children = []  # children that aggregate multiple DB boards
+            for child in node.get("children", []):
+                board_name = (child.get("board_name") or "").lower()
+                # Synthetic groups like "(unsorted reels)" aggregate many DB boards
+                if board_name.startswith("("):
+                    synthetic_children.append(child)
+                    continue
+                vis = visible_by_board.get((src, board_name), 0)
+                child["count"] = vis
+                accounted += vis
+            # Distribute remaining visible items across synthetic groups proportionally
+            remaining = visible_total - accounted
+            if synthetic_children and remaining >= 0:
+                old_total = sum(c["count"] for c in synthetic_children) or 1
+                for child in synthetic_children:
+                    child["count"] = max(0, round(remaining * child["count"] / old_total))
+            # Remove zero-count children (all items hidden)
+            node["children"] = [c for c in node.get("children", []) if c["count"] > 0]
+
+        # Remove zero-count source nodes (all items hidden)
+        tree[:] = [n for n in tree if n.get("type") != "source" or n["count"] > 0]
 
     def _project_root(self) -> Path:
         return Path(self.server.app_dir).resolve().parent
@@ -868,6 +1334,42 @@ class ApiHandler(BaseHTTPRequestHandler):
             self.wfile.write(data)
 
 
+def _notify_question(actor: dict | None, text: str) -> None:
+    """Fire-and-forget notification when a question annotation is created."""
+    actor_name = (actor or {}).get("name", "Someone")
+    msg = f"New question on your inspiration library from {actor_name}: {(text or '')[:100]}"
+    phone = (os.environ.get("INSPIRATIONS_NOTIFY_PHONE") or "").strip()
+    if phone:
+        try:
+            escaped = msg.replace('"', '\\"')
+            subprocess.run(
+                ["osascript", "-e",
+                 f'tell application "Messages" to send "{escaped}" to buddy "{phone}"'],
+                check=False, capture_output=True, timeout=10,
+            )
+        except Exception:
+            pass  # best-effort
+
+
+def _seed_default_actors(db_path: Path, host: str, port: int) -> None:
+    """Create default owner actors (Jim + Leslie) if the actors table is empty."""
+    with Db(db_path) as db:
+        ensure_schema(db)
+        existing = db.query_value("select count(*) from actors")
+        if existing:
+            # Print existing magic links on startup
+            actors = list_actors(db)
+            for a in actors:
+                url = f"http://{host}:{port}/?actor={a['token']}"
+                print(f"  {a['name']} ({a['role']}): {url}")
+            return
+        leslie = create_actor(db, name="Leslie", role="owner")
+        jim = create_actor(db, name="Jim", role="owner")
+        print("Created default owner actors:")
+        print(f"  Leslie (owner): http://{host}:{port}/?actor={leslie['token']}")
+        print(f"  Jim (owner): http://{host}:{port}/?actor={jim['token']}")
+
+
 def _guess_mime(path: str) -> str:
     p = path.lower()
     if p.endswith(".js"):
@@ -891,5 +1393,19 @@ def run_server(*, host: str, port: int, db_path: Path, app_dir: Path, store_dir:
     server.store_dir = store_dir
     server.imports_dir = app_dir.resolve().parent / "imports"
     server.admin_tokens = {}
-    print(f"Serving on http://{host}:{port}")
+
+    # Catalog directory — look next to the database
+    catalog_dir = Path(db_path).resolve().parent / "catalog"
+    if catalog_dir.is_dir() and (catalog_dir / "_index.md").exists():
+        server.catalog_dir = catalog_dir
+        print(f"Catalog loaded from {catalog_dir}")
+    else:
+        server.catalog_dir = None
+        print("No catalog found — chat will use routing-only mode")
+
+    # Seed default actors (Jim + Leslie) and print magic link URLs
+    print("\nMagic link URLs:")
+    _seed_default_actors(db_path, host, port)
+
+    print(f"\nServing on http://{host}:{port}")
     server.serve_forever()

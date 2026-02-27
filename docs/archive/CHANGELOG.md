@@ -6,9 +6,25 @@ follows [Semantic Versioning](https://semver.org/) per `STANDARDS.md`.
 
 ---
 
-## [Unreleased] — codex/ux-simplification-pass
+## [Unreleased] — Explorer UI Overhaul
 
 ### Added
+- **Attractor Explorer** — 2D force-directed semantic visualization with D3
+  - Toggleable attractor chips (rooms, styles, materials, colors) pull items toward semantic poles
+  - Strength / Spread / Size sliders for tuning the force layout
+  - Focus mode (filters non-matching items out of simulation) — now ON by default
+  - Live mode for real-time simulation vs pre-computed settle
+  - Thumbnail billboards on visible nodes with lazy loading
+  - Overlap indicators showing multi-attractor item counts
+- **3D Attractor Explorer** — Three.js WebGL variant with same chip UI
+  - Custom 3D force simulation (attractor pull, return-to-rest, velocity damping, grid-hash collision)
+  - OrbitControls camera with billboard textures
+  - Spread slider wired to collision pass (scales cell size and min distance)
+  - Fibonacci-sphere pole placement for multiple attractors
+- **Explorer control panel** — sliders always visible at top; attractor chips revealed on hover
+- **3D checkbox** in control panel replaces toolbar button — matches Focus/Live toggle pattern
+- **Sidebar stays visible** in both grid and explorer modes — tree clicks filter the explorer
+- **CSS pre-zoom feedback** — instant CSS transform on scroll-zoom while canvas repaints
 - Show All reset for filters
 - AI tag Any/All matching toggle
 - Primary add-to-active-collection workflow
@@ -18,7 +34,14 @@ follows [Semantic Versioning](https://semver.org/) per `STANDARDS.md`.
 - Safe `/store` route for local media fallbacks
 - Cluster Explorer duplicate-review UX (graph thumbnails, 3-lane keeper/candidate/loser flow)
 
+### Fixed
+- **3D texture dropout** — `_clearScene()` now clears `_texCache` object after disposing GPU textures, preventing stale cache references on mode switch
+
 ### Changed
+- Focus mode defaults to ON in both 2D and 3D explorers (better performance with large datasets)
+- Explorer layout keeps two-column grid (sidebar + content) instead of going full-width
+- 3D toggle moved from toolbar button to control panel checkbox (consistent with Focus/Live)
+- Control panel chips hidden by default, revealed on hover/focus-within (less visual clutter)
 - Toolbar wrap and mobile affordance tweaks
 - Print fallback behavior improved
 - Hide action safety wording refined

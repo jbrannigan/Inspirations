@@ -5,6 +5,8 @@ import json
 import math
 import os
 import re
+import subprocess
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -1258,3 +1260,646 @@ def run_ai_labeler(db: Db, *, provider: str, limit: int = 0, **kwargs: Any) -> d
             recitation_fallback_model=kwargs.get("recitation_fallback_model"),
         )
     raise ValueError("Unsupported provider. Use provider=mock or provider=gemini.")
+
+
+# ---------------------------------------------------------------------------
+# Facebook Reel Analysis Pipeline
+# ---------------------------------------------------------------------------
+
+REEL_ANALYSIS_PROMPT = """You are a home design content classifier. This video is from a user's \
+saved Facebook reels collection focused on home design inspiration.
+
+Determine whether this video is relevant to home design, construction, \
+renovation, interior design, or architecture. Videos about unrelated \
+topics (finance, haircare, cooking, comedy, pets, etc.) should be \
+marked irrelevant with recommendation "hide".
+
+Return ONLY valid JSON:
+{
+  "actual_content": "1-2 sentence description of what the video actually shows",
+  "relevant_to_home_design": true or false,
+  "confidence": 0.0-1.0,
+  "category": "home_design | construction | diy | product_review | irrelevant",
+  "subcategory": "kitchen | bathroom | flooring | exterior | lighting | furniture | landscaping | general",
+  "suggested_title": "short descriptive title for this reel",
+  "suggested_board": "board name this belongs in, or empty string if unclear",
+  "recommendation": "keep | hide | recategorize",
+  "recommendation_reason": "why this recommendation",
+  "elements": [],
+  "materials": [],
+  "styles": []
+}
+
+Rules:
+- Use lowercase strings in arrays.
+- Return JSON only. No markdown. No extra keys.
+"""
+
+
+def _gemini_generate_video(
+    *,
+    api_key: str,
+    model: str,
+    prompt: str,
+    video_b64: str,
+    mime_type: str = "video/mp4",
+    timeout_s: float = 120.0,
+) -> dict[str, Any]:
+    """Send a video to Gemini for analysis. Like _gemini_generate but for video content."""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    gen_configs: list[dict[str, Any]] = [
+        {
+            "temperature": 0.2,
+            "maxOutputTokens": 4096,
+            "responseMimeType": "application/json",
+            "thinkingConfig": {"thinkingBudget": 0},
+        },
+        {
+            "temperature": 0.2,
+            "maxOutputTokens": 4096,
+            "responseMimeType": "application/json",
+        },
+        {
+            "temperature": 0.2,
+            "maxOutputTokens": 4096,
+        },
+    ]
+    last_exc: Exception | None = None
+    for cfg in gen_configs:
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt},
+                        {"inline_data": {"mime_type": mime_type, "data": video_b64}},
+                    ]
+                }
+            ],
+            "generationConfig": cfg,
+        }
+        data_bytes = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=data_bytes,
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": api_key,
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                return json.loads(resp.read().decode("utf-8") or "{}")
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="ignore") if hasattr(e, "read") else ""
+            if "Unknown name" in detail or "Invalid JSON payload" in detail:
+                last_exc = RuntimeError(f"Gemini HTTP {e.code}: {detail}")
+                continue
+            raise RuntimeError(f"Gemini HTTP {e.code}: {detail}") from e
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("Gemini video request failed before a response was received")
+
+
+def _upload_to_gemini_file_api(
+    *,
+    api_key: str,
+    file_path: Path,
+    mime_type: str = "video/mp4",
+    timeout_s: float = 300.0,
+) -> str:
+    """Upload a file to Gemini File API and return the file URI."""
+    # Step 1: Start resumable upload
+    start_url = "https://generativelanguage.googleapis.com/upload/v1beta/files"
+    file_size = file_path.stat().st_size
+    meta = json.dumps({"file": {"display_name": file_path.name}}).encode("utf-8")
+    req = urllib.request.Request(
+        start_url,
+        data=meta,
+        headers={
+            "Content-Type": "application/json",
+            "X-Goog-Upload-Protocol": "resumable",
+            "X-Goog-Upload-Command": "start",
+            "X-Goog-Upload-Header-Content-Length": str(file_size),
+            "X-Goog-Upload-Header-Content-Type": mime_type,
+            "x-goog-api-key": api_key,
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+        upload_url = resp.headers.get("X-Goog-Upload-URL")
+        if not upload_url:
+            raise RuntimeError("No upload URL returned from Gemini File API")
+
+    # Step 2: Upload the bytes
+    file_bytes = file_path.read_bytes()
+    req2 = urllib.request.Request(
+        upload_url,
+        data=file_bytes,
+        headers={
+            "Content-Length": str(file_size),
+            "X-Goog-Upload-Offset": "0",
+            "X-Goog-Upload-Command": "upload, finalize",
+        },
+    )
+    with urllib.request.urlopen(req2, timeout=timeout_s) as resp2:
+        result = json.loads(resp2.read().decode("utf-8") or "{}")
+
+    file_uri = (result.get("file") or {}).get("uri") or ""
+    if not file_uri:
+        raise RuntimeError(f"No file URI in upload response: {json.dumps(result)[:500]}")
+
+    # Step 3: Wait for processing
+    file_name = (result.get("file") or {}).get("name") or ""
+    if file_name:
+        check_url = f"https://generativelanguage.googleapis.com/v1beta/{file_name}"
+        for _ in range(60):
+            time.sleep(2)
+            check_req = urllib.request.Request(
+                check_url,
+                headers={"x-goog-api-key": api_key},
+            )
+            try:
+                with urllib.request.urlopen(check_req, timeout=30) as check_resp:
+                    state = json.loads(check_resp.read().decode("utf-8") or "{}")
+                    status = (state.get("state") or "").upper()
+                    if status == "ACTIVE":
+                        return str((state.get("uri") or file_uri))
+                    if status == "FAILED":
+                        raise RuntimeError(f"File processing failed: {json.dumps(state)[:500]}")
+            except urllib.error.HTTPError:
+                pass
+        raise RuntimeError("Timed out waiting for file processing")
+    return file_uri
+
+
+def _gemini_generate_with_file_uri(
+    *,
+    api_key: str,
+    model: str,
+    prompt: str,
+    file_uri: str,
+    mime_type: str = "video/mp4",
+    timeout_s: float = 120.0,
+) -> dict[str, Any]:
+    """Send a request using a Gemini File API URI."""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt},
+                    {"file_data": {"mime_type": mime_type, "file_uri": file_uri}},
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 4096,
+            "responseMimeType": "application/json",
+        },
+    }
+    data_bytes = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data_bytes,
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            return json.loads(resp.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="ignore") if hasattr(e, "read") else ""
+        raise RuntimeError(f"Gemini HTTP {e.code}: {detail}") from e
+
+
+def download_facebook_reels(
+    db: Db,
+    store_dir: Path,
+    *,
+    limit: int = 0,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Download Facebook reel videos via yt-dlp.
+
+    Stores MP4 files at store_dir/reels/facebook/{asset_id}.mp4
+    Updates assets with stored_video_path, video_duration, title, post_text, creator_name.
+    """
+    reels_dir = store_dir / "reels" / "facebook"
+    reels_dir.mkdir(parents=True, exist_ok=True)
+
+    rows = db.query(
+        "select id, source_ref from assets where source='facebook' and content_kind='reel' order by imported_at asc"
+    )
+
+    attempted = 0
+    downloaded = 0
+    skipped = 0
+    errors: list[dict[str, str]] = []
+
+    for r in rows:
+        if limit and attempted >= limit:
+            break
+        asset_id = str(r["id"])
+        source_ref = str(r["source_ref"] or "").strip()
+        if not source_ref:
+            errors.append({"id": asset_id, "error": "No source_ref URL"})
+            continue
+
+        mp4_path = reels_dir / f"{asset_id}.mp4"
+        info_path = reels_dir / f"{asset_id}.info.json"
+
+        # Skip if already downloaded
+        if mp4_path.exists() and not force:
+            # Still update DB if not set
+            if not db.query_value(
+                "select stored_video_path from assets where id=? and stored_video_path is not null",
+                (asset_id,),
+            ):
+                _update_reel_from_files(db, asset_id, mp4_path, info_path)
+            skipped += 1
+            continue
+
+        attempted += 1
+        try:
+            # yt-dlp download
+            cmd = [
+                "yt-dlp",
+                "-o", str(mp4_path),
+                "--write-info-json",
+                "--no-playlist",
+                "--max-filesize", "50m",
+                "--no-overwrites",
+                "--quiet",
+                source_ref,
+            ]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if result.returncode != 0:
+                err_msg = (result.stderr or "").strip()[:500]
+                errors.append({"id": asset_id, "error": f"yt-dlp exit {result.returncode}: {err_msg}"})
+                continue
+
+            if not mp4_path.exists():
+                # yt-dlp may save as .webm or other format — check for alternatives
+                alt_files = list(reels_dir.glob(f"{asset_id}.*"))
+                video_file = next(
+                    (f for f in alt_files if f.suffix.lower() in (".mp4", ".webm", ".mkv")),
+                    None,
+                )
+                if video_file:
+                    mp4_path = video_file
+                else:
+                    errors.append({"id": asset_id, "error": "yt-dlp ran but no video file found"})
+                    continue
+
+            _update_reel_from_files(db, asset_id, mp4_path, info_path)
+            downloaded += 1
+
+            if attempted % 25 == 0:
+                print(f"  downloaded {downloaded}/{attempted} reels ({skipped} skipped, {len(errors)} errors)")
+
+        except subprocess.TimeoutExpired:
+            errors.append({"id": asset_id, "error": "yt-dlp timed out (120s)"})
+        except Exception as e:
+            errors.append({"id": asset_id, "error": str(e)[:500]})
+
+    return {
+        "attempted": attempted,
+        "downloaded": downloaded,
+        "skipped": skipped,
+        "errors": errors[:50],
+        "total_errors": len(errors),
+    }
+
+
+def _update_reel_from_files(db: Db, asset_id: str, mp4_path: Path, info_path: Path) -> None:
+    """Update asset row from downloaded video + info.json metadata."""
+    db.exec(
+        "update assets set stored_video_path=? where id=?",
+        (str(mp4_path), asset_id),
+    )
+
+    if not info_path.exists():
+        return
+    try:
+        info = json.loads(info_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+
+    duration = info.get("duration")
+    title = str(info.get("title") or "").strip()
+    description = str(info.get("description") or "").strip()
+    uploader = str(info.get("uploader") or info.get("channel") or "").strip()
+
+    updates: list[str] = []
+    params: list[Any] = []
+
+    if duration:
+        updates.append("video_duration=?")
+        params.append(float(duration))
+
+    # Only fill empty fields — don't overwrite human edits
+    current = db.query(
+        "select title, post_text, creator_name from assets where id=?", (asset_id,)
+    )
+    if current:
+        row = dict(current[0])
+        if not str(row.get("title") or "").strip() and title:
+            updates.append("title=?")
+            params.append(title[:200])
+        if not str(row.get("post_text") or "").strip() and description:
+            updates.append("post_text=?")
+            params.append(description[:2000])
+        if not str(row.get("creator_name") or "").strip() and uploader:
+            updates.append("creator_name=?")
+            params.append(uploader[:200])
+
+    if updates:
+        params.append(asset_id)
+        db.exec(f"update assets set {', '.join(updates)} where id=?", tuple(params))
+
+
+def run_gemini_video_labeler(
+    db: Db,
+    *,
+    api_key: str,
+    model: str = DEFAULT_GEMINI_MODEL,
+    limit: int = 0,
+    force: bool = False,
+    store_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Analyze downloaded reel videos with Gemini 2.5 Flash.
+
+    Sends each MP4 to Gemini for content classification.
+    Stores results in asset_ai with provider='gemini-video'.
+    """
+    run_id = str(uuid.uuid4())
+    now = _now_iso()
+    db.exec(
+        "insert into ai_runs (id, provider, model, created_at) values (?, ?, ?, ?)",
+        (run_id, "gemini-video", model, now),
+    )
+
+    # Find reels with downloaded video that haven't been video-analyzed yet
+    clauses = [
+        "a.source='facebook'",
+        "a.content_kind='reel'",
+        "a.stored_video_path is not null",
+        "a.stored_video_path != ''",
+    ]
+    params: list[Any] = []
+    if not force:
+        clauses.append(
+            "a.id not in (select asset_id from asset_ai where provider='gemini-video')"
+        )
+    where = "where " + " and ".join(clauses)
+
+    rows = db.query(
+        f"select a.id, a.stored_video_path from assets a {where} order by a.imported_at asc",
+        tuple(params),
+    )
+
+    attempted = 0
+    labeled = 0
+    errors: list[dict[str, str]] = []
+    file_api_count = 0
+
+    for r in rows:
+        if limit and attempted >= limit:
+            break
+        asset_id = str(r["id"])
+        video_path = Path(str(r["stored_video_path"]))
+
+        if not video_path.exists():
+            errors.append({"id": asset_id, "error": f"Video file missing: {video_path}"})
+            continue
+
+        attempted += 1
+        raw_error: str | None = None
+        try:
+            file_size = video_path.stat().st_size
+            if file_size > 20 * 1024 * 1024:
+                # Large file — use File API
+                file_uri = _upload_to_gemini_file_api(
+                    api_key=api_key,
+                    file_path=video_path,
+                    mime_type="video/mp4",
+                )
+                resp = _gemini_generate_with_file_uri(
+                    api_key=api_key,
+                    model=model,
+                    prompt=REEL_ANALYSIS_PROMPT,
+                    file_uri=file_uri,
+                    mime_type="video/mp4",
+                )
+                file_api_count += 1
+            else:
+                # Small file — send inline
+                video_b64 = base64.b64encode(video_path.read_bytes()).decode("ascii")
+                resp = _gemini_generate_video(
+                    api_key=api_key,
+                    model=model,
+                    prompt=REEL_ANALYSIS_PROMPT,
+                    video_b64=video_b64,
+                    mime_type="video/mp4",
+                )
+
+            raw_text = _extract_response_text(resp)
+            payload = _extract_json_object(raw_text)
+            if not payload:
+                raw_payload = raw_text if raw_text else json.dumps(resp)
+                raw_error = raw_payload[:10000]
+                raise RuntimeError(_no_json_error_message(resp))
+
+            summary = str(payload.get("actual_content") or payload.get("summary") or "").strip()
+
+            # Store in asset_ai with provider='gemini-video'
+            db.exec(
+                "insert into asset_ai (id, asset_id, provider, model, summary, json, created_at) values (?, ?, ?, ?, ?, ?, ?)",
+                (str(uuid.uuid4()), asset_id, "gemini-video", model, summary or None, json.dumps(payload), now),
+            )
+
+            # Update ai_summary on the asset
+            if summary:
+                db.exec("update assets set ai_summary=? where id=?", (summary, asset_id))
+
+            # Replace stale thumbnail-based labels with video-based ones
+            db.exec(
+                "delete from asset_labels where asset_id=? and source='ai'",
+                (asset_id,),
+            )
+            labels = _flatten_reel_labels(payload)
+            for lab in labels:
+                db.exec(
+                    """
+                    insert or ignore into asset_labels
+                      (id, asset_id, label, confidence, source, model, run_id, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?);
+                    """,
+                    (str(uuid.uuid4()), asset_id, lab, 0.8, "ai-video", model, run_id, now),
+                )
+
+            labeled += 1
+
+            if attempted % 10 == 0:
+                print(f"  analyzed {labeled}/{attempted} reels ({len(errors)} errors, {file_api_count} via file API)")
+
+            # Rate limiting — Gemini free tier is ~15 RPM for video
+            time.sleep(0.5)
+
+        except Exception as e:
+            errors.append({"id": asset_id, "error": str(e)[:500]})
+            _log_ai_error(
+                db,
+                asset_id=asset_id,
+                provider="gemini-video",
+                model=model,
+                error=str(e),
+                raw=raw_error,
+                run_id=run_id,
+                now=now,
+            )
+
+    return {
+        "provider": "gemini-video",
+        "model": model,
+        "run_id": run_id,
+        "attempted": attempted,
+        "labeled_assets": labeled,
+        "file_api_uploads": file_api_count,
+        "errors": errors[:50],
+        "total_errors": len(errors),
+    }
+
+
+def _flatten_reel_labels(payload: dict[str, Any]) -> list[str]:
+    """Extract normalized labels from reel analysis JSON."""
+    buckets = ["elements", "materials", "styles"]
+    labels: list[str] = []
+    for key in buckets:
+        for item in payload.get(key, []) or []:
+            lab = _normalize_label(str(item))
+            if lab:
+                labels.append(lab)
+    # Add category + subcategory as labels
+    cat = _normalize_label(str(payload.get("category") or ""))
+    if cat and cat != "irrelevant":
+        labels.append(cat)
+    subcat = _normalize_label(str(payload.get("subcategory") or ""))
+    if subcat and subcat != "general":
+        labels.append(subcat)
+    # Dedupe
+    seen: set[str] = set()
+    out: list[str] = []
+    for lab in labels:
+        if lab in seen:
+            continue
+        seen.add(lab)
+        out.append(lab)
+    return out
+
+
+def apply_reel_recommendations(
+    db: Db,
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Apply Gemini video analysis recommendations to reel assets.
+
+    - Hides irrelevant reels (triage_status='hidden')
+    - Updates title/board/category for relevant reels
+    - Skips tagged items (Jim's anomalies — those are for interactive review)
+    """
+    rows = db.query(
+        """
+        select a.id, a.title, a.board, a.category, a.tagged,
+               ai.json as ai_json, ai.summary as ai_summary
+        from assets a
+        join asset_ai ai on ai.asset_id = a.id and ai.provider = 'gemini-video'
+        where a.source = 'facebook' and a.content_kind = 'reel'
+          and (a.triage_status is null)
+        order by a.imported_at asc
+        """
+    )
+
+    hidden = 0
+    kept = 0
+    recategorized = 0
+    tagged_skipped = 0
+    errors: list[dict[str, str]] = []
+    recommendations: dict[str, int] = {}
+
+    for r in rows:
+        asset_id = str(r["id"])
+        is_tagged = bool(r["tagged"])
+
+        try:
+            payload = json.loads(str(r["ai_json"] or "{}"))
+        except Exception:
+            errors.append({"id": asset_id, "error": "Invalid JSON in ai_json"})
+            continue
+
+        recommendation = str(payload.get("recommendation") or "").strip().lower()
+        recommendations[recommendation] = recommendations.get(recommendation, 0) + 1
+
+        if is_tagged:
+            # Tagged items get analysis stored but no auto-triage
+            tagged_skipped += 1
+            continue
+
+        if dry_run:
+            continue
+
+        if recommendation == "hide":
+            db.exec(
+                "update assets set triage_status='hidden', triage_at=? where id=?",
+                (_now_iso(), asset_id),
+            )
+            hidden += 1
+        elif recommendation in ("keep", "recategorize"):
+            updates: list[str] = []
+            params: list[Any] = []
+
+            suggested_title = str(payload.get("suggested_title") or "").strip()
+            suggested_board = str(payload.get("suggested_board") or "").strip()
+            category = str(payload.get("category") or "").strip()
+
+            current_title = str(r["title"] or "").strip()
+            current_board = str(r["board"] or "").strip()
+
+            if not current_title and suggested_title:
+                updates.append("title=?")
+                params.append(suggested_title[:200])
+
+            if not current_board and suggested_board:
+                updates.append("board=?")
+                params.append(suggested_board[:200])
+
+            if category and category != "irrelevant":
+                updates.append("category=?")
+                params.append(category)
+
+            if updates:
+                params.append(asset_id)
+                db.exec(f"update assets set {', '.join(updates)} where id=?", tuple(params))
+
+            if recommendation == "recategorize":
+                recategorized += 1
+            kept += 1
+
+    return {
+        "total_analyzed": len(rows),
+        "hidden": hidden,
+        "kept": kept,
+        "recategorized": recategorized,
+        "tagged_skipped": tagged_skipped,
+        "recommendation_breakdown": recommendations,
+        "dry_run": dry_run,
+        "errors": errors[:25],
+    }

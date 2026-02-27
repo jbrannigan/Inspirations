@@ -159,6 +159,44 @@ processes them client-side with simple pattern matching).
 
 ---
 
+## D017 — Attractor Explorer as in-app view mode (2026-02-26)
+
+**Decision:** The attractor explorer (2D and 3D) is an in-app view mode,
+toggled via toolbar buttons (Grid / Explorer) with 3D as a checkbox inside
+the explorer control panel alongside Focus and Live.
+
+**Why:** Keeps the explorer tightly integrated with the sidebar tree and
+existing filter state. Sidebar clicks auto-filter the explorer via
+`syncExplorerFilter()`. The 3D toggle is a visualization option (like Focus
+or Live), not a separate view — so it belongs in the control panel, not the
+toolbar.
+
+**Consequence:** Both 2D (`attractor-explorer.js`) and 3D
+(`attractor-explorer-3d.js`) share the same public API shape and
+`on3DToggle(callback)` interface. `app.js` wires the callback to
+`switchExplorerMode()`. Explorer layout keeps the two-column grid
+(sidebar + content) rather than going full-width.
+
+---
+
+## D018 — CSS pre-zoom for 2D scroll feedback (2026-02-26)
+
+**Decision:** Apply an instant CSS `transform` on the canvas during D3 zoom
+events, then clear it when `_render()` completes the real canvas repaint.
+
+**Why:** Canvas repaints for 4,600+ nodes take multiple frames. Without
+pre-zoom, scroll-zoom feels unresponsive — the user can't tell if their
+input was received. The CSS transform gives immediate (blurry) visual
+feedback while the crisp repaint catches up, matching the pattern used by
+Leaflet and Google Maps.
+
+**Consequence:** `_lastRenderedTransform` tracks the transform at last
+repaint. Zoom handler computes the delta and applies it as CSS
+`translate() + scale()`. `_render()` clears `canvas.style.transform` and
+updates the tracking state.
+
+---
+
 ## Archived Decisions (pre-rebuild)
 
 Decisions D010–D013 (cluster explorer, accessibility tier, session-only delete)

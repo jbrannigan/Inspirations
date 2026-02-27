@@ -1,5 +1,22 @@
 // shared.js — utilities used by both index.html (app.js) and admin.html (admin.js)
 (function () {
+  // --- Actor token detection (magic links) ---
+  // Check URL for ?actor=TOKEN on first visit, persist in localStorage
+  const _urlActorToken = new URLSearchParams(window.location.search).get("actor");
+  if (_urlActorToken) {
+    localStorage.setItem("actorToken", _urlActorToken);
+    // Also set a cookie so the token works across hostnames (localhost vs minime.local)
+    document.cookie = `actorToken=${_urlActorToken}; path=/; max-age=${60 * 60 * 24 * 365}; SameSite=Lax`;
+    // Clean the URL so the token isn't visible / bookmarkable
+    const cleaned = new URL(window.location);
+    cleaned.searchParams.delete("actor");
+    window.history.replaceState({}, "", cleaned.toString());
+  }
+  // Try localStorage first, fall back to cookie
+  const actorToken = localStorage.getItem("actorToken")
+    || (document.cookie.match(/(?:^|;\s*)actorToken=([^;]+)/) || [])[1]
+    || "";
+
   function escapeHtml(value) {
     return (value || "")
       .toString()
@@ -11,10 +28,12 @@
   }
 
   async function api(path, opts = {}) {
-    const res = await fetch(path, {
-      headers: { "Content-Type": "application/json" },
-      ...opts,
-    });
+    const headers = {
+      "Content-Type": "application/json",
+      ...(actorToken ? { "X-Actor-Token": actorToken } : {}),
+      ...(opts.headers || {}),
+    };
+    const res = await fetch(path, { ...opts, headers });
     if (!res.ok) {
       const t = await res.text();
       throw new Error(t || res.statusText);
@@ -58,5 +77,7 @@
     toast.addEventListener("animationend", () => toast.remove());
   }
 
-  window.Shared = { escapeHtml, api, formatApiError, showToast, _removeToast };
+  function getActorToken() { return actorToken; }
+
+  window.Shared = { escapeHtml, api, formatApiError, showToast, _removeToast, getActorToken };
 })();

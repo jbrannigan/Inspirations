@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import secrets
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -280,9 +281,10 @@ def _collapse_scan_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def list_assets(
+def _build_asset_filter(
     db: Db,
     *,
+    ids: str = "",
     q: str = "",
     source: str = "",
     board: str = "",
@@ -293,22 +295,35 @@ def list_assets(
     creator: str = "",
     collection_id: str = "",
     triage_status: str = "",
+    category: str = "",
     needs_annotation: bool = False,
+    flagged_only: bool = False,
+    tagged_only: bool = False,
     include_hidden: bool = False,
-    limit: int = 200,
-    offset: int = 0,
-) -> list[dict[str, Any]]:
-    clauses = []
+) -> tuple[str, str, list]:
+    """Build WHERE and JOIN clauses for asset queries. Returns (join_sql, where, params)."""
+    clauses: list[str] = []
     params: list[Any] = []
     joins: list[str] = []
+    if ids:
+        id_list = [s.strip() for s in ids.split(",") if s.strip()]
+        if id_list:
+            clauses.append("(" + " or ".join(["a.id like ?"] * len(id_list)) + ")")
+            params.extend(f"{prefix}%" for prefix in id_list)
     if source:
         sources = [s.strip() for s in source.split(",") if s.strip()]
         clauses.append("a.source in (%s)" % ",".join(["?"] * len(sources)))
         params.extend(sources)
     if board:
         boards = [s.strip() for s in board.split(",") if s.strip()]
-        clauses.append("a.board in (%s)" % ",".join(["?"] * len(boards)))
-        params.extend(boards)
+        board_conditions = []
+        for b in boards:
+            if b == "(uncategorized)":
+                board_conditions.append("(a.board is null or a.board = '')")
+            else:
+                board_conditions.append("lower(a.board) = lower(?)")
+                params.append(b)
+        clauses.append("(" + " or ".join(board_conditions) + ")")
     if label:
         labels = [s.strip() for s in label.split(",") if s.strip()]
         if labels:
@@ -343,28 +358,24 @@ def list_assets(
         creators = [s.strip() for s in creator.split(",") if s.strip()]
         clauses.append("a.creator_name in (%s)" % ",".join(["?"] * len(creators)))
         params.extend(creators)
+    if category:
+        categories = [s.strip() for s in category.split(",") if s.strip()]
+        clauses.append("coalesce(a.category, 'home_design') in (%s)" % ",".join(["?"] * len(categories)))
+        params.extend(categories)
     if q:
         if not any(j.startswith("left join asset_labels") for j in joins):
             joins.append("left join asset_labels al on al.asset_id = a.id")
-        clauses.append(
-            """
-            (
-              a.title like ?
-              or a.description like ?
-              or a.board like ?
-              or a.seo_alt_text like ?
-              or a.post_text like ?
-              or a.notes like ?
-              or a.ai_summary like ?
-              or a.creator_name like ?
-              or a.source_domain like ?
-              or a.source_name like ?
-              or al.label like ?
-            )
-            """
+        _search_fields = (
+            "a.title", "a.description", "a.board", "a.seo_alt_text",
+            "a.post_text", "a.notes", "a.ai_summary", "a.creator_name",
+            "a.source_domain", "a.source_name", "al.label",
         )
-        qv = f"%{q}%"
-        params += [qv, qv, qv, qv, qv, qv, qv, qv, qv, qv, qv]
+        terms = q.split()
+        for term in terms:
+            field_ors = " or ".join(f"{f} like ?" for f in _search_fields)
+            clauses.append(f"({field_ors})")
+            tv = f"%{term}%"
+            params += [tv] * len(_search_fields)
     if collection_id:
         joins.append("join collection_items ci on ci.asset_id = a.id")
         clauses.append("ci.collection_id = ?")
@@ -386,6 +397,10 @@ def list_assets(
             params.extend(statuses)
     if needs_annotation:
         clauses.append("a.needs_annotation = 1")
+    if flagged_only:
+        clauses.append("a.flagged = 1")
+    if tagged_only:
+        clauses.append("a.tagged = 1")
     if not include_hidden:
         clauses.append("(a.triage_status is null or a.triage_status != 'hidden')")
     hidden_collection_id = db.query_value("select id from collections where lower(name)='hidden' limit 1")
@@ -396,6 +411,49 @@ def list_assets(
         params.append(hidden_collection_id)
     where = "where " + " and ".join(clauses) if clauses else ""
     join_sql = "\n    " + "\n    ".join(joins) if joins else ""
+    return join_sql, where, params
+
+
+def list_asset_ids(db: Db, **kwargs) -> list[str]:
+    """Return only the IDs of assets matching the given filters (no limit/offset)."""
+    join_sql, where, params = _build_asset_filter(db, **kwargs)
+    sql = f"select distinct a.id from assets a {join_sql} {where}"
+    return [r["id"] for r in db.query(sql, tuple(params))]
+
+
+def list_assets(
+    db: Db,
+    *,
+    ids: str = "",
+    q: str = "",
+    source: str = "",
+    board: str = "",
+    label: str = "",
+    label_mode: str = "any",
+    media_status: str = "",
+    content_kind: str = "",
+    creator: str = "",
+    collection_id: str = "",
+    triage_status: str = "",
+    category: str = "",
+    needs_annotation: bool = False,
+    flagged_only: bool = False,
+    tagged_only: bool = False,
+    include_hidden: bool = False,
+    limit: int = 200,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    join_sql, where, params = _build_asset_filter(
+        db, ids=ids, q=q, source=source, board=board, label=label,
+        label_mode=label_mode, media_status=media_status, content_kind=content_kind,
+        creator=creator, collection_id=collection_id, triage_status=triage_status,
+        category=category, needs_annotation=needs_annotation, flagged_only=flagged_only,
+        tagged_only=tagged_only, include_hidden=include_hidden,
+    )
+
+    # Total count (same filters, no limit/offset)
+    count_sql = f"select count(distinct a.id) from assets a {join_sql} {where}"
+    total_count = db.query_value(count_sql, tuple(params)) or 0
 
     sql = f"""
     select distinct a.id, a.source, a.source_ref, a.title, a.description, a.board, a.notes,
@@ -411,13 +469,16 @@ def list_assets(
            a.created_at, a.imported_at, a.image_url, a.stored_path, a.thumb_path,
            a.triage_status, a.needs_annotation, a.source_url, a.seo_alt_text,
            a.post_text, a.hashtags, a.engagement_json, a.dominant_color,
-           a.image_width, a.image_height, a.closeup_desc
+           a.image_width, a.image_height, a.closeup_desc,
+           a.flagged, a.flagged_by, a.flagged_note,
+           a.tagged, a.tagged_by, a.tagged_note
     from assets a
     {join_sql}
     {where}
     order by
+      case when a.triage_status = 'keeper' then 0 else 1 end asc,
       case
-        when a.thumb_path is not null and a.thumb_path != '' then 3
+        when a.thumb_path is not null and a.thumb_path != '' then 1
         when a.stored_path is not null and (
           lower(a.stored_path) like '%.jpg'
           or lower(a.stored_path) like '%.jpeg'
@@ -426,7 +487,7 @@ def list_assets(
           or lower(a.stored_path) like '%.gif'
           or lower(a.stored_path) like '%.bmp'
           or lower(a.stored_path) like '%.svg'
-        ) then 2
+        ) then 1
         when a.image_url is not null and (
           lower(a.image_url) like '%.jpg%'
           or lower(a.image_url) like '%.jpeg%'
@@ -438,18 +499,32 @@ def list_assets(
         ) then 1
         else 0
       end desc,
-      a.imported_at desc
+      a.id asc
     limit ? offset ?;
     """
     params += [limit, offset]
     rows = [dict(r) for r in db.query(sql, tuple(params))]
-    return _collapse_scan_rows(rows)
+    collapsed = _collapse_scan_rows(rows)
+    # Expose the pre-collapse row count so callers can correctly determine
+    # has_more when scan rows get collapsed into document groups.
+    for item in collapsed:
+        item.setdefault("_pre_collapse_count", len(rows))
+        item.setdefault("_total_count", total_count)
+    return collapsed
 
 
 def list_facets(db: Db, *, source: str = "", media_status: str = "") -> dict[str, Any]:
     sources = db.query("select source, count(*) as n from assets group by source order by n desc")
+    board_clauses = ["board is not null", "board != ''"]
+    board_params: list[Any] = []
+    if source:
+        selected_sources = _csv_values(source)
+        if selected_sources:
+            board_clauses.append("source in (%s)" % ",".join(["?"] * len(selected_sources)))
+            board_params.extend(selected_sources)
     boards = db.query(
-        "select board, count(*) as n from assets where board is not null and board != '' group by board order by n desc limit 50"
+        "select board, count(*) as n from assets where %s group by board order by n desc limit 50" % " and ".join(board_clauses),
+        tuple(board_params),
     )
     labels = db.query(
         "select label, count(*) as n from asset_labels group by label order by n desc limit 50"
@@ -569,6 +644,44 @@ def bulk_set_triage_status(db: Db, asset_ids: list[str], status: str | None) -> 
             f"update assets set triage_status = ?, triage_at = ? where id in ({placeholders})",
             (status, now, *asset_ids),
         )
+    return len(asset_ids)
+
+
+def bulk_set_flag(
+    db: Db,
+    asset_ids: list[str],
+    flagged: int,
+    *,
+    flagged_by: str = "",
+    flagged_note: str = "",
+) -> int:
+    """Set flagged status for multiple assets. Returns count updated."""
+    if not asset_ids:
+        return 0
+    placeholders = ",".join(["?"] * len(asset_ids))
+    db.exec(
+        f"update assets set flagged=?, flagged_by=?, flagged_note=? where id in ({placeholders})",
+        (flagged, flagged_by, flagged_note, *asset_ids),
+    )
+    return len(asset_ids)
+
+
+def bulk_set_tag(
+    db: Db,
+    asset_ids: list[str],
+    tagged: int,
+    *,
+    tagged_by: str = "",
+    tagged_note: str = "",
+) -> int:
+    """Set tagged status for multiple assets (Jim's anomaly markers). Returns count updated."""
+    if not asset_ids:
+        return 0
+    placeholders = ",".join(["?"] * len(asset_ids))
+    db.exec(
+        f"update assets set tagged=?, tagged_by=?, tagged_note=? where id in ({placeholders})",
+        (tagged, tagged_by, tagged_note, *asset_ids),
+    )
     return len(asset_ids)
 
 
@@ -782,23 +895,50 @@ def list_collection_items(db: Db, *, collection_id: str) -> list[dict[str, Any]]
 
 def list_annotations(db: Db, *, asset_id: str) -> list[dict[str, Any]]:
     rows = db.query(
-        "select id, asset_id, x, y, text, created_at, updated_at from annotations where asset_id=? order by created_at asc",
+        """select id, asset_id, x, y, text, created_at, updated_at,
+                  actor_id, actor_name, annotation_type, resolved
+           from annotations where asset_id=? order by created_at asc""",
         (asset_id,),
     )
     return [dict(r) for r in rows]
 
 
-def create_annotation(db: Db, *, asset_id: str, x: float, y: float, text: str = "") -> dict[str, Any]:
+def create_annotation(
+    db: Db,
+    *,
+    asset_id: str,
+    x: float,
+    y: float,
+    text: str = "",
+    actor_id: str | None = None,
+    actor_name: str | None = None,
+    annotation_type: str = "note",
+) -> dict[str, Any]:
     ann_id = str(uuid.uuid4())
     now = _now_iso()
     db.exec(
-        "insert into annotations (id, asset_id, x, y, text, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?)",
-        (ann_id, asset_id, x, y, text or None, now, now),
+        """insert into annotations
+           (id, asset_id, x, y, text, created_at, updated_at, actor_id, actor_name, annotation_type, resolved)
+           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+        (ann_id, asset_id, x, y, text or None, now, now, actor_id, actor_name, annotation_type or "note"),
     )
-    return {"id": ann_id, "asset_id": asset_id, "x": x, "y": y, "text": text, "created_at": now, "updated_at": now}
+    return {
+        "id": ann_id, "asset_id": asset_id, "x": x, "y": y, "text": text,
+        "created_at": now, "updated_at": now,
+        "actor_id": actor_id, "actor_name": actor_name,
+        "annotation_type": annotation_type or "note", "resolved": 0,
+    }
 
 
-def update_annotation(db: Db, *, annotation_id: str, x: float | None = None, y: float | None = None, text: str | None = None) -> None:
+def update_annotation(
+    db: Db,
+    *,
+    annotation_id: str,
+    x: float | None = None,
+    y: float | None = None,
+    text: str | None = None,
+    resolved: int | None = None,
+) -> None:
     sets = []
     params: list[Any] = []
     if x is not None:
@@ -810,6 +950,9 @@ def update_annotation(db: Db, *, annotation_id: str, x: float | None = None, y: 
     if text is not None:
         sets.append("text=?")
         params.append(text)
+    if resolved is not None:
+        sets.append("resolved=?")
+        params.append(resolved)
     sets.append("updated_at=?")
     params.append(_now_iso())
     params.append(annotation_id)
@@ -818,3 +961,79 @@ def update_annotation(db: Db, *, annotation_id: str, x: float | None = None, y: 
 
 def delete_annotation(db: Db, *, annotation_id: str) -> None:
     db.exec("delete from annotations where id=?", (annotation_id,))
+
+
+# ---------------------------------------------------------------------------
+# Actors (magic-link collaboration)
+# ---------------------------------------------------------------------------
+
+def create_actor(db: Db, *, name: str, role: str = "collaborator") -> dict[str, Any]:
+    """Create a new actor with a unique magic-link token."""
+    actor_id = str(uuid.uuid4())
+    token = secrets.token_urlsafe(16)
+    now = _now_iso()
+    db.exec(
+        "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, ?)",
+        (actor_id, name, token, role, now),
+    )
+    return {"id": actor_id, "name": name, "token": token, "role": role, "created_at": now}
+
+
+def list_actors(db: Db) -> list[dict[str, Any]]:
+    rows = db.query("select id, name, token, role, created_at from actors order by created_at asc")
+    return [dict(r) for r in rows]
+
+
+def get_actor_by_token(db: Db, *, token: str) -> dict[str, Any] | None:
+    rows = db.query(
+        "select id, name, token, role, created_at from actors where token=?",
+        (token,),
+    )
+    return dict(rows[0]) if rows else None
+
+
+def delete_actor(db: Db, *, actor_id: str) -> None:
+    db.exec("delete from actors where id=?", (actor_id,))
+
+
+def list_open_questions(db: Db, *, limit: int = 50) -> list[dict[str, Any]]:
+    """Return unresolved question annotations, newest first, with asset info."""
+    rows = db.query(
+        """select ann.id, ann.asset_id, ann.x, ann.y, ann.text,
+                  ann.actor_id, ann.actor_name, ann.annotation_type,
+                  ann.created_at, ann.resolved,
+                  a.title as asset_title, a.thumb_path as asset_thumb,
+                  a.source as asset_source, a.board as asset_board
+           from annotations ann
+           join assets a on a.id = ann.asset_id
+           where ann.annotation_type = 'question'
+             and coalesce(ann.resolved, 0) = 0
+           order by ann.created_at desc
+           limit ?""",
+        (limit,),
+    )
+    return [dict(r) for r in rows]
+
+
+def hidden_tree(db: Db) -> dict[str, Any]:
+    """Return hidden item counts grouped by source and board for sidebar tree."""
+    rows = db.query(
+        """select source, board, count(*) as cnt
+           from assets
+           where triage_status = 'hidden'
+           group by source, board
+           order by source, board"""
+    )
+    sources_map: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        src = str(r["source"] or "unknown")
+        if src not in sources_map:
+            sources_map[src] = {"source": src, "boards": [], "total": 0}
+        board_name = str(r["board"] or "(uncategorized)")
+        cnt = int(r["cnt"])
+        sources_map[src]["boards"].append({"board": board_name, "count": cnt})
+        sources_map[src]["total"] += cnt
+    total_hidden = db.query_value(
+        "select count(*) from assets where triage_status = 'hidden'"
+    ) or 0
+    return {"sources": list(sources_map.values()), "total": int(total_hidden)}

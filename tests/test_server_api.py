@@ -179,7 +179,8 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(remaining_annotations, 0)
 
     def test_semantic_search_requires_api_key(self):
-        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": ""}, clear=False):
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": ""}, clear=False), \
+             mock.patch("inspirations.server._keychain_get", return_value=""):
             status, body = self._request("/api/search/similar?q=oak")
         self.assertEqual(status, 503)
         self.assertIn("GEMINI_API_KEY", body.get("error", ""))
