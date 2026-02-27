@@ -594,11 +594,17 @@ class ApiHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/assets/triage/bulk":
             ids = body.get("ids") or []
             status = body.get("status")
+            reason = body.get("reason", "")
             if not isinstance(ids, list):
                 return _send(self, 400, {"error": "ids must be list"})
             if status not in ("keeper", "hidden", None):
                 return _send(self, 400, {"error": "status must be 'keeper', 'hidden', or null"})
-            count = self._with_db(bulk_set_triage_status, asset_ids=ids, status=status)
+            actor = _resolve_actor(self)
+            actor_name = actor.get("name", "") if actor else ""
+            count = self._with_db(
+                bulk_set_triage_status, asset_ids=ids, status=status,
+                reason=reason or "bulk triage (UI)", actor=actor_name or "ui",
+            )
             return _send(self, 200, {"updated": count})
 
         if parsed.path == "/api/assets/flag/bulk":
@@ -623,7 +629,13 @@ class ApiHandler(BaseHTTPRequestHandler):
             needs_annotation = body.get("needs_annotation")
             if status not in ("keeper", "hidden", None):
                 return _send(self, 400, {"error": "status must be 'keeper', 'hidden', or null"})
-            self._with_db(set_triage_status, asset_id=asset_id, status=status, needs_annotation=needs_annotation)
+            actor = _resolve_actor(self)
+            actor_name = actor.get("name", "") if actor else ""
+            self._with_db(
+                set_triage_status, asset_id=asset_id, status=status,
+                needs_annotation=needs_annotation,
+                reason=body.get("reason", "") or "triage (UI)", actor=actor_name or "ui",
+            )
             return _send(self, 200, {"ok": True})
 
         m = re.match(r"^/api/assets/([^/]+)/flag$", parsed.path)
@@ -1163,7 +1175,13 @@ class ApiHandler(BaseHTTPRequestHandler):
         return tree
 
     def _adjust_tree_counts_for_hidden(self, tree: list[dict]) -> None:
-        """Subtract hidden-item counts so the browse tree shows only visible items."""
+        """Adjust browse-tree counts so they reflect only visible items.
+
+        CONTRACT: every tree node with count > 0 must deliver items when
+        clicked.  The count shown IS the number of items the user will see.
+        If a source or board has zero visible items it is pruned from the
+        tree entirely so the UI never promises items it cannot deliver.
+        """
         with Db(self.server.db_path) as db:
             ensure_schema(db)
             # Visible (non-hidden) counts per source
@@ -1187,9 +1205,10 @@ class ApiHandler(BaseHTTPRequestHandler):
             if node.get("type") != "source":
                 continue
             src = node["label"].lower()
-            visible_total = visible_by_source.get(src)
-            if visible_total is None:
-                continue
+            # Default to 0: if a source has no visible items at all it won't
+            # appear in the query results, but we must still zero-out its
+            # count so the pruning step below removes it from the tree.
+            visible_total = visible_by_source.get(src, 0)
             # Set source-level count to visible total
             node["count"] = visible_total
             # Adjust known board children

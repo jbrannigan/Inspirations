@@ -626,17 +626,70 @@ def list_asset_labels(db: Db, asset_id: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def _log_triage(
+    db: Db,
+    asset_id: str,
+    old_status: str | None,
+    new_status: str | None,
+    *,
+    reason: str = "",
+    actor: str = "",
+) -> None:
+    """Append an entry to the triage audit log."""
+    db.exec(
+        "insert into triage_log (asset_id, old_status, new_status, reason, actor, created_at) "
+        "values (?, ?, ?, ?, ?, ?)",
+        (asset_id, old_status, new_status, reason, actor,
+         datetime.now(timezone.utc).isoformat()),
+    )
+
+
+def _log_triage_bulk(
+    db: Db,
+    asset_ids: list[str],
+    new_status: str | None,
+    *,
+    reason: str = "",
+    actor: str = "",
+) -> None:
+    """Append audit log entries for a bulk triage operation.
+
+    Fetches current status for each asset so old_status is recorded accurately.
+    """
+    if not asset_ids:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    placeholders = ",".join(["?"] * len(asset_ids))
+    rows = db.query(
+        f"select id, triage_status from assets where id in ({placeholders})",
+        asset_ids,
+    )
+    old_by_id = {r["id"]: r["triage_status"] for r in rows}
+    db.executemany(
+        "insert into triage_log (asset_id, old_status, new_status, reason, actor, created_at) "
+        "values (?, ?, ?, ?, ?, ?)",
+        [(aid, old_by_id.get(aid), new_status, reason, actor, now) for aid in asset_ids],
+    )
+
+
 def set_triage_status(
     db: Db,
     asset_id: str,
     status: str | None,
     needs_annotation: int | None = None,
+    *,
+    reason: str = "",
+    actor: str = "",
 ) -> None:
     """Set triage status for a single asset.
 
     status: 'keeper' | 'hidden' | None (resets to pending).
     needs_annotation: 0 or 1, set when user checks 'Comment later' during review.
     """
+    # Log before updating so we capture old_status
+    old = db.query_value("select triage_status from assets where id = ?", (asset_id,))
+    _log_triage(db, asset_id, old, status, reason=reason, actor=actor)
+
     now = datetime.now(timezone.utc).isoformat()
     if status is None:
         db.exec(
@@ -651,10 +704,20 @@ def set_triage_status(
         )
 
 
-def bulk_set_triage_status(db: Db, asset_ids: list[str], status: str | None) -> int:
+def bulk_set_triage_status(
+    db: Db,
+    asset_ids: list[str],
+    status: str | None,
+    *,
+    reason: str = "",
+    actor: str = "",
+) -> int:
     """Set triage status for multiple assets. Returns count updated."""
     if not asset_ids:
         return 0
+    # Log before updating so we capture old_status for each
+    _log_triage_bulk(db, asset_ids, status, reason=reason, actor=actor)
+
     now = datetime.now(timezone.utc).isoformat()
     placeholders = ",".join(["?"] * len(asset_ids))
     if status is None:

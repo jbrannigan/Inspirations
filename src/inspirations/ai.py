@@ -1860,9 +1860,15 @@ def apply_reel_recommendations(
             continue
 
         if recommendation == "hide":
+            now = _now_iso()
             db.exec(
                 "update assets set triage_status='hidden', triage_at=? where id=?",
-                (_now_iso(), asset_id),
+                (now, asset_id),
+            )
+            db.exec(
+                "insert into triage_log (asset_id, old_status, new_status, reason, actor, created_at) "
+                "values (?, ?, 'hidden', ?, 'ai-reel-triage', ?)",
+                (asset_id, None, f"gemini-video recommendation: {recommendation}", now),
             )
             hidden += 1
         elif recommendation in ("keep", "recategorize"):

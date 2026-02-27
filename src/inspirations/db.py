@@ -381,4 +381,23 @@ def ensure_schema(db: Db) -> None:
         },
     )
 
+    # Triage audit log — records every triage status change so bulk
+    # operations can be reviewed and reverted.
+    db.exec(
+        """
+        create table if not exists triage_log (
+          id integer primary key autoincrement,
+          asset_id text not null,
+          old_status text,
+          new_status text,
+          reason text,
+          actor text,
+          created_at text not null
+        );
+        """
+    )
+    db.exec("create index if not exists ix_triage_log_asset on triage_log(asset_id);")
+    db.exec("create index if not exists ix_triage_log_created on triage_log(created_at);")
+    db.exec("create index if not exists ix_triage_log_actor on triage_log(actor);")
+
     _backfill_assets_metadata(db)
