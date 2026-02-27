@@ -13,3 +13,6 @@ List the commands/tests you ran and the results.
 - [ ] If no `README.md` change was required, I documented why in this PR.
 - [ ] `docs/pr_summary.md` is updated when behavior changed.
 - [ ] No secrets or credentials were committed.
+
+### If UI / Explorer changes
+- [ ] Browse tree sanity test passes (`tools/sanity_browse_tree_explorer.js` — paste into DevTools console on localhost:8001, all 16 checks green)

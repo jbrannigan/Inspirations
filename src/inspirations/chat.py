@@ -393,7 +393,11 @@ def process_chat_message(
     if action == "triage_by_query" and triage_status:
         full_ids = result["params"].get("ids", [])
         if full_ids:
-            count = bulk_set_triage_status(db, full_ids, triage_status)
+            count = bulk_set_triage_status(
+                db, full_ids, triage_status,
+                reason=f"chat triage: {result.get('message', '')[:200]}",
+                actor="ai-chat",
+            )
             status_label = {"keeper": "keepers", "hidden": "hidden"}.get(triage_status, triage_status)
             result["message"] = f"Done! Marked {count} item{'s' if count != 1 else ''} as {status_label}."
         else:

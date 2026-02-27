@@ -62,6 +62,11 @@ ruff check src tests
 PYTHONPATH=src python3 -m unittest tests.test_store -v
 ```
 
+### Browse tree sanity test (UI)
+Start the dev server, open http://localhost:8001, paste `tools/sanity_browse_tree_explorer.js`
+into the DevTools console. All 16 checks should pass. Run this before any PR that touches
+explorer, sidebar, or browse-tree code.
+
 ### Run the CLI
 ```bash
 PYTHONPATH=src python3 -m inspirations <subcommand>
