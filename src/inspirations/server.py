@@ -18,7 +18,6 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .ai import DEFAULT_GEMINI_EMBEDDING_MODEL, run_similarity_search
-from .catalog import load_catalog_index
 from .chat import process_chat_message
 from .db import Db, ensure_schema
 from .importers.scans import import_photos_inbox, import_scans_inbox
@@ -37,6 +36,7 @@ from .store import (
     hidden_tree,
     list_actors,
     list_annotations,
+    list_asset_ids,
     list_assets,
     list_collection_items,
     list_collections,
@@ -57,12 +57,41 @@ from .store import (
     update_asset_notes,
 )
 from .explorer_layout import compute_layout
+from .feature_vectors import build_feature_vectors
 from .thumbnails import generate_thumbnails
 
 
 MAX_BODY = 2_000_000
 MAX_UPLOAD_BODY = 350_000_000
 DEFAULT_ASSETS_PAGE_SIZE = 240
+
+# ── API key helpers ──────────────────────────────────────────────────────────────
+
+_keychain_cache: dict[str, str] = {}
+
+
+def _keychain_get(service: str) -> str:
+    """Read a password from macOS Keychain (cached)."""
+    if service in _keychain_cache:
+        return _keychain_cache[service]
+    try:
+        val = subprocess.check_output(
+            ["security", "find-generic-password", "-s", service, "-w"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except Exception:
+        val = ""
+    _keychain_cache[service] = val
+    return val
+
+
+def _get_api_key(env_var: str, keychain_service: str) -> str:
+    """Return API key from env-var first, then macOS Keychain fallback."""
+    val = (os.environ.get(env_var) or "").strip()
+    if val:
+        return val
+    return _keychain_get(keychain_service)
 
 
 def _parse_bool_param(raw: str, *, default: bool = False) -> bool:
@@ -203,12 +232,27 @@ class ApiHandler(BaseHTTPRequestHandler):
                 assets = assets[:page_limit]
             return _send(self, 200, {"assets": assets, "has_more": has_more, "total": total_count})
 
+        if parsed.path == "/api/asset-ids":
+            q = parse_qs(parsed.query)
+            ids = self._with_db(
+                list_asset_ids,
+                q=q.get("q", [""])[0],
+                source=q.get("source", [""])[0],
+                board=q.get("board", [""])[0],
+                collection_id=q.get("collection_id", [""])[0],
+                triage_status=q.get("triage_status", [""])[0],
+                needs_annotation=_parse_bool_param(q.get("needs_annotation", [""])[0], default=False),
+                flagged_only=_parse_bool_param(q.get("flagged", [""])[0], default=False),
+                include_hidden=_parse_bool_param(q.get("include_hidden", [""])[0], default=False),
+            )
+            return _send(self, 200, {"ids": ids})
+
         if parsed.path == "/api/search/similar":
             q = parse_qs(parsed.query)
             query_text = (q.get("q", [""])[0] or "").strip()
             if not query_text:
                 return _send(self, 400, {"error": "q is required"})
-            api_key = (os.environ.get("GEMINI_API_KEY") or "").strip()
+            api_key = _get_api_key("GEMINI_API_KEY", "inspirations_gemini_api_key")
             if not api_key:
                 return _send(self, 503, {"error": "GEMINI_API_KEY is required for semantic search"})
             source = (q.get("source", [""])[0] or "").strip()
@@ -301,6 +345,16 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return _send(self, 500, {"error": f"cluster review export failed: {e}"})
             return _send(self, 200, payload)
 
+        if parsed.path == "/api/explorer/attractor-data":
+            q = parse_qs(parsed.query)
+            pca_dims = int((q.get("dims", ["2"])[0] or "2").strip())
+            data_dir = Path(self.server.db_path).parent / "explorer_layouts"
+            try:
+                payload = self._with_db(build_feature_vectors, data_dir=data_dir, dims=pca_dims)
+            except Exception as e:
+                return _send(self, 500, {"error": f"attractor data failed: {e}"})
+            return _send(self, 200, payload)
+
         if parsed.path == "/api/explorer/layout":
             q = parse_qs(parsed.query)
             collection_id = (q.get("collection_id", [""])[0] or "").strip() or None
@@ -332,6 +386,11 @@ class ApiHandler(BaseHTTPRequestHandler):
                 tree = self._build_catalog_tree(Path(catalog_dir))
             except Exception:
                 tree = []
+            # Adjust counts to exclude hidden items
+            try:
+                self._adjust_tree_counts_for_hidden(tree)
+            except Exception:
+                pass
             return _send(self, 200, {"tree": tree})
 
         if parsed.path == "/api/catalog/items":
@@ -632,7 +691,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             user_message = (body.get("message") or "").strip()
             if not user_message:
                 return _send(self, 400, {"error": "message required"})
-            api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+            api_key = _get_api_key("ANTHROPIC_API_KEY", "inspirations_anthropic_api_key")
             if not api_key:
                 return _send(self, 503, {"error": "Chat requires an Anthropic API key. Set ANTHROPIC_API_KEY."})
             try:
@@ -1096,6 +1155,60 @@ class ApiHandler(BaseHTTPRequestHandler):
                 continue
 
         return tree
+
+    def _adjust_tree_counts_for_hidden(self, tree: list[dict]) -> None:
+        """Subtract hidden-item counts so the browse tree shows only visible items."""
+        with Db(self.server.db_path) as db:
+            ensure_schema(db)
+            # Visible (non-hidden) counts per source
+            src_rows = db.query(
+                "select lower(source) as src, count(*) as n "
+                "from assets where triage_status is null or triage_status != 'hidden' "
+                "group by 1"
+            )
+            # Visible counts per source+board (for boards that exist in DB)
+            board_rows = db.query(
+                "select lower(source) as src, lower(coalesce(board,'')) as brd, count(*) as n "
+                "from assets where triage_status is null or triage_status != 'hidden' "
+                "group by 1, 2"
+            )
+        visible_by_source: dict[str, int] = {r["src"]: r["n"] for r in src_rows}
+        visible_by_board: dict[tuple[str, str], int] = {
+            (r["src"], r["brd"]): r["n"] for r in board_rows
+        }
+
+        for node in tree:
+            if node.get("type") != "source":
+                continue
+            src = node["label"].lower()
+            visible_total = visible_by_source.get(src)
+            if visible_total is None:
+                continue
+            # Set source-level count to visible total
+            node["count"] = visible_total
+            # Adjust known board children
+            accounted = 0
+            synthetic_children = []  # children that aggregate multiple DB boards
+            for child in node.get("children", []):
+                board_name = (child.get("board_name") or "").lower()
+                # Synthetic groups like "(unsorted reels)" aggregate many DB boards
+                if board_name.startswith("("):
+                    synthetic_children.append(child)
+                    continue
+                vis = visible_by_board.get((src, board_name), 0)
+                child["count"] = vis
+                accounted += vis
+            # Distribute remaining visible items across synthetic groups proportionally
+            remaining = visible_total - accounted
+            if synthetic_children and remaining >= 0:
+                old_total = sum(c["count"] for c in synthetic_children) or 1
+                for child in synthetic_children:
+                    child["count"] = max(0, round(remaining * child["count"] / old_total))
+            # Remove zero-count children (all items hidden)
+            node["children"] = [c for c in node.get("children", []) if c["count"] > 0]
+
+        # Remove zero-count source nodes (all items hidden)
+        tree[:] = [n for n in tree if n.get("type") != "source" or n["count"] > 0]
 
     def _project_root(self) -> Path:
         return Path(self.server.app_dir).resolve().parent

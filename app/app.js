@@ -16,6 +16,8 @@ const state = {
   q: "",
   semanticMode: false,
   assetsRequestSeq: 0,
+  chatPrompt: "",                // last Ask-Dave prompt that produced results
+  chatItemIds: null,             // array of IDs from a chat show_items action
 
   // Review mode
   reviewItems: [],
@@ -224,6 +226,7 @@ async function loadAssets(opts = {}) {
     updateStats();
     updateLoadMoreBtn();
     updateFilterIndicator();
+    syncExplorerFilter();
   } catch (e) {
     if (seq !== state.assetsRequestSeq) return;
     const grid = $("#grid");
@@ -334,6 +337,10 @@ function buildCard(a) {
   const quickTagHtml = state.actor
     ? `<button class="card-quick-tag${tagged ? " tagged" : ""}" title="${tagged ? "Remove tag" : "Tag for diagnosis"}" type="button">🏷️</button>`
     : "";
+  const isKeeper = ts === "keeper";
+  const quickStarHtml = isOwner()
+    ? `<button class="card-quick-star${isKeeper ? " starred" : ""}" title="${isKeeper ? "Remove keeper" : "Mark as keeper"}" type="button">★</button>`
+    : "";
 
   const selectedClass = state.canvasReview && state.canvasSelected.has(a.id) ? " canvas-selected" : "";
   el.className = "card" + selectedClass;
@@ -346,6 +353,7 @@ function buildCard(a) {
         : `<div class="card-placeholder">${escapeHtml(displayTitle(a))}</div>`}
       ${tagBadgeHtml}${badgeHtml}
       <span class="source-badge source-${escapeHtml(a.source || "")}">${escapeHtml(sourceLabel)}</span>
+      ${quickStarHtml}
       ${quickTagHtml}
       ${scanNavHtml}
     </div>
@@ -415,6 +423,41 @@ function buildCard(a) {
     });
   }
 
+  // Quick-star button wiring (owner keep/unkeep)
+  const quickStarBtn = el.querySelector(".card-quick-star");
+  if (quickStarBtn) {
+    quickStarBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const newStatus = a.triage_status === "keeper" ? null : "keeper";
+      try {
+        await api(`/api/assets/${encodeURIComponent(a.id)}/triage`, {
+          method: "POST",
+          body: JSON.stringify({ status: newStatus }),
+        });
+        a.triage_status = newStatus;
+        // Toggle keeper badge on card
+        const cardImg = el.querySelector(".card-image");
+        const oldBadge = el.querySelector(".triage-badge.keeper");
+        if (oldBadge) oldBadge.remove();
+        if (newStatus === "keeper" && cardImg) {
+          const badge = document.createElement("span");
+          badge.className = "triage-badge keeper";
+          badge.title = "Keeper";
+          cardImg.prepend(badge);
+        }
+        // Update star button state
+        quickStarBtn.classList.toggle("starred", newStatus === "keeper");
+        quickStarBtn.title = newStatus === "keeper" ? "Remove keeper" : "Mark as keeper";
+        Shared.showToast(newStatus === "keeper" ? "Marked as keeper ★" : "Keeper removed", { type: "success", duration: 2000 });
+        // Refresh tree counts
+        loadCatalogTree();
+        if (isOwner()) loadHiddenTree();
+      } catch (err) {
+        Shared.showToast(`Keep failed: ${formatApiError(err)}`, { type: "error" });
+      }
+    });
+  }
+
   return el;
 }
 
@@ -445,6 +488,16 @@ async function loadCatalogTree() {
   }
 }
 
+function resetTriageFilter() {
+  if (state.triageFilter) {
+    state.triageFilter = "";
+    // Update status chip UI to reflect "All"
+    $$("[data-triage]").forEach((c) => {
+      c.classList.toggle("active", c.dataset.triage === "");
+    });
+  }
+}
+
 function renderCatalogTree() {
   const wrap = $("#catalogTree");
   if (!wrap) return;
@@ -461,6 +514,7 @@ function renderCatalogTree() {
   allBtn.className = `tree-leaf${!state.currentSource && !state.currentBoard && !state.currentCollection && !state.currentCatalogFile ? " active" : ""}`;
   allBtn.innerHTML = `<span>All Items</span>`;
   allBtn.onclick = () => {
+    resetTriageFilter();
     state.currentSource = null;
     state.currentBoard = null;
     state.currentCollection = null;
@@ -480,6 +534,10 @@ function renderCatalogTree() {
       wrap.appendChild(buildCollectionsGroupNode(node));
     }
   }
+
+  // Re-append hidden tree (owner-only) — it lives inside catalogTree
+  // and gets wiped by innerHTML="" above
+  if (isOwner() && state.hiddenTree) renderHiddenTree();
 }
 
 function buildSourceNode(node) {
@@ -522,6 +580,7 @@ function buildSourceNode(node) {
 
   // Double-click filters to just the source
   toggle.ondblclick = () => {
+    resetTriageFilter();
     state.currentSource = node.label.toLowerCase();
     state.currentBoard = null;
     state.currentCollection = null;
@@ -547,6 +606,7 @@ function buildSourceNode(node) {
     leaf.className = `tree-leaf${isActive ? " active" : ""}`;
     leaf.innerHTML = `<span>${escapeHtml(boardName)}</span><span class="tree-count">${child.count}</span>`;
     leaf.onclick = () => {
+      resetTriageFilter();
       if (isCatchAll) {
         // Use catalog file mode for catch-all entries
         state.currentSource = null;
@@ -624,6 +684,7 @@ function buildDimensionNode(node) {
     leaf.className = `tree-leaf${isActive ? " active" : ""}`;
     leaf.innerHTML = `<span>${escapeHtml(child.label)}</span><span class="tree-count">${child.count}</span>`;
     leaf.onclick = () => {
+      resetTriageFilter();
       state.currentSource = null;
       state.currentBoard = null;
       state.currentCollection = null;
@@ -680,6 +741,7 @@ function buildCollectionsGroupNode(node) {
     leaf.className = `tree-leaf${isActive ? " active" : ""}`;
     leaf.innerHTML = `<span>${escapeHtml(child.label)}</span><span class="tree-count">${child.count}</span>`;
     leaf.onclick = () => {
+      resetTriageFilter();
       state.currentSource = null;
       state.currentBoard = null;
       state.currentCollection = child.collection_id;
@@ -769,22 +831,17 @@ async function bulkTriageFromTree(status, filterParams, nodeKey) {
       Shared.showToast(`${ids.length} item${ids.length === 1 ? "" : "s"} restored.`, { type: "success" });
     }
 
-    // Refresh grid + tree
+    // Refresh grid + tree (re-fetch tree for updated counts)
     await loadAssets();
+    await loadCatalogTree();
     if (isOwner()) loadHiddenTree();
-    // Update toggle button states in the sidebar
-    $$(".tree-hide-toggle").forEach((btn) => {
-      const parentEl = btn.closest(".tree-leaf") || btn.closest(".tree-toggle");
-      // Re-render will handle this, but force visual update on current toggles
-    });
-    renderCatalogTree();
-    if (isOwner() && state.hiddenTree) renderHiddenTree();
   } catch (e) {
     Shared.showToast(`Bulk triage failed: ${formatApiError(e)}`, { type: "error" });
   }
 }
 
 function setSourceFilter(source) {
+  resetTriageFilter();
   state.currentSource = source || null;
   state.currentBoard = null;
   state.currentCatalogFile = null;
@@ -794,6 +851,7 @@ function setSourceFilter(source) {
 }
 
 function setBoardFilter(board) {
+  resetTriageFilter();
   state.currentBoard = board || null;
   state.currentCatalogFile = null;
   state.offset = 0;
@@ -1001,6 +1059,7 @@ function wireStatusChips() {
       chip.classList.add("active");
       state.triageFilter = chip.dataset.triage;
       state.offset = 0;
+      renderCatalogTree();
       loadAssets();
     });
   });
@@ -1305,6 +1364,9 @@ async function setTriageFromModal(asset, status) {
     }
     const msg = newStatus === "keeper" ? "Marked as keeper" : newStatus === "hidden" ? "Hidden" : "Reset to pending";
     Shared.showToast(msg, { type: "success" });
+    // Refresh tree counts (they depend on hidden status)
+    loadCatalogTree();
+    if (isOwner()) loadHiddenTree();
   } catch (e) {
     Shared.showToast(`Failed: ${formatApiError(e)}`, { type: "error" });
   }
@@ -2112,6 +2174,22 @@ function addChatResponse(text, duration) {
   addChatResponse._timer = setTimeout(() => { if (bar) bar.hidden = true; }, duration || 6000);
 }
 
+// Extract meaningful keywords from a chat message for text-search fallback.
+const _CHAT_STOP_WORDS = new Set([
+  "show", "me", "find", "get", "display", "list", "search", "look", "give",
+  "make", "create", "do", "see", "open", "go", "browse", "view", "let",
+  "for", "some", "all", "the", "a", "an", "with", "in", "of", "and",
+  "or", "that", "have", "has", "are", "is", "it", "to", "my", "its",
+  "please", "can", "you", "could", "would", "want", "need", "like",
+  "i", "items", "things", "images", "photos", "pictures", "inspirations",
+  "inspiration", "ideas", "try", "just",
+]);
+function _chatKeywords(text) {
+  return text.toLowerCase().split(/\s+/)
+    .filter((w) => w.length > 1 && !_CHAT_STOP_WORDS.has(w))
+    .join(" ");
+}
+
 async function processChat(text) {
   const trimmed = (text || "").trim();
   if (!trimmed) return;
@@ -2134,6 +2212,11 @@ async function processChat(text) {
       showChatSpinner(routingMessage);
     }
 
+    // Persist the prompt for any action that changes the visible results
+    if (action !== "message") {
+      state.chatPrompt = trimmed;
+    }
+
     await executeChatAction(action, params);
 
     hideChatSpinner();
@@ -2145,7 +2228,12 @@ async function processChat(text) {
     hideChatSpinner();
     const errMsg = formatApiError(e);
     if (errMsg.includes("ANTHROPIC_API_KEY") || errMsg.includes("Anthropic")) {
-      addChatResponse("Chat requires an Anthropic API key. Set ANTHROPIC_API_KEY.", 12000);
+      // AI chat unavailable — fall back to text search using extracted keywords
+      const keywords = _chatKeywords(trimmed) || trimmed;
+      state.chatPrompt = trimmed;
+      state.q = keywords;
+      loadAssets();
+      addChatResponse(`Filtering by "${keywords}" (AI chat unavailable without API key)`, 8000);
     } else {
       addChatResponse(`Chat error: ${errMsg}`, 8000);
     }
@@ -2159,13 +2247,24 @@ async function executeChatAction(action, params) {
       const ids = (params.ids || []).join(",");
       if (!ids) break;
       try {
+        // Clear any stale filter state so the indicator reflects the chat result
+        state.q = "";
+        state.currentSource = null;
+        state.currentBoard = null;
+        state.currentCollection = null;
+        state.currentCatalogFile = null;
+        state.triageFilter = "";
         const data = await api(`/api/assets?ids=${encodeURIComponent(ids)}&include_hidden=1&limit=200`);
         state.assets = data.assets || [];
         state.hasMore = false;
         state.offset = state.assets.length;
+        // Store curated IDs so the explorer can highlight just these
+        state.chatItemIds = state.assets.map((a) => a.id);
         renderGrid();
         updateStats();
         updateLoadMoreBtn();
+        updateFilterIndicator();
+        syncExplorerFilter();
       } catch (e) {
         addChatResponse(`Failed to load items: ${formatApiError(e)}`, 8000);
       }
@@ -2227,6 +2326,7 @@ async function executeChatAction(action, params) {
       break;
     }
     case "filter": {
+      state.chatItemIds = null;
       if (params.source !== undefined) {
         state.currentSource = params.source || null;
       }
@@ -2241,8 +2341,6 @@ async function executeChatAction(action, params) {
       }
       if (params.q !== undefined) {
         state.q = params.q || "";
-        const si = $("#search");
-        if (si) si.value = state.q;
       }
       if (params.collection_id !== undefined) {
         state.currentCollection = params.collection_id || null;
@@ -2252,16 +2350,14 @@ async function executeChatAction(action, params) {
       break;
     }
     case "search": {
+      state.chatItemIds = null;
       state.q = params.q || "";
-      const si = $("#search");
-      if (si) si.value = state.q;
       await loadAssets();
       break;
     }
     case "semantic_search": {
+      state.chatItemIds = null;
       state.q = `sem:${params.q || ""}`;
-      const si = $("#search");
-      if (si) si.value = state.q;
       await loadAssets();
       break;
     }
@@ -2303,8 +2399,6 @@ async function executeChatAction(action, params) {
       state.currentCatalogFile = null;
       state.triageFilter = "";
       state.q = "";
-      const si = $("#search");
-      if (si) si.value = "";
       $$("[data-triage]").forEach((c) => {
         c.classList.toggle("active", c.dataset.triage === "");
       });
@@ -2387,69 +2481,186 @@ let explorerData = null;
 const viewGridBtn = $("#viewGrid");
 const viewExplorerBtn = $("#viewExplorer");
 
+// Explorer implementations: 2D (default) and 3D (opt-in via module)
+const _Explorer2D = window.AttractorExplorer || null;
+let _explorerMode = "2d";   // "2d" | "3d"
+let _ExplorerImpl = _Explorer2D || window.Explorer || null;
+function _getExplorer3D() { return window.AttractorExplorer3D || null; }
+
 function setViewMode(mode) {
   if (state.canvasReview) exitCanvasReview();
   const browseView = $("#browseView");
   const explorerView = $("#explorerView");
+  const sidebarEl = $("aside.sidebar");
+  const layoutEl = $(".layout");
 
   if (mode === "explorer") {
     if (browseView) browseView.hidden = true;
     if (explorerView) explorerView.hidden = false;
+    if (layoutEl) layoutEl.classList.add("explorer-active");
     if (viewGridBtn) viewGridBtn.classList.remove("active");
     if (viewExplorerBtn) viewExplorerBtn.classList.add("active");
     loadExplorerView();
   } else {
     if (browseView) browseView.hidden = false;
     if (explorerView) explorerView.hidden = true;
+    if (layoutEl) layoutEl.classList.remove("explorer-active");
     if (viewGridBtn) viewGridBtn.classList.add("active");
     if (viewExplorerBtn) viewExplorerBtn.classList.remove("active");
-    if (window.Explorer && explorerLoaded) {
-      window.Explorer.pause();
+    if (_ExplorerImpl && explorerLoaded) {
+      _ExplorerImpl.pause();
     }
   }
 }
 
+/** Switch between 2D and 3D explorer implementations. */
+async function switchExplorerMode(newMode) {
+  if (newMode === _explorerMode && explorerLoaded) return;
+  // Tear down current
+  if (_ExplorerImpl && explorerLoaded) {
+    _ExplorerImpl.destroy();
+  }
+  const container = document.getElementById("explorerContainer");
+  if (container) container.innerHTML = "";
+  explorerLoaded = false;
+  explorerData = null;
+
+  _explorerMode = newMode;
+  const e3d = _getExplorer3D();
+  if (newMode === "3d" && e3d) {
+    _ExplorerImpl = e3d;
+  } else {
+    _ExplorerImpl = _Explorer2D || window.Explorer || null;
+    _explorerMode = "2d";
+  }
+  await loadExplorerView();
+}
+
 async function loadExplorerView() {
-  if (!window.Explorer || typeof window.Explorer.init !== "function") {
-    Shared.showToast("Explorer requires Three.js — loading…", { type: "info", duration: 3000 });
+  if (!_ExplorerImpl || typeof _ExplorerImpl.init !== "function") {
+    Shared.showToast("Explorer not available", { type: "error", duration: 3000 });
     return;
   }
 
-  const container = $("#explorerContainer");
-  if (!container) return;
-
   if (!explorerLoaded) {
-    window.Explorer.init(container);
-    window.Explorer.onClickNode((node) => {
-      // Open modal for clicked node
-      const asset = state.assets.find((a) => a.id === node.id);
+    _ExplorerImpl.init("explorerContainer");
+    _ExplorerImpl.onClickNode(async (nodeId) => {
+      // Try local cache first, then fetch from server
+      let asset = state.assets.find((a) => a.id === nodeId);
+      if (!asset) {
+        try {
+          const data = await api(`/api/assets?ids=${nodeId.slice(0,8)}&limit=1`);
+          asset = (data.assets || [])[0];
+        } catch (_) { /* ignore */ }
+      }
       if (asset) openModal(asset);
     });
+    // Wire 3D toggle from control panel checkbox
+    if (_ExplorerImpl.on3DToggle) {
+      _ExplorerImpl.on3DToggle((wants3D) => {
+        const newMode = wants3D ? "3d" : "2d";
+        if (newMode === "3d" && !_getExplorer3D()) {
+          Shared.showToast("3D explorer loading…", { type: "info", duration: 2000 });
+          return;
+        }
+        switchExplorerMode(newMode);
+      });
+    }
     explorerLoaded = true;
   } else {
-    window.Explorer.resume();
+    _ExplorerImpl.resume();
   }
 
-  // Load layout data
+  // Load data from appropriate endpoint
   try {
-    Shared.showToast("Loading semantic map…", { type: "info", duration: 2000 });
-    const params = new URLSearchParams();
-    if (state.currentCollection) params.set("collection_id", state.currentCollection);
-    const data = await api(`/api/explorer/layout?${params}`);
+    const dims = _explorerMode === "3d" ? 3 : 2;
+    Shared.showToast(`Loading ${_explorerMode.toUpperCase()} attractor map…`, { type: "info", duration: 2000 });
+    const endpoint = `/api/explorer/attractor-data?dims=${dims}`;
+    const data = await api(endpoint);
     explorerData = data;
-    window.Explorer.loadData(data);
+    _ExplorerImpl.loadData(data);
+    syncExplorerFilter();   // apply any active grid filters as dim
   } catch (e) {
-    const msg = formatApiError(e);
-    if (msg.includes("embedding") || msg.includes("GEMINI")) {
-      Shared.showToast("Explorer needs embeddings. Run AI analysis first.", { type: "error", duration: 8000 });
-    } else {
-      Shared.showToast(`Explorer: ${msg}`, { type: "error" });
-    }
+    Shared.showToast(`Explorer: ${formatApiError(e)}`, { type: "error" });
   }
 }
 
 if (viewGridBtn) viewGridBtn.addEventListener("click", () => setViewMode("grid"));
 if (viewExplorerBtn) viewExplorerBtn.addEventListener("click", () => setViewMode("explorer"));
+
+// 3D toggle is now inside the control panel — wired in loadExplorerView()
+
+// ─── Explorer ↔ filter sync ──────────────────────────────────────────────────────
+
+let _explorerFilterSeq = 0;
+
+function _hasActiveFilters() {
+  return !!(
+    state.triageFilter ||
+    state.currentSource ||
+    state.currentBoard ||
+    state.currentCollection ||
+    state.currentCatalogFile ||
+    state.chatItemIds ||
+    (state.q && state.q.trim())
+  );
+}
+
+async function syncExplorerFilter() {
+  if (!_ExplorerImpl || !explorerLoaded) return;
+
+  // Sync header search text into explorer's local title search
+  if (typeof _ExplorerImpl.setSearch === "function") {
+    _ExplorerImpl.setSearch(state.q || "");
+  }
+
+  // No filters → show everything
+  if (!_hasActiveFilters()) {
+    _ExplorerImpl.setFilter(null);
+    return;
+  }
+
+  // Chat-curated items: highlight only those IDs
+  if (state.chatItemIds) {
+    _ExplorerImpl.setFilter(state.chatItemIds);
+    return;
+  }
+
+  // Catalog file: use the asset IDs already loaded in the grid
+  if (state.currentCatalogFile) {
+    const ids = state.assets.map((a) => a.id);
+    _ExplorerImpl.setFilter(ids);
+    return;
+  }
+
+  // Build the same filter params the grid uses
+  const params = new URLSearchParams();
+  if (state.q && state.q.trim()) params.set("q", state.q.trim());
+  if (state.currentSource) params.set("source", state.currentSource);
+  if (state.currentBoard) params.set("board", state.currentBoard);
+  if (state.currentCollection) params.set("collection_id", state.currentCollection);
+  if (state.triageFilter === "needs-comment") {
+    params.set("needs_annotation", "1");
+    params.set("include_hidden", "1");
+  } else if (state.triageFilter === "hidden") {
+    params.set("triage_status", "hidden");
+    params.set("include_hidden", "1");
+  } else if (state.triageFilter === "flagged") {
+    params.set("flagged", "1");
+    params.set("include_hidden", "1");
+  } else if (state.triageFilter) {
+    params.set("triage_status", state.triageFilter);
+  }
+
+  const seq = ++_explorerFilterSeq;
+  try {
+    const data = await api(`/api/asset-ids?${params}`);
+    if (seq !== _explorerFilterSeq) return; // stale
+    _ExplorerImpl.setFilter(data.ids || []);
+  } catch (e) {
+    // Silently ignore — filter dim is a nice-to-have
+  }
+}
 
 // ─── Filter indicator ────────────────────────────────────────────────────────────
 
@@ -2460,9 +2671,15 @@ function updateFilterIndicator() {
 
   const parts = [];
 
-  if (state.semanticMode) {
+  // When a chat prompt is active, show it as the primary context;
+  // skip the raw search text since it's just the extracted keyword from the prompt.
+  if (state.chatPrompt) {
+    parts.push(`Dave: "${state.chatPrompt}"`);
+  } else if (state.semanticMode) {
     const semQ = semanticQueryFromInput(state.q);
     parts.push(`Semantic search: "${semQ}"`);
+  } else if (state.q && state.q.trim()) {
+    parts.push(`"${state.q.trim()}"`);
   }
   if (state.currentSource && !state.currentCatalogFile) {
     parts.push(`Source: ${state.currentSource}`);
@@ -2499,8 +2716,8 @@ if (clearFilterBtn) clearFilterBtn.addEventListener("click", () => {
   state.currentCatalogFile = null;
   state.triageFilter = "";
   state.q = "";
-  const si = $("#search");
-  if (si) si.value = "";
+  state.chatPrompt = "";
+  state.chatItemIds = null;
   $$("[data-triage]").forEach((c) => {
     c.classList.toggle("active", c.dataset.triage === "");
   });
@@ -2509,19 +2726,7 @@ if (clearFilterBtn) clearFilterBtn.addEventListener("click", () => {
   loadAssets();
 });
 
-// ─── Search ──────────────────────────────────────────────────────────────────────
-
-const searchInput = $("#search");
-if (searchInput) {
-  searchInput.addEventListener("input", (e) => {
-    state.q = e.target.value || "";
-    if (semanticQueryFromInput(state.q)) return; // don't auto-search for sem:
-    loadAssets();
-  });
-  searchInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") loadAssets();
-  });
-}
+// ─── Search (driven entirely via Ask Dave now) ──────────────────────────────────
 
 // ─── Load More ───────────────────────────────────────────────────────────────────
 

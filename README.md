@@ -65,6 +65,14 @@ PYTHONPATH=src python3 -m inspirations serve --host 0.0.0.0 --port 8000
 - Natural-language prompt to manage collections ("take all the things from this collection and put them into that collection")
 - Filter by source, board, tags, and more
 
+### Attractor Explorer
+- Semantic visualization of your entire collection as a force-directed map
+- Toggle attractor chips (Bathroom, Kitchen, Modern, Wood…) to pull matching items toward labeled poles
+- **2D mode** — Canvas-based D3 force layout with scroll-zoom and CSS pre-zoom feedback
+- **3D mode** — Three.js WebGL with OrbitControls, billboard thumbnails, and custom 3D force simulation
+- Sliders for Strength, Spread, and Size; Focus mode filters non-matching items for cleaner clouds
+- Sidebar tree stays visible for filtering; chips revealed on hover to reduce visual clutter
+
 ### Triage Review
 - Select a collection and hit "Review" to enter triage mode
 - For each item: **Keep** (love it), **Hide** (not relevant), or **Skip** (decide later)
@@ -93,7 +101,7 @@ Primary model: `gemini-2.5-flash`. Automatic fallback to `gemini-2.0-flash` on R
 ## Repository Layout
 
 - `src/inspirations/` — CLI, DB layer, importers, AI pipeline, server
-- `app/` — Local web app assets (vanilla HTML/CSS/JS)
+- `app/` — Local web app assets (vanilla HTML/CSS/JS, including attractor explorer 2D/3D)
 - `tools/` — Operational scripts
 - `tests/` — Unit tests
 - `docs/` — Current specs and plans

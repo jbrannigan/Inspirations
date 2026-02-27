@@ -281,7 +281,7 @@ def _collapse_scan_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def list_assets(
+def _build_asset_filter(
     db: Db,
     *,
     ids: str = "",
@@ -300,10 +300,9 @@ def list_assets(
     flagged_only: bool = False,
     tagged_only: bool = False,
     include_hidden: bool = False,
-    limit: int = 200,
-    offset: int = 0,
-) -> list[dict[str, Any]]:
-    clauses = []
+) -> tuple[str, str, list]:
+    """Build WHERE and JOIN clauses for asset queries. Returns (join_sql, where, params)."""
+    clauses: list[str] = []
     params: list[Any] = []
     joins: list[str] = []
     if ids:
@@ -412,6 +411,45 @@ def list_assets(
         params.append(hidden_collection_id)
     where = "where " + " and ".join(clauses) if clauses else ""
     join_sql = "\n    " + "\n    ".join(joins) if joins else ""
+    return join_sql, where, params
+
+
+def list_asset_ids(db: Db, **kwargs) -> list[str]:
+    """Return only the IDs of assets matching the given filters (no limit/offset)."""
+    join_sql, where, params = _build_asset_filter(db, **kwargs)
+    sql = f"select distinct a.id from assets a {join_sql} {where}"
+    return [r["id"] for r in db.query(sql, tuple(params))]
+
+
+def list_assets(
+    db: Db,
+    *,
+    ids: str = "",
+    q: str = "",
+    source: str = "",
+    board: str = "",
+    label: str = "",
+    label_mode: str = "any",
+    media_status: str = "",
+    content_kind: str = "",
+    creator: str = "",
+    collection_id: str = "",
+    triage_status: str = "",
+    category: str = "",
+    needs_annotation: bool = False,
+    flagged_only: bool = False,
+    tagged_only: bool = False,
+    include_hidden: bool = False,
+    limit: int = 200,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    join_sql, where, params = _build_asset_filter(
+        db, ids=ids, q=q, source=source, board=board, label=label,
+        label_mode=label_mode, media_status=media_status, content_kind=content_kind,
+        creator=creator, collection_id=collection_id, triage_status=triage_status,
+        category=category, needs_annotation=needs_annotation, flagged_only=flagged_only,
+        tagged_only=tagged_only, include_hidden=include_hidden,
+    )
 
     # Total count (same filters, no limit/offset)
     count_sql = f"select count(distinct a.id) from assets a {join_sql} {where}"

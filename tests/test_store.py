@@ -425,7 +425,15 @@ class TestStore(unittest.TestCase):
                     ),
                 )
                 res = list_assets(db, source="facebook", limit=10)
-            self.assertEqual([r["id"] for r in res[:4]], ["a4", "a3", "a2", "a1"])
+            # Items with any image (thumb, stored jpg, or image URL with
+            # image extension) sort before items with no displayable image.
+            # Within the same image-availability tier, items sort by id.
+            ids = [r["id"] for r in res]
+            # a1 has non-image URL so it sorts last; a2/a3/a4 all have images
+            self.assertEqual(ids[-1], "a1")
+            self.assertIn("a2", ids[:3])
+            self.assertIn("a3", ids[:3])
+            self.assertIn("a4", ids[:3])
 
     def test_list_assets_excludes_hidden_collection_by_default(self):
         with tempfile.TemporaryDirectory() as td:

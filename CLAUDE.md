@@ -15,7 +15,13 @@ The scrape-first rebuild is complete. The database has been rebuilt from browser
 - **92 collections** auto-created from board names
 - **986 bad Facebook images** nulled (duplicate SHA256 captures replaced with thumbnail_url fallback)
 
-### Recent changes (PRs #49, #50):
+### Recent changes:
+- **Attractor Explorer** — 2D (D3 force-directed) and 3D (Three.js WebGL) semantic visualizations
+  - Semantic attractor poles (rooms, styles, materials, colors) with toggleable chips
+  - Control panel: sliders always visible, chips hover-reveal, 3D/Focus/Live checkboxes
+  - Sidebar tree stays visible in explorer for filtering; Focus defaults ON
+  - CSS pre-zoom for instant scroll feedback in 2D; texture cache fix in 3D
+  - Spread slider in 3D scales collision pass cell size and min distance
 - Pagination (`has_more` flag) — all 6,295 items accessible via Load More
 - Collections auto-created from `board` values during rebuild
 - Pinterest title fallback to `seo_alt_text` (fixes "(untitled)" tiles)
@@ -99,9 +105,15 @@ PYTHONPATH=src python3 -m inspirations ai tag --provider gemini --api-key "$GEMI
 
 ### Frontend (`app/`)
 
-Vanilla HTML/CSS/JS, no build step. The app has two main workflows:
+Vanilla HTML/CSS/JS, no build step. The app has three main workflows:
 1. **Collection browsing + triage** — View collections as tile grids, natural-language collection management via chat prompt, keeper/hidden/skip review workflow with annotation marking
-2. **Share export** — Generate HTML artifacts for sharing curated collections with designers
+2. **Attractor Explorer** — Semantic visualization (2D canvas with D3 forces, or 3D WebGL with Three.js). Toggle between Grid and Explorer views via toolbar buttons. In explorer, attractor chips (rooms, styles, materials, colors) pull matching items toward labeled poles. Control panel has sliders (Strength/Spread/Size) always visible, with chips revealed on hover. 3D mode is a checkbox in the control panel alongside Focus and Live toggles. Sidebar tree stays visible in explorer mode for filtering.
+3. **Share export** — Generate HTML artifacts for sharing curated collections with designers
+
+Key explorer files:
+- `attractor-explorer.js` — 2D canvas + D3 force simulation, CSS pre-zoom feedback
+- `attractor-explorer-3d.js` — Three.js WebGL, custom 3D force sim, billboard textures
+- `app.js` — View switching (grid/explorer), `switchExplorerMode()` for 2D↔3D, `on3DToggle` callback wiring
 
 ### Data Model (SQLite)
 
@@ -129,11 +141,17 @@ GitHub Actions runs on every push and PR with a Python version matrix (`3.11`, `
 This project is registered in `/Users/minime/Projects/Agent Manager/config/projects.json`.
 If the dev server command, port, or startup requirements change, update that config file too.
 
+## Working Style
+
+- **Ask clarifying questions before implementing.** When the user describes a feature or change, confirm the intended behavior, scope, and UX details before writing code. Don't assume — especially for anything involving user-facing behavior, toggles, defaults, or architectural decisions.
+- Prefer short, focused changes over large rewrites. When unsure about the right approach, present options and let the user pick.
+
 ## Project-Specific Conventions
 
 - All CLI commands produce JSON output.
 - No external Python dependencies beyond optional Pillow — the project uses only the standard library.
 - Gemini API key is passed via `--api-key` flag or `GEMINI_API_KEY` environment variable.
+- API keys resolve from environment variables first, then macOS Keychain (`inspirations_anthropic_api_key`, `inspirations_gemini_api_key`) as fallback.
 - Tests use Python's built-in `unittest` (no pytest).
 - The package is run via `PYTHONPATH=src python3 -m inspirations` (or editable install via `pip install -e .`).
 - `data/`, `store/`, `imports/` are local-only and never committed.
