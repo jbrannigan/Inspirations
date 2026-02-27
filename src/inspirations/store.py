@@ -617,6 +617,15 @@ def list_facets(db: Db, *, source: str = "", media_status: str = "") -> dict[str
     }
 
 
+def list_asset_labels(db: Db, asset_id: str) -> list[dict]:
+    """Return all labels for a single asset, ordered by label name."""
+    rows = db.query(
+        "select label, source from asset_labels where asset_id = ? order by label",
+        (asset_id,),
+    )
+    return [dict(r) for r in rows]
+
+
 def set_triage_status(
     db: Db,
     asset_id: str,

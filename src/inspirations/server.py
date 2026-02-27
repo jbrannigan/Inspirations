@@ -37,6 +37,7 @@ from .store import (
     list_actors,
     list_annotations,
     list_asset_ids,
+    list_asset_labels,
     list_assets,
     list_collection_items,
     list_collections,
@@ -246,6 +247,11 @@ class ApiHandler(BaseHTTPRequestHandler):
                 include_hidden=_parse_bool_param(q.get("include_hidden", [""])[0], default=False),
             )
             return _send(self, 200, {"ids": ids})
+
+        m = re.match(r"^/api/assets/([^/]+)/labels$", parsed.path)
+        if m:
+            labels = self._with_db(list_asset_labels, asset_id=m.group(1))
+            return _send(self, 200, {"labels": labels})
 
         if parsed.path == "/api/search/similar":
             q = parse_qs(parsed.query)
