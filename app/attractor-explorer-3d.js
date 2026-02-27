@@ -54,6 +54,7 @@
   let _activeAttractors = [];   // [{dim, name, count, px, py, pz}]
 
   let _meshes = [];              // [{id, mesh, node}]
+  let _meshMap = new Map();      // id → entry, for O(1) lookup in _applyTexToMesh
   let _poleMarkers = [];         // [{mesh, labelEl, att}]
   let _clickCallback = null;
   let _selectCallback = null;
@@ -81,8 +82,16 @@
   const _texCache = {};
   let _texLoader = null;
   let _texLoading = 0;
-  const _texQueue = [];
+  let _texQueue = [];
   const MAX_CONCURRENT_TEX = 12;
+
+  // Shared geometry + billboard tracking
+  let _sharedGeo = null;
+  let _lastCameraQuat = null;
+  let _resizeObserver = null;
+
+  // UI state
+  let _showThumbs = true;
 
   // Source colors
   const SOURCE_COLORS = {
@@ -147,18 +156,25 @@
     // Texture loader
     _texLoader = new THREE.TextureLoader();
 
+    // Shared geometry for all node meshes (one instance, ~5k draw calls saved)
+    _sharedGeo = new THREE.PlaneGeometry(1, 1);
+
+    // Sentinel: (0,0,0,0) is not a valid unit quaternion — forces first billboard update
+    _lastCameraQuat = new THREE.Quaternion(0, 0, 0, 0);
+
     // Click detection
     _renderer.domElement.addEventListener("click", _onClick);
 
     // Resize
-    const ro = new ResizeObserver(() => {
+    _resizeObserver = new ResizeObserver(() => {
+      if (!_renderer || !_camera) return;
       const nw = _container.clientWidth;
       const nh = _container.clientHeight;
       _camera.aspect = nw / nh;
       _camera.updateProjectionMatrix();
       _renderer.setSize(nw, nh);
     });
-    ro.observe(_container);
+    _resizeObserver.observe(_container);
   }
 
   function _initialCameraZ(w, h) {
@@ -221,7 +237,9 @@
     // Create meshes
     _nodes.forEach((node) => {
       const mesh = _createNodeMesh(node);
-      _meshes.push({ id: node.id, mesh, node });
+      const entry = { id: node.id, mesh, node };
+      _meshes.push(entry);
+      _meshMap.set(node.id, entry);
     });
 
     // Build controls
@@ -241,7 +259,7 @@
   }
 
   function _createNodeMesh(node) {
-    const geo = new THREE.PlaneGeometry(1, 1);
+    const geo = _sharedGeo;
     const color = SOURCE_COLORS[node.source] || 0x999999;
     const mat = new THREE.MeshBasicMaterial({
       color: color,             // always source color as placeholder (visible on light bg)
@@ -264,12 +282,12 @@
 
   function _clearScene() {
     for (const { mesh } of _meshes) {
-      mesh.geometry.dispose();
       mesh.material.dispose();
       if (mesh.material.map) mesh.material.map.dispose();
       _scene && _scene.remove(mesh);
     }
     _meshes = [];
+    _meshMap.clear();
 
     for (const { mesh, labelEl } of _poleMarkers) {
       mesh.geometry.dispose();
@@ -299,7 +317,9 @@
 
       // Attractor pull
       for (const att of _activeAttractors) {
-        const w = node.vector[att.dim] * _attractStrength;
+        const w = att.source !== undefined
+          ? (node.source === att.source ? _attractStrength : 0)
+          : node.vector[att.dim] * _attractStrength;
         if (w > 0) {
           fx += (att.px - node.x) * w * 0.02;
           fy += (att.py - node.y) * w * 0.02;
@@ -327,6 +347,12 @@
     _collisionPass();
   }
 
+  // Collision grid packing: offset 512, stride 1025 — covers cell coords ±512
+  // (scene ±350, min cellSize ~0.83 → max cell coord ±422, well within ±512)
+  const _CELL_S = 1025;
+  const _CELL_S2 = _CELL_S * _CELL_S;
+  const _CELL_OFF = 512;
+
   function _collisionPass() {
     const scale = _repulsion / 6;  // 6 is baseline
     const cellSize = _nodeSize * 2.5 * scale;
@@ -336,7 +362,7 @@
       const cx = Math.floor(node.x / cellSize);
       const cy = Math.floor(node.y / cellSize);
       const cz = Math.floor(node.z / cellSize);
-      const key = `${cx},${cy},${cz}`;
+      const key = (cx + _CELL_OFF) * _CELL_S2 + (cy + _CELL_OFF) * _CELL_S + (cz + _CELL_OFF);
       if (!grid.has(key)) grid.set(key, []);
       grid.get(key).push(node);
     }
@@ -345,12 +371,14 @@
     const minDist2 = minDist * minDist;
 
     for (const [key, cell] of grid) {
-      const [cx, cy, cz] = key.split(",").map(Number);
+      const cx = Math.floor(key / _CELL_S2) - _CELL_OFF;
+      const cy = Math.floor((key % _CELL_S2) / _CELL_S) - _CELL_OFF;
+      const cz = (key % _CELL_S) - _CELL_OFF;
       // Check this cell and neighbors
       for (let dx = -1; dx <= 1; dx++) {
         for (let dy = -1; dy <= 1; dy++) {
           for (let dz = -1; dz <= 1; dz++) {
-            const nKey = `${cx + dx},${cy + dy},${cz + dz}`;
+            const nKey = (cx + dx + _CELL_OFF) * _CELL_S2 + (cy + dy + _CELL_OFF) * _CELL_S + (cz + dz + _CELL_OFF);
             const neighbor = grid.get(nKey);
             if (!neighbor) continue;
             for (const a of cell) {
@@ -550,10 +578,13 @@
         }
       }
 
-      // Billboard: face camera
-      for (const { mesh } of _meshes) {
-        if (mesh.visible) {
-          mesh.quaternion.copy(_camera.quaternion);
+      // Billboard: face camera (skip when quaternion unchanged)
+      if (!_camera.quaternion.equals(_lastCameraQuat)) {
+        _lastCameraQuat.copy(_camera.quaternion);
+        for (const { mesh } of _meshes) {
+          if (mesh.visible) {
+            mesh.quaternion.copy(_camera.quaternion);
+          }
         }
       }
 
@@ -635,7 +666,8 @@
   }
 
   function _applyTexToMesh(node) {
-    const entry = _meshes.find((m) => m.id === node.id);
+    if (!_showThumbs) return;
+    const entry = _meshMap.get(node.id);
     if (entry) {
       entry.mesh.material.color.set(0xffffff); // reset to white so texture is not tinted
       entry.mesh.material.map = node._tex;
@@ -681,12 +713,47 @@
       <label class="physics-toggle">3D <input type="checkbox" id="_attr3dToggle" checked></label>
       <label class="physics-toggle">Focus <input type="checkbox" id="_attr3dFocus" ${_focusedMode ? "checked" : ""}></label>
       <label class="physics-toggle">Live <input type="checkbox" id="_attr3dLive" ${_liveMode ? "checked" : ""}></label>
+      <label class="physics-toggle">Thumbs <input type="checkbox" id="_attr3dThumbs" ${_showThumbs ? "checked" : ""}></label>
     `;
     _controlsEl.appendChild(slidersRow);
 
     // Chip groups in hover-reveal section
     const chipsSection = document.createElement("div");
     chipsSection.className = "attractor-chips-section";
+
+    // Source chips — always first
+    {
+      const srcOrder = ["pinterest", "facebook", "houzz", "scan"];
+      const srcLabels = { pinterest: "Pinterest", facebook: "Facebook", houzz: "Houzz", scan: "Scans" };
+      const srcCounts = {};
+      for (const n of _allNodes) srcCounts[n.source] = (srcCounts[n.source] || 0) + 1;
+
+      const presentSrcs = srcOrder.filter((s) => srcCounts[s] > 0);
+if (presentSrcs.length > 0) {
+        const group = document.createElement("div");
+        group.className = "attractor-group";
+        const lbl = document.createElement("span");
+        lbl.className = "attractor-group-label";
+        lbl.textContent = "Source";
+        group.appendChild(lbl);
+        const chips = document.createElement("div");
+        chips.className = "attractor-chips";
+        for (const src of presentSrcs) {
+          const cssColor = "#" + (SOURCE_COLORS[src] || 0x999999).toString(16).padStart(6, "0");
+          const count = srcCounts[src];
+          const btn = document.createElement("button");
+          btn.className = "attractor-chip";
+          btn.type = "button";
+          btn.dataset.src = src;
+          btn.dataset.count = count;
+          btn.innerHTML = `<span class="src-dot" style="background:${cssColor}"></span>${srcLabels[src]} <span class="chip-count">${count}</span>`;
+          btn.addEventListener("click", () => _toggleAttractor({ source: src, name: srcLabels[src], count }));
+          chips.appendChild(btn);
+        }
+        group.appendChild(chips);
+        chipsSection.appendChild(group);
+      }
+    }
 
     const chipOrder = ["rooms", "styles", "materials", "colors"];
     for (const catKey of chipOrder) {
@@ -772,6 +839,30 @@
         }
       });
 
+    const thumbsToggle = _controlsEl.querySelector("#_attr3dThumbs");
+    if (thumbsToggle)
+      thumbsToggle.addEventListener("change", (e) => {
+        _showThumbs = e.target.checked;
+        if (!_showThumbs) {
+          for (const { mesh, node } of _meshes) {
+            if (mesh.material.map) {
+              mesh.material.map = null;
+              mesh.material.color.set(SOURCE_COLORS[node.source] || 0x999999);
+              mesh.material.needsUpdate = true;
+            }
+          }
+        } else {
+          for (const { mesh, node } of _meshes) {
+            if (node._tex) {
+              mesh.material.color.set(0xffffff);
+              mesh.material.map = node._tex;
+              mesh.material.needsUpdate = true;
+            }
+          }
+          _queueVisibleTextures();
+        }
+      });
+
     // 3D toggle — fires callback to switch back to 2D
     const toggle3D = _controlsEl.querySelector("#_attr3dToggle");
     if (toggle3D)
@@ -781,18 +872,26 @@
   }
 
   function _toggleAttractor(opt) {
-    const idx = _activeAttractors.findIndex((a) => a.dim === opt.dim);
+    const idx = opt.source !== undefined
+      ? _activeAttractors.findIndex((a) => a.source === opt.source)
+      : _activeAttractors.findIndex((a) => a.dim === opt.dim);
     if (idx >= 0) {
       _activeAttractors.splice(idx, 1);
     } else {
-      _activeAttractors.push({ dim: opt.dim, name: opt.name, count: opt.count, px: 0, py: 0, pz: 0 });
+      _activeAttractors.push(
+        opt.source !== undefined
+          ? { source: opt.source, name: opt.name, count: opt.count, px: 0, py: 0, pz: 0 }
+          : { dim: opt.dim, name: opt.name, count: opt.count, px: 0, py: 0, pz: 0 }
+      );
     }
 
     // Update chip active states
     const chips = _controlsEl.querySelectorAll(".attractor-chip");
     chips.forEach((chip) => {
-      const dimStr = chip.dataset.dim;
-      const isActive = _activeAttractors.some((a) => a.dim === parseInt(dimStr));
+      const srcStr = chip.dataset.src;
+      const isActive = srcStr
+        ? _activeAttractors.some((a) => a.source === srcStr)
+        : _activeAttractors.some((a) => a.dim === parseInt(chip.dataset.dim));
       chip.classList.toggle("active", isActive);
     });
 
@@ -813,7 +912,10 @@
     const coveredIds = new Set();
     for (const node of source) {
       for (const att of _activeAttractors) {
-        if (node.vector[att.dim] > 0) {
+        const w = att.source !== undefined
+          ? (node.source === att.source ? 1 : 0)
+          : node.vector[att.dim];
+        if (w > 0) {
           coveredIds.add(node.id);
           break;
         }
@@ -877,12 +979,12 @@
     // referenced by node._tex for instant re-application.
     for (const { mesh } of _meshes) {
       mesh.material.map = null;          // detach without disposing
-      mesh.geometry.dispose();
       mesh.material.dispose();
       _scene.remove(mesh);
     }
     _meshes = [];
-    _texQueue = [];                      // clear pending queue
+    _meshMap.clear();
+    _texQueue.length = 0;               // clear pending queue
     _texLoading = 0;
 
     // Determine visible node set
@@ -891,7 +993,9 @@
         _nodes = _allNodes.filter((n) => _filterIds.has(n.id));
       } else if (_activeAttractors.length > 0) {
         _nodes = _allNodes.filter((n) =>
-          _activeAttractors.some((att) => n.vector[att.dim] > 0)
+          _activeAttractors.some((att) =>
+            att.source !== undefined ? n.source === att.source : n.vector[att.dim] > 0
+          )
         );
       } else {
         _nodes = _allNodes.slice();
@@ -903,7 +1007,9 @@
     // Recreate meshes — re-apply cached textures immediately
     _nodes.forEach((node) => {
       const mesh = _createNodeMesh(node);
-      _meshes.push({ id: node.id, mesh, node });
+      const entry = { id: node.id, mesh, node };
+      _meshes.push(entry);
+      _meshMap.set(node.id, entry);
       if (node._tex) {
         mesh.material.color.set(0xffffff);
         mesh.material.map = node._tex;
@@ -970,10 +1076,18 @@
   function destroy() {
     _stopRenderLoop();
     _clearScene();
+    if (_sharedGeo) {
+      _sharedGeo.dispose();
+      _sharedGeo = null;
+    }
     if (_renderer) {
       _renderer.dispose();
       _renderer.domElement.remove();
       _renderer = null;
+    }
+    if (_resizeObserver) {
+      _resizeObserver.disconnect();
+      _resizeObserver = null;
     }
     if (_controlsEl) _controlsEl.remove();
     if (_labelsEl) _labelsEl.remove();

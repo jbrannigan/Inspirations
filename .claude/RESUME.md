@@ -1,65 +1,53 @@
-# Session Resume — Ontology Harmonization + Explorer Performance Sprint
+# Session Resume — 3D Explorer Performance + Source Chips
 
-## What Was Completed (PR #55: fix/grid-detail-view-fixes)
+## What Was Completed (This Session)
 
-### Grid/Detail View Fixes
-- **Card footer layout**: Changed from horizontal flex to vertical flex (title + category label stacked)
-- **Labels in modal**: Added `/api/assets/{id}/labels` endpoint + label chips in detail modal
-- **Houzz source link**: Fixed variable scoping for source URLs
-- **Scan page view**: Changed button text "View Original" → "View Page", `?kind=pdf` → `?kind=original`
+All work on branch `fix/grid-detail-view-fixes`.
 
-### Ontology Harmonization
-- **CLAUDE.md**: Added "Ontology & Classification" section documenting trust hierarchy, Leslie's curation motivations, all classification dimensions, data tables, catalog system
-- **ai.py**: Added rate limiting (0.15s sleep) + progress logging every 50 items to `run_gemini_image_labeler()`
-- **chat.py**: Updated Dave's routing prompt with trust hierarchy (Collections > Boards > AI rooms/styles > AI labels) and answer prompt with provenance awareness
-
-### AI Labeling Runs (overnight)
-- **Pinterest**: 3,777/3,783 labeled (99.8%), 6 MAX_TOKENS errors, 12 fallback model uses
-- **Houzz**: 226/226 labeled (100%), 0 errors
-- **Final coverage**: 4,615/5,306 assets labeled (87%), 150,821 total label tags, 5,248/5,306 have AI data (99%)
-
-### Catalog Regeneration
-- Regenerated via `PYTHONPATH=src python3 -m inspirations catalog generate`
-- Room uncategorized: 2,761 → 2,137 (-624 items)
-- Style assignments: ~1,100 → 11,454 (10x growth, across 52 style files)
-- Kitchen room: 586 items from 4 sources. Farmhouse style: 1,137 items
-- Catalog files in `data/catalog/` (gitignored, regenerated from DB)
-
-### 3D Explorer Texture Fix
-- **Bug**: When switching sidebar branches in 3D mode, thumbnails disappeared (colored squares only)
-- **Root cause**: `_rebuildForFocusedMode()` disposed texture maps that were shared via `_texCache` and still referenced by `node._tex`, causing `_queueVisibleTextures()` to skip re-queuing
-- **Fix**: Detach textures from materials without disposing, clear tex queue, re-apply cached textures immediately to new meshes
-
-### Files Modified (all on branch fix/grid-detail-view-fixes)
-| File | Changes |
-|------|---------|
-| `app/styles.css` | Card footer layout, label chip styles |
-| `app/app.js` | Labels fetch in modal, Houzz link fix, scan PDF fix |
-| `app/index.html` | modalLabels div |
-| `app/attractor-explorer-3d.js` | Texture disposal fix in `_rebuildForFocusedMode()` |
-| `src/inspirations/server.py` | `/api/assets/{id}/labels` endpoint |
-| `src/inspirations/store.py` | `list_asset_labels()` function |
-| `CLAUDE.md` | Ontology & Classification documentation |
-| `src/inspirations/ai.py` | Rate limiting + progress logging |
-| `src/inspirations/chat.py` | Dave's system prompt with trust hierarchy |
-
----
-
-## Next Sprint: 3D Explorer Performance
-
-### Problem
-The 3D explorer renders ~5,300 items with individual Three.js meshes — 5,300 draw calls/frame, no texture culling, expensive per-frame billboard updates.
-
-### Phase 1: Quick Wins (single commit)
+### 3D Explorer: Phase 1 Quick Wins
 
 **File**: `app/attractor-explorer-3d.js`
 
-1. **Shared geometry**: Replace 5,300 identical `PlaneGeometry(1,1)` with one shared instance
-2. **Mesh-by-ID map**: Replace `_meshes.find()` O(n) lookup (line 638) with `Map` for O(1)
-3. **Billboard camera check**: Track `_lastCameraQuat`, skip quaternion copy when unchanged (lines 554-558)
-4. **Collision grid keys**: Replace string keys `"${cx},${cy},${cz}"` with numeric hash (lines 339-348)
+1. **Shared geometry** — One `PlaneGeometry(1,1)` instance shared across all ~4,600 meshes instead of creating one per node. Saves ~4,600 GPU allocations.
 
-### Phase 2: Distance-Based Texture Culling (single commit)
+2. **`_meshMap`** — Added `Map<id, entry>` for O(1) mesh lookup. Replaced `_meshes.find()` (O(n)) in `_applyTexToMesh()`.
+
+3. **Billboard camera skip** — Track `_lastCameraQuat`, skip the per-mesh quaternion copy loop entirely when camera hasn't moved. Near-zero cost on idle frames.
+
+4. **Numeric collision keys** — Replaced string template literal keys `"${cx},${cy},${cz}"` with packed integer `(cx+512)*1025²+(cy+512)*1025+(cz+512)`. Eliminates hot-path string allocation.
+
+### Bug Fixes
+
+- **`const _texQueue` reassignment** — Declaration was `const` but `_rebuildForFocusedMode()` tried to reassign it. Changed to `let`; reassignment changed to `_texQueue.length = 0`.
+
+- **ResizeObserver crash** — `TypeError: Cannot read properties of null (reading 'setSize')` when observer fired after destroy(). Fixed: added `if (!_renderer || !_camera) return;` guard, stored as `_resizeObserver`, call `_resizeObserver.disconnect()` in `destroy()`.
+
+### Source Chips + Thumbs Toggle
+
+**Files**: `app/attractor-explorer-3d.js`, `app/styles.css`
+
+- **Source chips** — Added a "Source" attractor group in the control panel hover-reveal area (before Rooms/Styles). Shows Pinterest / Facebook / Houzz / Scan as toggleable attractor chips with colored dot indicators. Source attractors pull matching nodes toward the poles in the force sim; Focus mode filters to only nodes matching active source attractors.
+
+- **Thumbs toggle** — Added "Thumbs" checkbox to the always-visible sliders row (far right). When unchecked, strips texture maps from all meshes and shows pure source-colored squares. Re-checking re-applies cached textures and re-queues visible nodes.
+
+- **`.src-dot`** — CSS rule in `styles.css` for the colored circle indicators on source chips.
+
+- **Cache-busting** — Added `?v=2` query string to `<script src="/app/attractor-explorer-3d.js" type="module">` in `index.html`. ES module cache in Chrome doesn't flush on hard-reload; versioned URL forces re-fetch.
+
+### Key State Additions
+
+```js
+let _meshMap = new Map();      // O(1) id → entry lookup
+let _texQueue = [];            // was const, now let
+let _sharedGeo = null;         // shared PlaneGeometry(1,1)
+let _lastCameraQuat = null;    // sentinel for billboard skip
+let _resizeObserver = null;    // stored for disconnect on destroy
+let _showThumbs = true;        // thumbs toggle state
+```
+
+---
+
+## Next Sprint: Phase 2 — Distance-Based Texture Culling
 
 **File**: `app/attractor-explorer-3d.js`
 **Reference**: 2D explorer's `_updateVisibleThumbs()` at `attractor-explorer.js:579`
@@ -69,48 +57,35 @@ The 3D explorer renders ~5,300 items with individual Three.js meshes — 5,300 d
 - Periodically re-cull from render loop (throttled, camera-moved check)
 - **Impact**: 95% fewer texture requests on initial load
 
-### Phase 3: InstancedMesh (biggest win, single commit)
-
-**File**: `app/attractor-explorer-3d.js`
+## Phase 3: InstancedMesh (biggest win)
 
 Replace 5,300 individual meshes with 1 `THREE.InstancedMesh` for colored squares + individual texture overlay meshes for nodes near camera.
 
 Sub-steps:
 1. Core InstancedMesh with per-instance color via `InstancedBufferAttribute`
-2. Billboard via instance matrix (camera quaternion in each instance's matrix)
+2. Billboard via instance matrix
 3. Texture overlay meshes (separate individual meshes near camera only)
-4. Visibility: color lerp toward background for dimmed nodes + smaller scale
+4. Visibility: color lerp toward background for dimmed + smaller scale
 5. Click detection: Raycaster supports InstancedMesh → `instanceId`
 6. Focus mode rebuild: Destroy+recreate InstancedMesh with new count
-7. Tween: Same interpolation, call `_syncInstancePositions()` instead
+7. Tween: Same interpolation, call `_syncInstancePositions()`
 
 **Draw calls: 5,300 → ~100-200** (25-50x reduction)
 
-### Phase 4: Render Loop Optimization (single commit)
+## Phase 4: Render Loop Dirty Flags
 
-- Dirty-flag system: `_needsInstanceUpdate`, `_needsVisualUpdate`, `_needsTexOverlayUpdate`
+- `_needsInstanceUpdate`, `_needsVisualUpdate`, `_needsTexOverlayUpdate`
 - Only work when flags are set
-- Pre-allocate reusable `Object3D`/`Vector3`
 - Near-zero JS cost on idle frames
-
-### Verification
-1. Visual: Source colors + thumbnails display correctly
-2. Interaction: Click nodes, toggle attractors, sidebar filter, search dim
-3. Texture culling: Only nearby nodes get thumbnails, progressive on orbit
-4. Performance: Chrome DevTools — frame time ~5-8ms vs current ~15-20ms
-5. Tests: `PYTHONPATH=src python3 -m unittest discover -s tests -v` (155 pass)
-
-### Key Technical Details
-- Three.js loaded via importmap from unpkg CDN (v0.160.0)
-- InstancedMesh raycasting supported since r132
-- Public API contract unchanged: `init, loadData, setFilter, setSearch, setFocusedMode, highlight, onSelect, onClickNode, on3DToggle, pause, resume, destroy`
-- Only file modified: `app/attractor-explorer-3d.js`
 
 ---
 
 ## Environment Notes
-- DB: `data/inspirations.sqlite` (78MB, 5,306 assets)
+
+- DB: `data/inspirations.sqlite` (78MB, ~4,662 visible assets)
 - Dev server: `PYTHONPATH=src python3 -m inspirations serve --port 8001 --reload`
 - Gemini API key: `security find-generic-password -s inspirations_gemini_api_key -w`
-- Branch: `fix/grid-detail-view-fixes` → PR #55
+- Branch: `fix/grid-detail-view-fixes`
 - All 155 tests pass
+- Three.js v0.160.0 via importmap from unpkg CDN
+- ES module cache tip: bump `?v=N` in `index.html` script tag when Chrome caches stale module
