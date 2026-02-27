@@ -58,6 +58,7 @@
   const RETICK = 150;         // ticks when attractors change
 
   // Thumbnail loading
+  let _showThumbs = true;
   const _imgCache = {};
   let _thumbsLoading = 0;
   const _thumbQueue = [];
@@ -540,7 +541,7 @@
       const y = node.y - half;
 
       // Draw thumbnail or colored square
-      if (node._img && node._img.complete && node._img.naturalWidth > 0) {
+      if (_showThumbs && node._img && node._img.complete && node._img.naturalWidth > 0) {
         _ctx.drawImage(node._img, x, y, size, size);
       } else {
         _ctx.fillStyle = _getNodeColor(node);
@@ -661,6 +662,7 @@
       <label class="physics-toggle">3D <input type="checkbox" id="_attr3DToggle"></label>
       <label class="physics-toggle">Focus <input type="checkbox" id="_attrFocus" ${_focusedMode ? "checked" : ""}></label>
       <label class="physics-toggle">Live <input type="checkbox" id="_attrLive" ${_liveMode ? "checked" : ""}></label>
+      <label class="physics-toggle">Thumbs <input type="checkbox" id="_attrThumbs" ${_showThumbs ? "checked" : ""}></label>
     `;
     _controlsEl.appendChild(slidersRow);
 
@@ -803,6 +805,13 @@
           _scheduleRender();
           _updateVisibleThumbs();
         }
+      });
+
+    const thumbsToggle = _controlsEl.querySelector("#_attrThumbs");
+    if (thumbsToggle)
+      thumbsToggle.addEventListener("change", (e) => {
+        _showThumbs = e.target.checked;
+        _scheduleRender();
       });
 
     // 3D toggle — fires callback to switch explorer mode
