@@ -1169,6 +1169,39 @@ async function openModal(asset) {
     }
   }
 
+  // Labels / tags
+  const labelsEl = $("#modalLabels");
+  if (labelsEl) {
+    labelsEl.innerHTML = "";
+    labelsEl.hidden = true;
+    labelsEl.classList.remove("expanded");
+    try {
+      const resp = await fetch(`/api/assets/${asset.id}/labels`);
+      if (resp.ok) {
+        const data = await resp.json();
+        const labels = data.labels || [];
+        if (labels.length > 0) {
+          const INITIAL_SHOW = 30;
+          const chips = labels.map(l =>
+            `<span class="label-chip" data-source="${escapeHtml(l.source || "")}" title="${escapeHtml(l.source || "")}">${escapeHtml(l.label)}</span>`
+          );
+          labelsEl.innerHTML = chips.slice(0, INITIAL_SHOW).join(" ");
+          if (labels.length > INITIAL_SHOW) {
+            const toggleBtn = document.createElement("button");
+            toggleBtn.className = "labels-toggle";
+            toggleBtn.textContent = `+${labels.length - INITIAL_SHOW} more`;
+            toggleBtn.onclick = () => {
+              labelsEl.innerHTML = chips.join(" ");
+              labelsEl.classList.add("expanded");
+            };
+            labelsEl.appendChild(toggleBtn);
+          }
+          labelsEl.hidden = false;
+        }
+      }
+    } catch {}
+  }
+
   // Engagement stats
   const engagementEl = $("#modalEngagement");
   if (engagementEl) {
@@ -1202,36 +1235,50 @@ async function openModal(asset) {
     }
   }
 
-  // Source link
+  // Source link — use source_ref only if it's a valid HTTP URL;
+  // otherwise fall back to source_url (fixes Houzz houzz:// URIs etc.)
+  const ref = asset.source_ref || "";
+  const isHttpRef = ref.startsWith("http://") || ref.startsWith("https://");
+  const siteUrl = asset.source_url || "";
+  const isHttpSite = siteUrl.startsWith("http://") || siteUrl.startsWith("https://");
+
   const sourceLink = $("#sourceLink");
   if (sourceLink) {
-    const ref = asset.source_ref || "";
     if (asset.source === "scan" && ref) {
       sourceLink.href = `/media/${asset.id}?kind=pdf`;
       sourceLink.textContent = "Open PDF";
+      sourceLink.hidden = false;
+    } else if (isHttpRef) {
+      sourceLink.href = ref;
+      sourceLink.textContent = `Open ${asset.source || "original"}`;
+      sourceLink.hidden = false;
+    } else if (isHttpSite) {
+      sourceLink.href = siteUrl;
+      sourceLink.textContent = `Open ${asset.source || "original"}`;
+      sourceLink.hidden = false;
     } else {
-      sourceLink.href = ref || "#";
-      sourceLink.textContent = ref ? `Open ${asset.source || "original"}` : "No source";
+      sourceLink.hidden = true;
     }
   }
 
-  // Source site link (Pinterest/Facebook external URL)
+  // Source site link — only show when primary link used source_ref (not source_url)
   const sourceSiteRow = $("#sourceSiteRow");
   const sourceSiteLink = $("#sourceSiteLink");
-  if (sourceSiteRow && sourceSiteLink && asset.source_url) {
-    sourceSiteLink.href = asset.source_url;
-    sourceSiteLink.textContent = `Original site (${sourceHost(asset.source_url) || asset.source_url}) ↗`;
+  const showSiteLink = sourceSiteRow && sourceSiteLink && isHttpSite && isHttpRef;
+  if (showSiteLink) {
+    sourceSiteLink.href = siteUrl;
+    sourceSiteLink.textContent = `Original site (${sourceHost(siteUrl) || siteUrl}) ↗`;
     sourceSiteRow.hidden = false;
   } else if (sourceSiteRow) {
     sourceSiteRow.hidden = true;
   }
 
-  // View source button — show only for scans (as "View Original"), hide for social
+  // View source button — scans: show page image (not the full combined PDF)
   const viewSourceBtn = $("#viewSourceBtn");
   if (viewSourceBtn) {
     if (asset.source === "scan" && asset.source_ref) {
-      viewSourceBtn.textContent = "View Original";
-      viewSourceBtn.onclick = () => { window.open(`/media/${asset.id}?kind=pdf`, "_blank", "noopener"); };
+      viewSourceBtn.textContent = "View Page";
+      viewSourceBtn.onclick = () => { window.open(`/media/${asset.id}?kind=original`, "_blank", "noopener"); };
       viewSourceBtn.disabled = false;
       viewSourceBtn.hidden = false;
     } else {

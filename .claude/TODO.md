@@ -41,6 +41,17 @@ The browse tree is the main navigation but has fundamental problems that make it
 
 ---
 
+## Deployment: Authentication
+
+Before deploying publicly, gate access with email whitelist + magic links:
+- Visitor enters email → if on whitelist, receive a magic-link email
+- Magic link sets an actor token cookie (same mechanism as current `?actor=` flow)
+- No password needed — token-based auth via email verification
+- Whitelist managed in Admin page or DB table
+- Anonymous visitors see nothing (or a login prompt) instead of the full browse UI
+
+---
+
 ## Other Known Issues
 
 - **Detail modal** needs more context: post text, AI labels, video analysis results

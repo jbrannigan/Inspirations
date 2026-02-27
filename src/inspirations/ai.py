@@ -1212,6 +1212,9 @@ def run_gemini_image_labeler(
             labeled += 1
             if used_model != model:
                 fallback_labeled += 1
+            if attempted % 50 == 0:
+                print(f"  progress: {labeled} tagged / {attempted} attempted ({len(errors)} errors)")
+            time.sleep(0.15)  # Rate limiting — avoid Gemini 429s on bulk runs
         except Exception as e:
             errors.append({"id": asset_id, "error": str(e)})
             _log_ai_error(
