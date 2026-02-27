@@ -520,5 +520,70 @@ class TestStore(unittest.TestCase):
             self.assertEqual(tray_count, 0)
 
 
+    def test_list_assets_ids_filter_large_set(self):
+        """Regression test: >500 IDs must not hit SQLite expression tree depth limit."""
+        import uuid
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                # Insert 600 assets with UUID ids (more than the 500 threshold
+                # that triggers the temp-table path).
+                all_ids = []
+                for i in range(600):
+                    aid = str(uuid.uuid4())
+                    all_ids.append(aid)
+                    db.exec(
+                        """
+                        insert into assets (id, source, source_ref, title, imported_at)
+                        values (?, ?, ?, ?, datetime('now'))
+                        """,
+                        (aid, "pinterest", f"pin://{i}", f"Item {i}"),
+                    )
+                # Also insert one that should NOT match
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at)
+                    values (?, ?, ?, ?, datetime('now'))
+                    """,
+                    ("ffffffff-0000-0000-0000-000000000000", "pinterest", "pin://extra", "Extra"),
+                )
+
+                # Query using 8-char prefixes (the format catalog files use)
+                prefixes = [aid[:8] for aid in all_ids]
+                ids_str = ",".join(prefixes)
+                results = list_assets(db, ids=ids_str, limit=1000)
+
+            # Should return all 600, not the extra one, and not crash
+            returned_ids = {r["id"] for r in results}
+            self.assertEqual(len(returned_ids), 600)
+            self.assertNotIn("ffffffff-0000-0000-0000-000000000000", returned_ids)
+
+    def test_list_assets_ids_filter_small_set(self):
+        """IDs filter with a small set uses IN clause (no temp table)."""
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at)
+                    values (?, ?, ?, ?, datetime('now'))
+                    """,
+                    ("abcd1234-0000-0000-0000-000000000001", "pinterest", "pin://1", "Match me"),
+                )
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at)
+                    values (?, ?, ?, ?, datetime('now'))
+                    """,
+                    ("ffff9999-0000-0000-0000-000000000002", "pinterest", "pin://2", "Skip me"),
+                )
+                results = list_assets(db, ids="abcd1234")
+
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["id"], "abcd1234-0000-0000-0000-000000000001")
+
+
 if __name__ == "__main__":
     unittest.main()

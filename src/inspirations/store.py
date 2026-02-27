@@ -308,8 +308,22 @@ def _build_asset_filter(
     if ids:
         id_list = [s.strip() for s in ids.split(",") if s.strip()]
         if id_list:
-            clauses.append("(" + " or ".join(["a.id like ?"] * len(id_list)) + ")")
-            params.extend(f"{prefix}%" for prefix in id_list)
+            # Use a temp table for large ID lists to avoid SQLite's expression
+            # tree depth limit of 1000 (uncategorized rooms can have 2000+ IDs).
+            if len(id_list) > 500:
+                db.exec("create temp table if not exists _id_filter (prefix text)")
+                db.exec("delete from _id_filter")
+                db.executemany(
+                    "insert into _id_filter (prefix) values (?)",
+                    [(p,) for p in id_list],
+                )
+                clauses.append(
+                    "substr(a.id, 1, 8) in (select prefix from _id_filter)"
+                )
+            else:
+                placeholders = ",".join(["?"] * len(id_list))
+                clauses.append(f"substr(a.id, 1, 8) in ({placeholders})")
+                params.extend(id_list)
     if source:
         sources = [s.strip() for s in source.split(",") if s.strip()]
         clauses.append("a.source in (%s)" % ",".join(["?"] * len(sources)))
