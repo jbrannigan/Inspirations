@@ -343,13 +343,17 @@
           `ax${i}`,
           d3
             .forceX(att.px)
-            .strength((d) => d.vector[dimIdx] * _attractStrength)
+            .strength((d) => att.source !== undefined
+              ? (d.source === att.source ? _attractStrength : 0)
+              : d.vector[dimIdx] * _attractStrength)
         );
         _simulation.force(
           `ay${i}`,
           d3
             .forceY(att.py)
-            .strength((d) => d.vector[dimIdx] * _attractStrength)
+            .strength((d) => att.source !== undefined
+              ? (d.source === att.source ? _attractStrength : 0)
+              : d.vector[dimIdx] * _attractStrength)
         );
       });
     }
@@ -664,6 +668,39 @@
     const chipsSection = document.createElement("div");
     chipsSection.className = "attractor-chips-section";
 
+    // Source chips
+    {
+      const srcOrder = ["pinterest", "facebook", "houzz", "scan"];
+      const srcLabels = { pinterest: "Pinterest", facebook: "Facebook", houzz: "Houzz", scan: "Scans" };
+      const srcCounts = {};
+      for (const n of _allNodes) srcCounts[n.source] = (srcCounts[n.source] || 0) + 1;
+      const presentSrcs = srcOrder.filter((s) => srcCounts[s] > 0);
+      if (presentSrcs.length > 0) {
+        const group = document.createElement("div");
+        group.className = "attractor-group";
+        const lbl = document.createElement("span");
+        lbl.className = "attractor-group-label";
+        lbl.textContent = "Source";
+        group.appendChild(lbl);
+        const chips = document.createElement("div");
+        chips.className = "attractor-chips";
+        for (const src of presentSrcs) {
+          const cssColor = SOURCE_COLORS[src] || "#999999";
+          const count = srcCounts[src];
+          const btn = document.createElement("button");
+          btn.className = "attractor-chip";
+          btn.type = "button";
+          btn.dataset.src = src;
+          btn.dataset.count = count;
+          btn.innerHTML = `<span class="src-dot" style="background:${cssColor}"></span>${srcLabels[src]} <span class="chip-count">${count}</span>`;
+          btn.addEventListener("click", () => _toggleAttractor({ source: src, name: srcLabels[src], count }));
+          chips.appendChild(btn);
+        }
+        group.appendChild(chips);
+        chipsSection.appendChild(group);
+      }
+    }
+
     const chipOrder = ["rooms", "styles", "materials", "colors"];
     for (const catKey of chipOrder) {
       const options = _attractorOptions[catKey];
@@ -777,18 +814,26 @@
   }
 
   function _toggleAttractor(opt) {
-    const idx = _activeAttractors.findIndex((a) => a.dim === opt.dim);
+    const idx = opt.source !== undefined
+      ? _activeAttractors.findIndex((a) => a.source === opt.source)
+      : _activeAttractors.findIndex((a) => a.dim === opt.dim);
     if (idx >= 0) {
       _activeAttractors.splice(idx, 1);
     } else {
-      _activeAttractors.push({ dim: opt.dim, name: opt.name, count: opt.count, px: 0, py: 0 });
+      if (opt.source !== undefined) {
+        _activeAttractors.push({ source: opt.source, name: opt.name, count: opt.count, px: 0, py: 0 });
+      } else {
+        _activeAttractors.push({ dim: opt.dim, name: opt.name, count: opt.count, px: 0, py: 0 });
+      }
     }
 
     // Update chip active states
     const chips = _controlsEl.querySelectorAll(".attractor-chip");
     chips.forEach((chip) => {
-      const dimStr = chip.dataset.dim;
-      const isActive = _activeAttractors.some((a) => a.dim === parseInt(dimStr));
+      const srcStr = chip.dataset.src;
+      const isActive = srcStr
+        ? _activeAttractors.some((a) => a.source === srcStr)
+        : _activeAttractors.some((a) => a.dim === parseInt(chip.dataset.dim));
       chip.classList.toggle("active", isActive);
     });
 
@@ -889,7 +934,9 @@
       } else if (_activeAttractors.length > 0) {
         // No external filter but attractors active — show items matching any attractor
         _nodes = _allNodes.filter((n) =>
-          _activeAttractors.some((att) => n.vector[att.dim] > 0)
+          _activeAttractors.some((att) =>
+            att.source !== undefined ? n.source === att.source : n.vector[att.dim] > 0
+          )
         );
       } else {
         _nodes = _allNodes.slice();
