@@ -872,14 +872,18 @@
   // ─── Focused mode ─────────────────────────────────────────────────────────
 
   function _rebuildForFocusedMode() {
-    // Remove old meshes from scene
+    // Remove old meshes from scene.
+    // Do NOT dispose texture maps — they are shared via _texCache and
+    // referenced by node._tex for instant re-application.
     for (const { mesh } of _meshes) {
+      mesh.material.map = null;          // detach without disposing
       mesh.geometry.dispose();
       mesh.material.dispose();
-      if (mesh.material.map) mesh.material.map.dispose();
       _scene.remove(mesh);
     }
     _meshes = [];
+    _texQueue = [];                      // clear pending queue
+    _texLoading = 0;
 
     // Determine visible node set
     if (_focusedMode) {
@@ -896,10 +900,15 @@
       _nodes = _allNodes.slice();
     }
 
-    // Recreate meshes
+    // Recreate meshes — re-apply cached textures immediately
     _nodes.forEach((node) => {
       const mesh = _createNodeMesh(node);
       _meshes.push({ id: node.id, mesh, node });
+      if (node._tex) {
+        mesh.material.color.set(0xffffff);
+        mesh.material.map = node._tex;
+        mesh.material.needsUpdate = true;
+      }
     });
 
     // Reset velocities
@@ -913,6 +922,7 @@
       _settleSimulation(SETTLE_TICKS);
       _syncMeshPositions();
     }
+    // Queue texture loads for any nodes that still need them
     _queueVisibleTextures();
   }
 
