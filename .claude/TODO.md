@@ -1,6 +1,6 @@
 # TODO — Inspirations App
 
-## Current State (Feb 24, 2026)
+## Current State (Feb 28, 2026)
 
 ### What just shipped
 - **Bulk Facebook reel analysis pipeline** — 951 reels processed through yt-dlp download → Gemini 2.5 Flash video analysis → auto-triage
@@ -9,6 +9,12 @@
   - 16 tagged by Jim — preserved for interactive review, not auto-triaged
   - 45 download errors (private/deleted reels), 4 analysis errors
 - **UX fixes**: total item count in grid header, tree expand persistence, (uncategorized) board filter
+
+### Completed this sprint (3D Fine Tune)
+- Added dataset-size tuning profiles for live calm/damping/collision behavior.
+- Recalibrated default 3D node sizes by collection size for better first-open readability.
+- Added 3D Looks presets (save/apply/delete + startup preset).
+- Revalidated 3D click-to-modal reliability and hard-refresh module cache busting.
 
 ### DB location
 `data/inspirations.sqlite` (CLI default: `--db data/inspirations.sqlite`)
