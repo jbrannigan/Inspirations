@@ -545,23 +545,30 @@ def _normalize_coords_3d(
 
 # ─── Main entry point ────────────────────────────────────────────────────────
 
-def build_feature_vectors(db: Db, data_dir: Path | None = None, dims: int = 2) -> dict:
+def build_feature_vectors(
+    db: Db,
+    data_dir: Path | None = None,
+    dims: int = 2,
+    include_hidden: bool = False,
+) -> dict:
     """Build feature vectors for all assets. Returns payload for the frontend."""
-    # 1. Load all non-hidden assets
-    hidden_col_id = db.query_value(
-        "select id from collections where lower(name)='hidden' limit 1"
-    )
-    hide_clauses = ["(a.triage_status is null or a.triage_status != 'hidden')"]
+    # 1. Load asset rows, excluding hidden unless explicitly requested.
     params: list = []
-    if hidden_col_id:
-        hide_clauses.append(
-            "a.id not in (select asset_id from collection_items where collection_id = ?)"
+    where_sql = ""
+    if not include_hidden:
+        hidden_col_id = db.query_value(
+            "select id from collections where lower(name)='hidden' limit 1"
         )
-        params.append(hidden_col_id)
-    where = " and ".join(hide_clauses)
+        hide_clauses = ["(a.triage_status is null or a.triage_status != 'hidden')"]
+        if hidden_col_id:
+            hide_clauses.append(
+                "a.id not in (select asset_id from collection_items where collection_id = ?)"
+            )
+            params.append(hidden_col_id)
+        where_sql = " where " + " and ".join(hide_clauses)
     assets = db.query(
-        f"select a.id, a.source, a.board, a.title, a.seo_alt_text, a.thumb_path, a.ai_summary "
-        f"from assets a where {where} order by a.id",
+        "select a.id, a.source, a.board, a.title, a.seo_alt_text, a.thumb_path, a.ai_summary "
+        f"from assets a{where_sql} order by a.id",
         tuple(params),
     )
     if not assets:

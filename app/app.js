@@ -1020,18 +1020,25 @@ function renderHiddenTree() {
   const tree = state.hiddenTree;
   if (!tree.total) return;
 
+  // Keep a single hidden section even when multiple render paths run.
+  wrap.querySelectorAll(".tree-hidden-section").forEach((n) => n.remove());
+
   const el = document.createElement("div");
   el.className = "tree-node tree-hidden-section";
 
   const toggle = document.createElement("button");
-  toggle.className = "tree-toggle";
+  const allHidden = state.triageFilter === "hidden"
+    && !state.currentSource
+    && !state.currentBoard
+    && !hasCollectionFilter()
+    && !hasCatalogFilter();
+  toggle.className = `tree-toggle${allHidden ? " active" : ""}`;
   toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-hidden-label">&#128065;&#xFE0E; Hidden</span><span class="tree-count">${tree.total}</span>`;
 
   const children = document.createElement("div");
   children.className = "tree-children";
 
   // "All Hidden" leaf
-  const allHidden = state.triageFilter === "hidden" && !state.currentSource && !state.currentBoard;
   const allLeaf = document.createElement("button");
   allLeaf.className = `tree-leaf tree-hidden-folder${allHidden ? " active" : ""}`;
   allLeaf.innerHTML = `<span>All Hidden</span><span class="tree-count">${tree.total}</span>`;
@@ -1044,8 +1051,8 @@ function renderHiddenTree() {
     state.triageFilter = "hidden";
     state.offset = 0;
     renderCatalogTree();
-    renderHiddenTree();
     loadAssets();
+    syncExplorerFilter();
   };
   children.appendChild(allLeaf);
 
@@ -1064,8 +1071,8 @@ function renderHiddenTree() {
         state.triageFilter = "hidden";
         state.offset = 0;
         renderCatalogTree();
-        renderHiddenTree();
         loadAssets();
+        syncExplorerFilter();
       };
       children.appendChild(leaf);
     }
@@ -1075,20 +1082,21 @@ function renderHiddenTree() {
   if (allHidden || state.triageFilter === "hidden") {
     state.expandedTreeNodes.add(nodeKey);
   }
-  if (state.expandedTreeNodes.has(nodeKey)) {
-    toggle.classList.add("expanded");
-    children.classList.add("open");
-  }
+  _setTreeNodeExpanded(nodeKey, toggle, children, state.expandedTreeNodes.has(nodeKey));
+  _wireTreeArrowToggle(toggle, nodeKey, children);
 
+  // Hidden root header click applies "all hidden" filter.
   toggle.onclick = () => {
-    const isOpen = children.classList.contains("open");
-    if (isOpen) {
-      state.expandedTreeNodes.delete(nodeKey);
-    } else {
-      state.expandedTreeNodes.add(nodeKey);
-    }
-    children.classList.toggle("open");
-    toggle.classList.toggle("expanded");
+    state.currentSource = null;
+    state.currentBoard = null;
+    clearCollectionFilter();
+    clearCatalogFilter();
+    state.currentTreeNodeId = null;
+    state.triageFilter = "hidden";
+    state.offset = 0;
+    renderCatalogTree();
+    loadAssets();
+    syncExplorerFilter();
   };
 
   el.appendChild(toggle);
@@ -2692,6 +2700,9 @@ let _explorerMode = "2d";   // "2d" | "3d"
 let _ExplorerImpl = _Explorer2D || window.Explorer || null;
 function _getExplorer3D() { return window.AttractorExplorer3D || null; }
 let _cachedExplorerAttractorData = null;
+let _cachedExplorerAttractorDataIncludesHidden = false;
+let _explorerPayloadIncludesHidden = false;
+let _explorerScopeReloading = false;
 let _busyCursorDepth = 0;
 
 function _setGlobalBusyCursor(cursor) {
@@ -2757,17 +2768,35 @@ function _merge3DExplorerData(layoutData, attractorData) {
   };
 }
 
-async function _loadExplorerPayload(mode) {
+function _shouldExplorerIncludeHiddenData() {
+  return isOwner() && state.triageFilter === "hidden";
+}
+
+async function _loadExplorerPayload(mode, includeHidden) {
+  const hiddenQs = includeHidden ? "include_hidden=1" : "";
+  const attractorUrl = `/api/explorer/attractor-data?dims=2${hiddenQs ? `&${hiddenQs}` : ""}`;
+  const layoutUrl = `/api/explorer/layout${hiddenQs ? `?${hiddenQs}` : ""}`;
+
   if (mode === "3d") {
     // Keep 3D switches fast: reuse attractor metadata (vectors/chips) already
     // loaded for 2D, and only fetch layout coords for the mode switch.
-    const layoutPromise = api("/api/explorer/layout");
+    const layoutPromise = api(layoutUrl);
     let baseData =
-      _isAttractorPayload(explorerData) ? explorerData : _cachedExplorerAttractorData;
+      (_isAttractorPayload(explorerData) && _explorerPayloadIncludesHidden === includeHidden)
+        ? explorerData
+        : null;
     if (!_isAttractorPayload(baseData)) {
-      baseData = await api("/api/explorer/attractor-data?dims=2");
+      baseData =
+        (_isAttractorPayload(_cachedExplorerAttractorData)
+          && _cachedExplorerAttractorDataIncludesHidden === includeHidden)
+          ? _cachedExplorerAttractorData
+          : null;
+    }
+    if (!_isAttractorPayload(baseData)) {
+      baseData = await api(attractorUrl);
     }
     _cachedExplorerAttractorData = baseData;
+    _cachedExplorerAttractorDataIncludesHidden = includeHidden;
     try {
       const layoutData = await layoutPromise;
       return _merge3DExplorerData(layoutData, baseData);
@@ -2776,8 +2805,9 @@ async function _loadExplorerPayload(mode) {
       return baseData;
     }
   }
-  const data = await api("/api/explorer/attractor-data?dims=2");
+  const data = await api(attractorUrl);
   _cachedExplorerAttractorData = data;
+  _cachedExplorerAttractorDataIncludesHidden = includeHidden;
   return data;
 }
 
@@ -2818,6 +2848,7 @@ async function switchExplorerMode(newMode) {
   if (container) container.innerHTML = "";
   explorerLoaded = false;
   explorerData = null;
+  _explorerPayloadIncludesHidden = false;
 
   _explorerMode = newMode;
   const e3d = _getExplorer3D();
@@ -2873,9 +2904,11 @@ async function loadExplorerView() {
   // Load data from appropriate endpoint
   _pushBusyCursor();
   try {
+    const includeHidden = _shouldExplorerIncludeHiddenData();
     Shared.showToast(`Loading ${_explorerMode.toUpperCase()} attractor map…`, { type: "info", duration: 2000 });
-    const data = await _loadExplorerPayload(_explorerMode);
+    const data = await _loadExplorerPayload(_explorerMode, includeHidden);
     explorerData = data;
+    _explorerPayloadIncludesHidden = includeHidden;
     _ExplorerImpl.loadData(data);
     syncExplorerFilter();   // apply any active grid filters as dim
   } catch (e) {
@@ -2914,6 +2947,19 @@ async function syncExplorerFilter() {
     _ExplorerImpl.setSearch(state.q || "");
   }
 
+  // Hidden data is loaded only for owner hidden view.
+  const wantsHiddenPayload = _shouldExplorerIncludeHiddenData();
+  if (_explorerPayloadIncludesHidden !== wantsHiddenPayload) {
+    if (_explorerScopeReloading) return;
+    _explorerScopeReloading = true;
+    try {
+      await loadExplorerView();
+    } finally {
+      _explorerScopeReloading = false;
+    }
+    return;
+  }
+
   // No filters → show everything
   if (!_hasActiveFilters()) {
     _ExplorerImpl.setFilter(null);
@@ -2950,13 +2996,13 @@ async function syncExplorerFilter() {
   if (collectionIds.length) params.set("collection_id", collectionIds.join(","));
   if (state.triageFilter === "needs-comment") {
     params.set("needs_annotation", "1");
-    params.set("include_hidden", "1");
+    if (isOwner()) params.set("include_hidden", "1");
   } else if (state.triageFilter === "hidden") {
     params.set("triage_status", "hidden");
-    params.set("include_hidden", "1");
+    if (_shouldExplorerIncludeHiddenData()) params.set("include_hidden", "1");
   } else if (state.triageFilter === "flagged") {
     params.set("flagged", "1");
-    params.set("include_hidden", "1");
+    if (isOwner()) params.set("include_hidden", "1");
   } else if (state.triageFilter) {
     params.set("triage_status", state.triageFilter);
   }

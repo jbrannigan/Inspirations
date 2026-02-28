@@ -354,9 +354,17 @@ class ApiHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/explorer/attractor-data":
             q = parse_qs(parsed.query)
             pca_dims = int((q.get("dims", ["2"])[0] or "2").strip())
+            include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
+            actor = _resolve_actor(self)
+            include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
             data_dir = Path(self.server.db_path).parent / "explorer_layouts"
             try:
-                payload = self._with_db(build_feature_vectors, data_dir=data_dir, dims=pca_dims)
+                payload = self._with_db(
+                    build_feature_vectors,
+                    data_dir=data_dir,
+                    dims=pca_dims,
+                    include_hidden=include_hidden,
+                )
             except Exception as e:
                 return _send(self, 500, {"error": f"attractor data failed: {e}"})
             return _send(self, 200, payload)
@@ -367,6 +375,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             method = (q.get("method", ["umap"])[0] or "umap").strip()
             refresh_raw = (q.get("refresh", ["false"])[0] or "false").strip().lower()
             refresh = refresh_raw in {"1", "true", "yes"}
+            include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
+            actor = _resolve_actor(self)
+            include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
             data_dir = Path(self.server.db_path).parent / "explorer_layouts"
             try:
                 payload = self._with_db(
@@ -375,6 +386,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     collection_id=collection_id,
                     method=method,
                     refresh=refresh,
+                    include_hidden=include_hidden,
                 )
             except Exception as e:
                 return _send(self, 500, {"error": f"explorer layout failed: {e}"})

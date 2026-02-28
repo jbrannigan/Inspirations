@@ -34,10 +34,14 @@
      - Dimension and collection headers apply recursive descendant scopes.
      - Explorer sync now uses full catalog scope via `/api/catalog/asset-ids` (not paged Grid IDs).
 
-2. **Hidden visibility rule in Explorer (role-gated)**
+2. **[x] Hidden visibility rule in Explorer (role-gated)**
    - Hidden assets render only for owner/Jim role when Hidden status is explicitly active.
    - Collaborators never see hidden assets in Explorer.
    - If Focus is unchecked, hidden still must not appear unless hidden view is active for owner/Jim.
+   - Implemented (Feb 28, 2026):
+     - Explorer payloads request hidden data only when owner + `Hidden` status is active.
+     - Server gates `include_hidden=1` on `/api/explorer/attractor-data` and `/api/explorer/layout` to owner role.
+     - Explorer auto-reloads payload scope when entering/exiting hidden status so hidden nodes are never present outside hidden view.
 
 3. **Header button to hide/show side panel**
    - Add side panel toggle in header (header button only).

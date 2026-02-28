@@ -222,6 +222,90 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(body.get("error"), "semantic_weight must be number")
 
+    def test_explorer_attractor_data_include_hidden_requires_owner(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec("update assets set triage_status='hidden' where id='a2'")
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-1", "Owner", "owner-token-1", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-1", "Collab", "collab-token-1", "collaborator"),
+            )
+
+        status, body = self._request("/api/explorer/attractor-data?dims=2&include_hidden=1")
+        self.assertEqual(status, 200)
+        ids_public = {a["id"] for a in body.get("assets", [])}
+        self.assertEqual(ids_public, {"a1"})
+
+        status, body = self._request(
+            "/api/explorer/attractor-data?dims=2&include_hidden=1",
+            headers={"X-Actor-Token": "collab-token-1"},
+        )
+        self.assertEqual(status, 200)
+        ids_collab = {a["id"] for a in body.get("assets", [])}
+        self.assertEqual(ids_collab, {"a1"})
+
+        status, body = self._request(
+            "/api/explorer/attractor-data?dims=2&include_hidden=1",
+            headers={"X-Actor-Token": "owner-token-1"},
+        )
+        self.assertEqual(status, 200)
+        ids_owner = {a["id"] for a in body.get("assets", [])}
+        self.assertEqual(ids_owner, {"a1", "a2"})
+
+    def test_explorer_layout_include_hidden_requires_owner(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec("update assets set triage_status='hidden' where id='a2'")
+            db.exec(
+                """
+                insert into asset_embeddings
+                  (id, asset_id, provider, model, input_text, vector_json, dimensions, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                """,
+                ("emb-a1", "a1", "gemini", "gemini-embedding-001", "a1", "[0.1,0.2,0.3]", 3),
+            )
+            db.exec(
+                """
+                insert into asset_embeddings
+                  (id, asset_id, provider, model, input_text, vector_json, dimensions, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                """,
+                ("emb-a2", "a2", "gemini", "gemini-embedding-001", "a2", "[0.2,0.3,0.4]", 3),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-2", "Owner", "owner-token-2", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-2", "Collab", "collab-token-2", "collaborator"),
+            )
+
+        status, body = self._request("/api/explorer/layout?method=pca&refresh=1&include_hidden=1")
+        self.assertEqual(status, 200)
+        ids_public = {n["id"] for n in body.get("nodes", [])}
+        self.assertEqual(ids_public, {"a1"})
+
+        status, body = self._request(
+            "/api/explorer/layout?method=pca&refresh=1&include_hidden=1",
+            headers={"X-Actor-Token": "collab-token-2"},
+        )
+        self.assertEqual(status, 200)
+        ids_collab = {n["id"] for n in body.get("nodes", [])}
+        self.assertEqual(ids_collab, {"a1"})
+
+        status, body = self._request(
+            "/api/explorer/layout?method=pca&refresh=1&include_hidden=1",
+            headers={"X-Actor-Token": "owner-token-2"},
+        )
+        self.assertEqual(status, 200)
+        ids_owner = {n["id"] for n in body.get("nodes", [])}
+        self.assertEqual(ids_owner, {"a1", "a2"})
+
     def test_assets_endpoint_supports_media_status_filter(self):
         status, body = self._request("/api/assets?media_status=metadata_only")
         self.assertEqual(status, 200)

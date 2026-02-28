@@ -27,29 +27,63 @@ CLUSTER_PALETTE = [
 ]
 
 
+def _table_exists(db: Db, table_name: str) -> bool:
+    row = db.query_value(
+        "select 1 from sqlite_master where type='table' and name=? limit 1",
+        (table_name,),
+    )
+    return bool(row)
+
+
+def _assets_has_column(db: Db, column_name: str) -> bool:
+    rows = db.query("pragma table_info(assets)")
+    return any(str(r["name"]) == column_name for r in rows)
+
+
 def _cache_key(asset_ids: list[str]) -> str:
     joined = ",".join(sorted(asset_ids))
     return hashlib.sha256(joined.encode()).hexdigest()[:16]
 
 
 def _load_embeddings(
-    db: Db, collection_id: str | None
+    db: Db,
+    collection_id: str | None,
+    *,
+    include_hidden: bool = False,
 ) -> tuple[list[str], list[list[float]]]:
+    joins: list[str] = ["join assets a on a.id = ae.asset_id"]
+    clauses: list[str] = []
+    params: list[str] = []
+
     if collection_id:
-        rows = db.query(
-            """
-            select ae.asset_id, ae.vector_json
-            from asset_embeddings ae
-            join collection_items ci on ci.asset_id = ae.asset_id
-            where ci.collection_id = ?
-            order by ae.asset_id
-            """,
-            (collection_id,),
-        )
-    else:
-        rows = db.query(
-            "select asset_id, vector_json from asset_embeddings order by asset_id"
-        )
+        joins.append("join collection_items ci on ci.asset_id = ae.asset_id")
+        clauses.append("ci.collection_id = ?")
+        params.append(collection_id)
+
+    if not include_hidden:
+        if _assets_has_column(db, "triage_status"):
+            clauses.append("(a.triage_status is null or a.triage_status != 'hidden')")
+        hidden_col_id = None
+        if _table_exists(db, "collections"):
+            hidden_col_id = db.query_value(
+                "select id from collections where lower(name)='hidden' limit 1"
+            )
+        if (
+            hidden_col_id
+            and collection_id != hidden_col_id
+            and _table_exists(db, "collection_items")
+        ):
+            clauses.append(
+                "a.id not in (select asset_id from collection_items where collection_id = ?)"
+            )
+            params.append(str(hidden_col_id))
+
+    where_sql = f"where {' and '.join(clauses)}" if clauses else ""
+    join_sql = " ".join(joins)
+    rows = db.query(
+        f"select ae.asset_id, ae.vector_json from asset_embeddings ae {join_sql} {where_sql} order by ae.asset_id",
+        tuple(params),
+    )
 
     ids: list[str] = []
     vectors: list[list[float]] = []
@@ -213,10 +247,11 @@ def compute_layout(
     collection_id: str | None = None,
     method: str = "umap",
     refresh: bool = False,
+    include_hidden: bool = False,
 ) -> dict:
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    ids, vectors = _load_embeddings(db, collection_id)
+    ids, vectors = _load_embeddings(db, collection_id, include_hidden=include_hidden)
     if not ids:
         return {"nodes": [], "clusters": []}
 
