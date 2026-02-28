@@ -46,6 +46,7 @@ const state = {
   noteTimers: {},
   modalScanPages: null,
   modalScanPageIndex: 0,
+  modalScanStartPage: 1,         // absolute page number in original scan PDF for group index 0
 
   // Imports
   scanImportBusy: false,
@@ -270,6 +271,71 @@ function _wireTreeArrowToggle(toggleEl, nodeKey, childrenEl) {
     e.stopPropagation();
     _toggleTreeNodeExpanded(nodeKey, toggleEl, childrenEl);
   });
+}
+
+function _scanPageFromRef(sourceRef) {
+  const m = String(sourceRef || "").match(/#p(\d+)$/i);
+  if (!m) return null;
+  const page = parseInt(m[1], 10);
+  return Number.isFinite(page) && page > 0 ? page : null;
+}
+
+function _scanPdfHrefForAsset(asset) {
+  if (!asset || !asset.id) return "#";
+  const page = _scanPageFromRef(asset.source_ref || "");
+  return `/media/${asset.id}?kind=pdf${page ? `#page=${page}` : ""}`;
+}
+
+function renderModalSourceLinks(asset) {
+  if (!asset) return;
+  const ref = asset.source_ref || "";
+  const isHttpRef = ref.startsWith("http://") || ref.startsWith("https://");
+  const siteUrl = asset.source_url || "";
+  const isHttpSite = siteUrl.startsWith("http://") || siteUrl.startsWith("https://");
+
+  const sourceLink = $("#sourceLink");
+  if (sourceLink) {
+    if (asset.source === "scan" && ref) {
+      sourceLink.href = _scanPdfHrefForAsset(asset);
+      sourceLink.textContent = "Open PDF";
+      sourceLink.hidden = false;
+    } else if (isHttpRef) {
+      sourceLink.href = ref;
+      sourceLink.textContent = `Open ${asset.source || "original"}`;
+      sourceLink.hidden = false;
+    } else if (isHttpSite) {
+      sourceLink.href = siteUrl;
+      sourceLink.textContent = `Open ${asset.source || "original"}`;
+      sourceLink.hidden = false;
+    } else {
+      sourceLink.hidden = true;
+    }
+  }
+
+  // Source site link — only show when primary link used source_ref (not source_url)
+  const sourceSiteRow = $("#sourceSiteRow");
+  const sourceSiteLink = $("#sourceSiteLink");
+  const showSiteLink = sourceSiteRow && sourceSiteLink && isHttpSite && isHttpRef;
+  if (showSiteLink) {
+    sourceSiteLink.href = siteUrl;
+    sourceSiteLink.textContent = `Original site (${sourceHost(siteUrl) || siteUrl}) ↗`;
+    sourceSiteRow.hidden = false;
+  } else if (sourceSiteRow) {
+    sourceSiteRow.hidden = true;
+  }
+
+  // View source button — scans: show current page image (not full combined PDF)
+  const viewSourceBtn = $("#viewSourceBtn");
+  if (viewSourceBtn) {
+    if (asset.source === "scan" && asset.source_ref) {
+      viewSourceBtn.textContent = "View Page";
+      viewSourceBtn.onclick = () => { window.open(`/media/${asset.id}?kind=original`, "_blank", "noopener"); };
+      viewSourceBtn.disabled = false;
+      viewSourceBtn.hidden = false;
+    } else {
+      viewSourceBtn.hidden = true;
+    }
+  }
 }
 
 function _readSidebarHiddenPref() {
@@ -1416,56 +1482,7 @@ async function openModal(asset) {
     }
   }
 
-  // Source link — use source_ref only if it's a valid HTTP URL;
-  // otherwise fall back to source_url (fixes Houzz houzz:// URIs etc.)
-  const ref = asset.source_ref || "";
-  const isHttpRef = ref.startsWith("http://") || ref.startsWith("https://");
-  const siteUrl = asset.source_url || "";
-  const isHttpSite = siteUrl.startsWith("http://") || siteUrl.startsWith("https://");
-
-  const sourceLink = $("#sourceLink");
-  if (sourceLink) {
-    if (asset.source === "scan" && ref) {
-      sourceLink.href = `/media/${asset.id}?kind=pdf`;
-      sourceLink.textContent = "Open PDF";
-      sourceLink.hidden = false;
-    } else if (isHttpRef) {
-      sourceLink.href = ref;
-      sourceLink.textContent = `Open ${asset.source || "original"}`;
-      sourceLink.hidden = false;
-    } else if (isHttpSite) {
-      sourceLink.href = siteUrl;
-      sourceLink.textContent = `Open ${asset.source || "original"}`;
-      sourceLink.hidden = false;
-    } else {
-      sourceLink.hidden = true;
-    }
-  }
-
-  // Source site link — only show when primary link used source_ref (not source_url)
-  const sourceSiteRow = $("#sourceSiteRow");
-  const sourceSiteLink = $("#sourceSiteLink");
-  const showSiteLink = sourceSiteRow && sourceSiteLink && isHttpSite && isHttpRef;
-  if (showSiteLink) {
-    sourceSiteLink.href = siteUrl;
-    sourceSiteLink.textContent = `Original site (${sourceHost(siteUrl) || siteUrl}) ↗`;
-    sourceSiteRow.hidden = false;
-  } else if (sourceSiteRow) {
-    sourceSiteRow.hidden = true;
-  }
-
-  // View source button — scans: show page image (not the full combined PDF)
-  const viewSourceBtn = $("#viewSourceBtn");
-  if (viewSourceBtn) {
-    if (asset.source === "scan" && asset.source_ref) {
-      viewSourceBtn.textContent = "View Page";
-      viewSourceBtn.onclick = () => { window.open(`/media/${asset.id}?kind=original`, "_blank", "noopener"); };
-      viewSourceBtn.disabled = false;
-      viewSourceBtn.hidden = false;
-    } else {
-      viewSourceBtn.hidden = true;
-    }
-  }
+  renderModalSourceLinks(asset);
 
   // Print button
   const printBtn = $("#printAssetBtn");
@@ -1531,8 +1548,10 @@ async function openModal(asset) {
   if (asset.source === "scan" && (asset.scan_group_member_ids || []).length > 1) {
     const pages = asset.scan_group_member_ids;
     state.modalScanPages = pages;
-    const refMatch = (asset.source_ref || "").match(/#p(\d+)$/);
-    state.modalScanPageIndex = refMatch ? parseInt(refMatch[1], 10) - 1 : 0;
+    const currentIdx = Math.max(0, pages.indexOf(asset.id));
+    state.modalScanPageIndex = currentIdx;
+    const absolutePage = _scanPageFromRef(asset.source_ref || "") || 1;
+    state.modalScanStartPage = Math.max(1, absolutePage - currentIdx);
     const navEl = document.createElement("div");
     navEl.className = "modalScanNav";
     navEl.innerHTML = `
@@ -1546,6 +1565,7 @@ async function openModal(asset) {
   } else {
     state.modalScanPages = null;
     state.modalScanPageIndex = 0;
+    state.modalScanStartPage = _scanPageFromRef(asset.source_ref || "") || 1;
   }
 
   $("#modal").classList.remove("hidden");
@@ -1615,7 +1635,9 @@ async function _navModalScan(delta) {
   state.modalScanPageIndex = newIdx;
   const siblingId = state.modalScanPages[newIdx];
   const curAsset = state.modalAsset;
-  const siblingSourceRef = (curAsset.source_ref || "").replace(/#p\d+$/, "") + `#p${newIdx + 1}`;
+  const absolutePage = Math.max(1, (state.modalScanStartPage || 1) + newIdx);
+  const sourceBase = (curAsset.source_ref || "").replace(/#p\d+$/i, "");
+  const siblingSourceRef = sourceBase ? `${sourceBase}#p${absolutePage}` : (curAsset.source_ref || "");
   state.modalAsset = { ...curAsset, id: siblingId, source_ref: siblingSourceRef };
   const modalImage = $("#modalImage");
   if (modalImage) modalImage.src = `/media/${siblingId}?kind=thumb`;
@@ -1625,9 +1647,7 @@ async function _navModalScan(delta) {
   const nextBtn = document.querySelector(".modalScanNext");
   if (prevBtn) prevBtn.disabled = newIdx === 0;
   if (nextBtn) nextBtn.disabled = newIdx === state.modalScanPages.length - 1;
-  const sourceLink = $("#sourceLink");
-  const pdfUrl = `/media/${siblingId}?kind=pdf#page=${newIdx + 1}`;
-  if (sourceLink) { sourceLink.href = pdfUrl; sourceLink.textContent = "Open PDF"; }
+  renderModalSourceLinks(state.modalAsset);
   await loadAnnotations(siblingId);
   renderAnnotations();
   renderMarkers();

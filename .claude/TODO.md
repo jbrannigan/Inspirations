@@ -51,10 +51,14 @@
      - Sidebar visibility now toggles in both Grid and Explorer layouts.
      - Preference is persisted via localStorage key `inspirations.ui.sidebar.hidden.v1`.
 
-4. **PDF source-link bug fix**
+4. **[x] PDF source-link bug fix**
    - Current issue: PDF items link back to the master PDF instead of the individual source item.
    - Fix link mapping so each PDF item opens its own original source context.
    - Preserve multipage UX (existing page-through behavior on multipage scans).
+   - Implemented (Feb 28, 2026):
+     - Scan source links now include absolute `#page=` anchors from each item's `source_ref`.
+     - Multipage modal navigation now preserves absolute PDF page mapping instead of resetting to relative page numbers.
+     - Source actions in modal (Open PDF / View Page) now refresh correctly as user pages through a multi-page scan document.
 
 ### Explore Sprint — UX responsiveness + interactive validation
 
