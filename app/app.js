@@ -5,7 +5,12 @@ const state = {
   currentBoard: null,           // board filter (null = all)
   currentSource: null,          // source filter (null = all)
   currentCollection: null,      // collection ID filter
+  currentCollectionIds: [],     // recursive collection scope
+  currentCollectionLabel: "",   // display label for collection scope
   currentCatalogFile: null,     // catalog dimension file (e.g. "room/bathroom.md")
+  currentCatalogFiles: [],      // recursive catalog scope
+  currentCatalogLabel: "",      // display label for catalog scope
+  currentTreeNodeId: null,      // active sidebar tree node ID
   triageFilter: "",             // "" | "pending" | "keeper" | "hidden" | "needs-comment"
 
   // Assets
@@ -147,6 +152,124 @@ function wireSingleFileDropZone(options) {
   });
 }
 
+function _uniqNonEmpty(values) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of (values || [])) {
+    const v = `${raw || ""}`.trim();
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
+
+function getCatalogFilterFiles() {
+  return _uniqNonEmpty([...(state.currentCatalogFiles || []), state.currentCatalogFile || ""]);
+}
+
+function hasCatalogFilter() {
+  return getCatalogFilterFiles().length > 0;
+}
+
+function clearCatalogFilter() {
+  state.currentCatalogFile = null;
+  state.currentCatalogFiles = [];
+  state.currentCatalogLabel = "";
+}
+
+function setCatalogFilter(files, { label = "", nodeId = null } = {}) {
+  const uniq = _uniqNonEmpty(files);
+  if (!uniq.length) {
+    clearCatalogFilter();
+    state.currentTreeNodeId = null;
+  } else {
+    state.currentCatalogFile = uniq[0];
+    state.currentCatalogFiles = uniq;
+    state.currentCatalogLabel = label || "";
+    state.currentTreeNodeId = nodeId;
+  }
+}
+
+function getCollectionFilterIds() {
+  return _uniqNonEmpty([...(state.currentCollectionIds || []), state.currentCollection || ""]);
+}
+
+function hasCollectionFilter() {
+  return getCollectionFilterIds().length > 0;
+}
+
+function clearCollectionFilter() {
+  state.currentCollection = null;
+  state.currentCollectionIds = [];
+  state.currentCollectionLabel = "";
+}
+
+function setCollectionFilterIds(ids, { label = "", nodeId = null } = {}) {
+  const uniq = _uniqNonEmpty(ids);
+  if (!uniq.length) {
+    clearCollectionFilter();
+    state.currentTreeNodeId = null;
+  } else {
+    state.currentCollection = uniq.length === 1 ? uniq[0] : null;
+    state.currentCollectionIds = uniq;
+    state.currentCollectionLabel = label || "";
+    state.currentTreeNodeId = nodeId;
+  }
+}
+
+function collectDescendantCatalogFiles(node) {
+  const files = [];
+  const stack = [node];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur || typeof cur !== "object") continue;
+    if (cur.file) files.push(cur.file);
+    const children = Array.isArray(cur.children) ? cur.children : [];
+    for (const child of children) stack.push(child);
+  }
+  return _uniqNonEmpty(files);
+}
+
+function collectDescendantCollectionIds(node) {
+  const ids = [];
+  const stack = [node];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur || typeof cur !== "object") continue;
+    if (cur.collection_id) ids.push(cur.collection_id);
+    const children = Array.isArray(cur.children) ? cur.children : [];
+    for (const child of children) stack.push(child);
+  }
+  return _uniqNonEmpty(ids);
+}
+
+function _setTreeNodeExpanded(nodeKey, toggleEl, childrenEl, open) {
+  if (open) {
+    childrenEl.classList.add("open");
+    toggleEl.classList.add("expanded");
+    state.expandedTreeNodes.add(nodeKey);
+  } else {
+    childrenEl.classList.remove("open");
+    toggleEl.classList.remove("expanded");
+    state.expandedTreeNodes.delete(nodeKey);
+  }
+}
+
+function _toggleTreeNodeExpanded(nodeKey, toggleEl, childrenEl) {
+  _setTreeNodeExpanded(nodeKey, toggleEl, childrenEl, !childrenEl.classList.contains("open"));
+}
+
+function _wireTreeArrowToggle(toggleEl, nodeKey, childrenEl) {
+  const arrow = toggleEl.querySelector(".tree-arrow");
+  if (!arrow) return;
+  arrow.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    _toggleTreeNodeExpanded(nodeKey, toggleEl, childrenEl);
+  });
+}
+
 // ─── Asset loading ─────────────────────────────────────────────────────────────
 
 async function loadAssets(opts = {}) {
@@ -195,10 +318,11 @@ async function loadAssets(opts = {}) {
 
   try {
     let data;
-    if (state.currentCatalogFile) {
-      // Dimension browsing: load items from catalog file
+    const catalogFiles = getCatalogFilterFiles();
+    if (catalogFiles.length) {
+      // Catalog browsing: load items from one or more catalog files
       const catParams = new URLSearchParams();
-      catParams.set("file", state.currentCatalogFile);
+      for (const file of catalogFiles) catParams.append("file", file);
       catParams.set("limit", ASSETS_PAGE_SIZE);
       catParams.set("offset", state.offset);
       data = await api(`/api/catalog/items?${catParams}`);
@@ -207,6 +331,8 @@ async function loadAssets(opts = {}) {
       if (!res.ok) throw new Error(await res.text());
       data = await res.json();
     } else {
+      const collectionIds = getCollectionFilterIds();
+      if (collectionIds.length) params.set("collection_id", collectionIds.join(","));
       data = await api(`/api/assets?${params}`);
     }
 
@@ -511,14 +637,15 @@ function renderCatalogTree() {
 
   // "All items" node at top
   const allBtn = document.createElement("button");
-  allBtn.className = `tree-leaf${!state.currentSource && !state.currentBoard && !state.currentCollection && !state.currentCatalogFile ? " active" : ""}`;
+  allBtn.className = `tree-leaf${!state.currentSource && !state.currentBoard && !hasCollectionFilter() && !hasCatalogFilter() ? " active" : ""}`;
   allBtn.innerHTML = `<span>All Items</span>`;
   allBtn.onclick = () => {
     resetTriageFilter();
     state.currentSource = null;
     state.currentBoard = null;
-    state.currentCollection = null;
-    state.currentCatalogFile = null;
+    clearCollectionFilter();
+    clearCatalogFilter();
+    state.currentTreeNodeId = null;
     state.offset = 0;
     renderCatalogTree();
     loadAssets();
@@ -544,7 +671,12 @@ function buildSourceNode(node) {
   const el = document.createElement("div");
   el.className = "tree-node";
 
-  const isActiveSource = state.currentSource === node.label.toLowerCase() && !state.currentBoard;
+  const nodeKey = node.id;
+  const sourceKey = node.label.toLowerCase();
+  const selectedCatalogFiles = getCatalogFilterFiles();
+  const selectedCatalogSet = new Set(selectedCatalogFiles);
+  const isActiveSource = state.currentTreeNodeId === node.id
+    || (state.currentSource === sourceKey && !state.currentBoard && !hasCatalogFilter() && !hasCollectionFilter());
   const toggle = document.createElement("button");
   toggle.className = `tree-toggle${isActiveSource ? " active" : ""}`;
   toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span>${escapeHtml(node.label)}</span><span class="tree-count">${node.count}</span>`;
@@ -554,37 +686,25 @@ function buildSourceNode(node) {
 
   // Check if any child is active — auto-expand
   const hasActiveChild = (node.children || []).some(
-    (c) => state.currentBoard === (c.label || "").toLowerCase().replace(/ /g, "-") || state.currentBoard === c.label
-  );
-  const nodeKey = node.id;
-  if (hasActiveChild || isActiveSource) {
-    state.expandedTreeNodes.add(nodeKey);
-  }
-  if (state.expandedTreeNodes.has(nodeKey)) {
-    toggle.classList.add("expanded");
-    children.classList.add("open");
-  }
-
-  toggle.onclick = () => {
-    const isOpen = children.classList.contains("open");
-    if (isOpen) {
-      children.classList.remove("open");
-      toggle.classList.remove("expanded");
-      state.expandedTreeNodes.delete(nodeKey);
-    } else {
-      children.classList.add("open");
-      toggle.classList.add("expanded");
-      state.expandedTreeNodes.add(nodeKey);
+    (c) => {
+      const boardName = c.board_name || "";
+      const isCatchAll = boardName.startsWith("(");
+      if (isCatchAll) return !!c.file && selectedCatalogSet.has(c.file);
+      return state.currentSource === sourceKey && state.currentBoard && state.currentBoard.toLowerCase() === boardName.toLowerCase();
     }
-  };
+  );
+  if (hasActiveChild || isActiveSource) state.expandedTreeNodes.add(nodeKey);
+  _setTreeNodeExpanded(nodeKey, toggle, children, state.expandedTreeNodes.has(nodeKey));
+  _wireTreeArrowToggle(toggle, nodeKey, children);
 
-  // Double-click filters to just the source
-  toggle.ondblclick = () => {
+  // Header click filters to the full source scope (all descendant folders).
+  toggle.onclick = () => {
     resetTriageFilter();
-    state.currentSource = node.label.toLowerCase();
+    state.currentSource = sourceKey;
     state.currentBoard = null;
-    state.currentCollection = null;
-    state.currentCatalogFile = null;
+    clearCollectionFilter();
+    clearCatalogFilter();
+    state.currentTreeNodeId = node.id;
     state.offset = 0;
     renderCatalogTree();
     loadAssets();
@@ -598,8 +718,8 @@ function buildSourceNode(node) {
 
     // For catch-all entries, use catalog file mode; for regular boards, filter by source+board
     const isActive = isCatchAll
-      ? state.currentCatalogFile === child.file
-      : (state.currentSource === node.label.toLowerCase()
+      ? selectedCatalogFiles.length === 1 && selectedCatalogFiles[0] === child.file
+      : (state.currentSource === sourceKey
         && state.currentBoard
         && state.currentBoard.toLowerCase() === boardDbName.toLowerCase());
 
@@ -611,14 +731,15 @@ function buildSourceNode(node) {
         // Use catalog file mode for catch-all entries
         state.currentSource = null;
         state.currentBoard = null;
-        state.currentCollection = null;
-        state.currentCatalogFile = child.file;
+        clearCollectionFilter();
+        setCatalogFilter([child.file], { label: child.label, nodeId: child.id });
       } else {
         // Direct source+board filter for named boards
-        state.currentSource = node.label.toLowerCase();
+        state.currentSource = sourceKey;
         state.currentBoard = boardDbName;
-        state.currentCollection = null;
-        state.currentCatalogFile = null;
+        clearCollectionFilter();
+        clearCatalogFilter();
+        state.currentTreeNodeId = child.id;
       }
       state.offset = 0;
       renderCatalogTree();
@@ -645,8 +766,12 @@ function buildDimensionNode(node) {
   const el = document.createElement("div");
   el.className = "tree-node";
 
+  const nodeKey = node.id;
+  const selectedCatalogFiles = getCatalogFilterFiles();
+  const selectedCatalogSet = new Set(selectedCatalogFiles);
+  const isActiveHeader = state.currentTreeNodeId === node.id;
   const toggle = document.createElement("button");
-  toggle.className = "tree-toggle";
+  toggle.className = `tree-toggle${isActiveHeader ? " active" : ""}`;
   toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span>${escapeHtml(node.label)}</span><span class="tree-count">${node.count}</span>`;
 
   const children = document.createElement("div");
@@ -654,41 +779,35 @@ function buildDimensionNode(node) {
 
   // Check if any child is active — auto-expand
   const hasActiveChild = (node.children || []).some(
-    (c) => state.currentCatalogFile === c.file
+    (c) => selectedCatalogSet.has(c.file)
   );
-  const nodeKey = node.id;
-  if (hasActiveChild) {
-    state.expandedTreeNodes.add(nodeKey);
-  }
-  if (state.expandedTreeNodes.has(nodeKey)) {
-    toggle.classList.add("expanded");
-    children.classList.add("open");
-  }
+  if (hasActiveChild || isActiveHeader) state.expandedTreeNodes.add(nodeKey);
+  _setTreeNodeExpanded(nodeKey, toggle, children, state.expandedTreeNodes.has(nodeKey));
+  _wireTreeArrowToggle(toggle, nodeKey, children);
 
+  // Header click filters to all descendant catalog files.
   toggle.onclick = () => {
-    const isOpen = children.classList.contains("open");
-    if (isOpen) {
-      children.classList.remove("open");
-      toggle.classList.remove("expanded");
-      state.expandedTreeNodes.delete(nodeKey);
-    } else {
-      children.classList.add("open");
-      toggle.classList.add("expanded");
-      state.expandedTreeNodes.add(nodeKey);
-    }
+    resetTriageFilter();
+    state.currentSource = null;
+    state.currentBoard = null;
+    clearCollectionFilter();
+    setCatalogFilter(collectDescendantCatalogFiles(node), { label: node.label, nodeId: node.id });
+    state.offset = 0;
+    renderCatalogTree();
+    loadAssets();
   };
 
   for (const child of (node.children || [])) {
     const leaf = document.createElement("button");
-    const isActive = state.currentCatalogFile === child.file;
+    const isActive = selectedCatalogFiles.length === 1 && selectedCatalogFiles[0] === child.file;
     leaf.className = `tree-leaf${isActive ? " active" : ""}`;
     leaf.innerHTML = `<span>${escapeHtml(child.label)}</span><span class="tree-count">${child.count}</span>`;
     leaf.onclick = () => {
       resetTriageFilter();
       state.currentSource = null;
       state.currentBoard = null;
-      state.currentCollection = null;
-      state.currentCatalogFile = child.file;
+      clearCollectionFilter();
+      setCatalogFilter([child.file], { label: child.label, nodeId: child.id });
       state.offset = 0;
       renderCatalogTree();
       loadAssets();
@@ -705,47 +824,45 @@ function buildCollectionsGroupNode(node) {
   const el = document.createElement("div");
   el.className = "tree-node";
 
+  const nodeKey = "collections";
+  const selectedCollectionIds = getCollectionFilterIds();
+  const selectedCollectionSet = new Set(selectedCollectionIds);
+  const isActiveHeader = state.currentTreeNodeId === node.id;
   const toggle = document.createElement("button");
-  toggle.className = "tree-toggle";
+  toggle.className = `tree-toggle${isActiveHeader ? " active" : ""}`;
   toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span>Collections</span><span class="tree-count">${node.count}</span>`;
 
   const children = document.createElement("div");
   children.className = "tree-children";
 
-  const hasActiveChild = (node.children || []).some((c) => state.currentCollection === c.collection_id);
-  const nodeKey = "collections";
-  if (hasActiveChild) {
-    state.expandedTreeNodes.add(nodeKey);
-  }
-  if (state.expandedTreeNodes.has(nodeKey)) {
-    toggle.classList.add("expanded");
-    children.classList.add("open");
-  }
+  const hasActiveChild = (node.children || []).some((c) => selectedCollectionSet.has(c.collection_id));
+  if (hasActiveChild || isActiveHeader) state.expandedTreeNodes.add(nodeKey);
+  _setTreeNodeExpanded(nodeKey, toggle, children, state.expandedTreeNodes.has(nodeKey));
+  _wireTreeArrowToggle(toggle, nodeKey, children);
 
+  // Header click filters to all descendant collections.
   toggle.onclick = () => {
-    const isOpen = children.classList.contains("open");
-    if (isOpen) {
-      children.classList.remove("open");
-      toggle.classList.remove("expanded");
-      state.expandedTreeNodes.delete(nodeKey);
-    } else {
-      children.classList.add("open");
-      toggle.classList.add("expanded");
-      state.expandedTreeNodes.add(nodeKey);
-    }
+    resetTriageFilter();
+    state.currentSource = null;
+    state.currentBoard = null;
+    clearCatalogFilter();
+    setCollectionFilterIds(collectDescendantCollectionIds(node), { label: "All Collections", nodeId: node.id });
+    state.offset = 0;
+    renderCatalogTree();
+    loadAssets();
   };
 
   for (const child of (node.children || [])) {
     const leaf = document.createElement("button");
-    const isActive = state.currentCollection === child.collection_id;
+    const isActive = selectedCollectionIds.length === 1 && selectedCollectionIds[0] === child.collection_id;
     leaf.className = `tree-leaf${isActive ? " active" : ""}`;
     leaf.innerHTML = `<span>${escapeHtml(child.label)}</span><span class="tree-count">${child.count}</span>`;
     leaf.onclick = () => {
       resetTriageFilter();
       state.currentSource = null;
       state.currentBoard = null;
-      state.currentCollection = child.collection_id;
-      state.currentCatalogFile = null;
+      clearCatalogFilter();
+      setCollectionFilterIds([child.collection_id], { label: child.label, nodeId: child.id });
       state.offset = 0;
       renderCatalogTree();
       loadAssets();
@@ -844,7 +961,9 @@ function setSourceFilter(source) {
   resetTriageFilter();
   state.currentSource = source || null;
   state.currentBoard = null;
-  state.currentCatalogFile = null;
+  clearCollectionFilter();
+  clearCatalogFilter();
+  state.currentTreeNodeId = null;
   state.offset = 0;
   renderCatalogTree();
   loadAssets();
@@ -853,7 +972,9 @@ function setSourceFilter(source) {
 function setBoardFilter(board) {
   resetTriageFilter();
   state.currentBoard = board || null;
-  state.currentCatalogFile = null;
+  clearCollectionFilter();
+  clearCatalogFilter();
+  state.currentTreeNodeId = null;
   state.offset = 0;
   renderCatalogTree();
   loadAssets();
@@ -917,8 +1038,9 @@ function renderHiddenTree() {
   allLeaf.onclick = () => {
     state.currentSource = null;
     state.currentBoard = null;
-    state.currentCollection = null;
-    state.currentCatalogFile = null;
+    clearCollectionFilter();
+    clearCatalogFilter();
+    state.currentTreeNodeId = null;
     state.triageFilter = "hidden";
     state.offset = 0;
     renderCatalogTree();
@@ -936,8 +1058,9 @@ function renderHiddenTree() {
       leaf.onclick = () => {
         state.currentSource = src.source;
         state.currentBoard = b.board;
-        state.currentCollection = null;
-        state.currentCatalogFile = null;
+        clearCollectionFilter();
+        clearCatalogFilter();
+        state.currentTreeNodeId = null;
         state.triageFilter = "hidden";
         state.offset = 0;
         renderCatalogTree();
@@ -1077,11 +1200,15 @@ async function loadCollections() {
 }
 
 function setCollectionFilter(collectionId) {
-  state.currentCollection = collectionId || null;
   if (collectionId) {
     state.currentSource = null;
     state.currentBoard = null;
-    state.currentCatalogFile = null;
+    clearCatalogFilter();
+    const col = state.collections.find((c) => c.id === collectionId);
+    setCollectionFilterIds([collectionId], { label: col ? col.name : "", nodeId: null });
+  } else {
+    clearCollectionFilter();
+    state.currentTreeNodeId = null;
   }
   state.offset = 0;
   renderCatalogTree();
@@ -2298,8 +2425,9 @@ async function executeChatAction(action, params) {
         state.q = "";
         state.currentSource = null;
         state.currentBoard = null;
-        state.currentCollection = null;
-        state.currentCatalogFile = null;
+        clearCollectionFilter();
+        clearCatalogFilter();
+        state.currentTreeNodeId = null;
         state.triageFilter = "";
         const data = await api(`/api/assets?ids=${encodeURIComponent(ids)}&include_hidden=1&limit=200`);
         state.assets = data.assets || [];
@@ -2339,10 +2467,20 @@ async function executeChatAction(action, params) {
               label: `${child.label} (${node.label})`,
               count: child.count,
               onclick: () => {
-                state.currentSource = node.label.toLowerCase();
-                const boardFilter = child.file ? child.file.split("/").pop().replace(".md", "").replace(/_/g, " ") : child.label.toLowerCase();
-                state.currentBoard = boardFilter;
-                state.currentCollection = null;
+                const boardDbName = child.board_name || "";
+                const isCatchAll = boardDbName.startsWith("(");
+                if (isCatchAll && child.file) {
+                  state.currentSource = null;
+                  state.currentBoard = null;
+                  clearCollectionFilter();
+                  setCatalogFilter([child.file], { label: child.label, nodeId: null });
+                } else {
+                  state.currentSource = node.label.toLowerCase();
+                  state.currentBoard = boardDbName || child.label;
+                  clearCollectionFilter();
+                  clearCatalogFilter();
+                }
+                state.currentTreeNodeId = null;
                 state.offset = 0;
                 renderCatalogTree();
                 loadAssets();
@@ -2361,7 +2499,9 @@ async function executeChatAction(action, params) {
             onclick: () => {
               state.currentSource = n.label.toLowerCase();
               state.currentBoard = null;
-              state.currentCollection = null;
+              clearCollectionFilter();
+              clearCatalogFilter();
+              state.currentTreeNodeId = null;
               state.offset = 0;
               renderCatalogTree();
               loadAssets();
@@ -2374,11 +2514,20 @@ async function executeChatAction(action, params) {
     }
     case "filter": {
       state.chatItemIds = null;
+      state.currentTreeNodeId = null;
       if (params.source !== undefined) {
         state.currentSource = params.source || null;
+        if (params.source) {
+          clearCatalogFilter();
+          if (!params.board) clearCollectionFilter();
+        }
       }
       if (params.board !== undefined) {
         state.currentBoard = params.board || null;
+        if (params.board) {
+          clearCollectionFilter();
+          clearCatalogFilter();
+        }
       }
       if (params.triage_status !== undefined) {
         state.triageFilter = params.triage_status || "";
@@ -2390,7 +2539,15 @@ async function executeChatAction(action, params) {
         state.q = params.q || "";
       }
       if (params.collection_id !== undefined) {
-        state.currentCollection = params.collection_id || null;
+        if (params.collection_id) {
+          state.currentSource = null;
+          state.currentBoard = null;
+          clearCatalogFilter();
+          const col = state.collections.find((c) => c.id === params.collection_id);
+          setCollectionFilterIds([params.collection_id], { label: col ? col.name : "", nodeId: null });
+        } else {
+          clearCollectionFilter();
+        }
       }
       renderCatalogTree();
       await loadAssets();
@@ -2442,8 +2599,9 @@ async function executeChatAction(action, params) {
     case "clear_filters": {
       state.currentSource = null;
       state.currentBoard = null;
-      state.currentCollection = null;
-      state.currentCatalogFile = null;
+      clearCollectionFilter();
+      clearCatalogFilter();
+      state.currentTreeNodeId = null;
       state.triageFilter = "";
       state.q = "";
       $$("[data-triage]").forEach((c) => {
@@ -2741,8 +2899,8 @@ function _hasActiveFilters() {
     state.triageFilter ||
     state.currentSource ||
     state.currentBoard ||
-    state.currentCollection ||
-    state.currentCatalogFile ||
+    hasCollectionFilter() ||
+    hasCatalogFilter() ||
     state.chatItemIds ||
     (state.q && state.q.trim())
   );
@@ -2768,10 +2926,18 @@ async function syncExplorerFilter() {
     return;
   }
 
-  // Catalog file: use the asset IDs already loaded in the grid
-  if (state.currentCatalogFile) {
-    const ids = state.assets.map((a) => a.id);
-    _ExplorerImpl.setFilter(ids);
+  const catalogFiles = getCatalogFilterFiles();
+  if (catalogFiles.length) {
+    const catalogParams = new URLSearchParams();
+    for (const file of catalogFiles) catalogParams.append("file", file);
+    const seq = ++_explorerFilterSeq;
+    try {
+      const data = await api(`/api/catalog/asset-ids?${catalogParams}`);
+      if (seq !== _explorerFilterSeq) return; // stale
+      _ExplorerImpl.setFilter(data.ids || []);
+    } catch (e) {
+      // Silently ignore — filter dim is a nice-to-have
+    }
     return;
   }
 
@@ -2780,7 +2946,8 @@ async function syncExplorerFilter() {
   if (state.q && state.q.trim()) params.set("q", state.q.trim());
   if (state.currentSource) params.set("source", state.currentSource);
   if (state.currentBoard) params.set("board", state.currentBoard);
-  if (state.currentCollection) params.set("collection_id", state.currentCollection);
+  const collectionIds = getCollectionFilterIds();
+  if (collectionIds.length) params.set("collection_id", collectionIds.join(","));
   if (state.triageFilter === "needs-comment") {
     params.set("needs_annotation", "1");
     params.set("include_hidden", "1");
@@ -2812,6 +2979,8 @@ function updateFilterIndicator() {
   if (!bar || !text) return;
 
   const parts = [];
+  const catalogFiles = getCatalogFilterFiles();
+  const collectionIds = getCollectionFilterIds();
 
   // When a chat prompt is active, show it as the primary context;
   // skip the raw search text since it's just the extracted keyword from the prompt.
@@ -2823,19 +2992,29 @@ function updateFilterIndicator() {
   } else if (state.q && state.q.trim()) {
     parts.push(`"${state.q.trim()}"`);
   }
-  if (state.currentSource && !state.currentCatalogFile) {
+  if (state.currentSource && !catalogFiles.length && !collectionIds.length) {
     parts.push(`Source: ${state.currentSource}`);
   }
-  if (state.currentBoard && !state.currentCatalogFile) {
+  if (state.currentBoard && !catalogFiles.length && !collectionIds.length) {
     parts.push(`Board: ${state.currentBoard}`);
   }
-  if (state.currentCatalogFile) {
-    const name = state.currentCatalogFile.split("/").pop().replace(".md", "").replace(/_/g, " ");
-    parts.push(`Catalog: ${name}`);
+  if (catalogFiles.length) {
+    let catalogLabel = state.currentCatalogLabel || "";
+    if (!catalogLabel && catalogFiles.length === 1) {
+      catalogLabel = catalogFiles[0].split("/").pop().replace(".md", "").replace(/_/g, " ");
+    } else if (!catalogLabel) {
+      catalogLabel = `${catalogFiles.length} folders`;
+    }
+    parts.push(`Catalog: ${catalogLabel}`);
   }
-  if (state.currentCollection) {
-    const col = state.collections.find((c) => c.id === state.currentCollection);
-    parts.push(`Collection: ${col ? col.name : state.currentCollection.slice(0, 8)}`);
+  if (collectionIds.length) {
+    if (collectionIds.length === 1) {
+      const cid = collectionIds[0];
+      const col = state.collections.find((c) => c.id === cid);
+      parts.push(`Collection: ${col ? col.name : cid.slice(0, 8)}`);
+    } else {
+      parts.push(`Collections: ${state.currentCollectionLabel || `${collectionIds.length} folders`}`);
+    }
   }
   if (state.triageFilter) {
     const labels = { pending: "Pending", keeper: "Keepers", hidden: "Hidden", "needs-comment": "Needs comment", flagged: "🚩 Flagged" };
@@ -2854,8 +3033,9 @@ const clearFilterBtn = $("#clearFilterIndicator");
 if (clearFilterBtn) clearFilterBtn.addEventListener("click", () => {
   state.currentSource = null;
   state.currentBoard = null;
-  state.currentCollection = null;
-  state.currentCatalogFile = null;
+  clearCollectionFilter();
+  clearCatalogFilter();
+  state.currentTreeNodeId = null;
   state.triageFilter = "";
   state.q = "";
   state.chatPrompt = "";

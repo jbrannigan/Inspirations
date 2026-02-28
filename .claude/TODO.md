@@ -25,10 +25,14 @@
 
 ### Next Sprint — Implementation (easiest-first)
 
-1. **Side tree header/folder click filters both Grid + Explorer**
+1. **[x] Side tree header/folder click filters both Grid + Explorer**
    - Clicking a side-tree main header or folder must apply a filter.
    - Filter scope is recursive descendants (all nested children under that node).
    - Grid and Explorer canvas should reflect the same filtered scope.
+   - Implemented (Feb 28, 2026):
+     - Header clicks now apply filters; arrow click handles expand/collapse.
+     - Dimension and collection headers apply recursive descendant scopes.
+     - Explorer sync now uses full catalog scope via `/api/catalog/asset-ids` (not paged Grid IDs).
 
 2. **Hidden visibility rule in Explorer (role-gated)**
    - Hidden assets render only for owner/Jim role when Hidden status is explicitly active.

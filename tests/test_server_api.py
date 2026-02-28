@@ -227,6 +227,30 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual([a["id"] for a in body["assets"]], ["a2"])
 
+    def test_collection_filter_supports_multiple_collection_ids(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into assets (id, source, source_ref, title, imported_at) values (?, ?, ?, ?, datetime('now'))",
+                ("a3", "facebook", "facebook://saved/3", "Asset Three"),
+            )
+            db.exec(
+                """
+                insert into collections (id, name, description, created_at, updated_at)
+                values (?, ?, ?, datetime('now'), datetime('now'))
+                """,
+                ("c2", "Bathroom", ""),
+            )
+            db.exec("insert into collection_items (collection_id, asset_id, position) values (?, ?, ?)", ("c2", "a3", 1))
+
+        status, ids_body = self._request("/api/asset-ids?collection_id=c1,c2")
+        self.assertEqual(status, 200)
+        self.assertEqual(set(ids_body.get("ids", [])), {"a1", "a2", "a3"})
+
+        status, body = self._request("/api/assets?collection_id=c1,c2&limit=10")
+        self.assertEqual(status, 200)
+        self.assertEqual({a["id"] for a in body.get("assets", [])}, {"a1", "a2", "a3"})
+
     def test_assets_endpoint_supports_label_mode_all(self):
         with Db(self.db_path) as db:
             ensure_schema(db)

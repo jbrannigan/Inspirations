@@ -390,10 +390,11 @@ def _build_asset_filter(
             clauses.append(f"({field_ors})")
             tv = f"%{term}%"
             params += [tv] * len(_search_fields)
-    if collection_id:
+    collection_ids = _csv_values(collection_id)
+    if collection_ids:
         joins.append("join collection_items ci on ci.asset_id = a.id")
-        clauses.append("ci.collection_id = ?")
-        params.append(collection_id)
+        clauses.append("ci.collection_id in (%s)" % ",".join(["?"] * len(collection_ids)))
+        params.extend(collection_ids)
     if triage_status:
         statuses = [s.strip() for s in triage_status.split(",") if s.strip()]
         if "pending" in statuses:
@@ -418,7 +419,7 @@ def _build_asset_filter(
     if not include_hidden:
         clauses.append("(a.triage_status is null or a.triage_status != 'hidden')")
     hidden_collection_id = db.query_value("select id from collections where lower(name)='hidden' limit 1")
-    if hidden_collection_id and not include_hidden and collection_id != hidden_collection_id:
+    if hidden_collection_id and not include_hidden and hidden_collection_id not in set(collection_ids):
         clauses.append(
             "a.id not in (select asset_id from collection_items where collection_id = ?)"
         )

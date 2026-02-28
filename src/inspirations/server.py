@@ -400,27 +400,17 @@ class ApiHandler(BaseHTTPRequestHandler):
             return _send(self, 200, {"tree": tree})
 
         if parsed.path == "/api/catalog/items":
-            # Load items by catalog file path — extracts 8-char IDs and returns matching assets
+            # Load items by one or more catalog file paths.
             q = parse_qs(parsed.query)
             catalog_dir = getattr(self.server, "catalog_dir", None)
-            file_param = q.get("file", [""])[0]
-            if not catalog_dir or not file_param:
+            file_params = [str(v or "").strip() for v in q.get("file", []) if str(v or "").strip()]
+            if not catalog_dir or not file_params:
                 return _send(self, 400, {"error": "file param required"})
-            catalog_path = Path(catalog_dir) / file_param
-            # Security: ensure path is within catalog_dir
-            try:
-                catalog_path = catalog_path.resolve()
-                if not str(catalog_path).startswith(str(Path(catalog_dir).resolve())):
-                    return _send(self, 400, {"error": "invalid file path"})
-            except Exception:
-                return _send(self, 400, {"error": "invalid file path"})
-            if not catalog_path.exists():
-                return _send(self, 404, {"error": "catalog file not found"})
-            # Extract 8-char IDs from lines like "- a7ae6384 | ..."
-            text = catalog_path.read_text(encoding="utf-8")
-            short_ids = re.findall(r"^- ([0-9a-f]{8}) \|", text, re.MULTILINE)
+            short_ids, err_status, err_msg = self._catalog_short_ids_for_files(Path(catalog_dir), file_params)
+            if err_status:
+                return _send(self, err_status, {"error": err_msg})
             if not short_ids:
-                return _send(self, 200, {"assets": [], "has_more": False})
+                return _send(self, 200, {"assets": [], "has_more": False, "total": 0})
             ids_str = ",".join(short_ids)
             limit = int(q.get("limit", ["500"])[0])
             offset = int(q.get("offset", ["0"])[0])
@@ -428,10 +418,33 @@ class ApiHandler(BaseHTTPRequestHandler):
                 list_assets,
                 ids=ids_str,
                 include_hidden=True,
-                limit=limit,
+                limit=limit + 1,
                 offset=offset,
             )
-            return _send(self, 200, {"assets": assets, "has_more": len(assets) >= limit})
+            pre_collapse = assets[0].pop("_pre_collapse_count", len(assets)) if assets else 0
+            for a in assets:
+                a.pop("_pre_collapse_count", None)
+            total_count = assets[0].pop("_total_count", None) if assets else 0
+            for a in assets:
+                a.pop("_total_count", None)
+            has_more = pre_collapse > limit
+            if has_more:
+                assets = assets[:limit]
+            return _send(self, 200, {"assets": assets, "has_more": has_more, "total": total_count})
+
+        if parsed.path == "/api/catalog/asset-ids":
+            q = parse_qs(parsed.query)
+            catalog_dir = getattr(self.server, "catalog_dir", None)
+            file_params = [str(v or "").strip() for v in q.get("file", []) if str(v or "").strip()]
+            if not catalog_dir or not file_params:
+                return _send(self, 400, {"error": "file param required"})
+            short_ids, err_status, err_msg = self._catalog_short_ids_for_files(Path(catalog_dir), file_params)
+            if err_status:
+                return _send(self, err_status, {"error": err_msg})
+            if not short_ids:
+                return _send(self, 200, {"ids": []})
+            ids = self._with_db(list_asset_ids, ids=",".join(short_ids), include_hidden=True)
+            return _send(self, 200, {"ids": ids})
 
         if parsed.path == "/api/tray":
             items = self._with_db(list_tray)
@@ -1044,6 +1057,32 @@ class ApiHandler(BaseHTTPRequestHandler):
         with Db(self.server.db_path) as db:
             ensure_schema(db)
             return fn(db, **kwargs)
+
+    def _catalog_short_ids_for_files(self, catalog_dir: Path, file_params: list[str]) -> tuple[list[str], int | None, str | None]:
+        """Resolve catalog files safely and return unique 8-char asset prefixes."""
+        root = catalog_dir.resolve()
+        short_ids: list[str] = []
+        seen_ids: set[str] = set()
+        seen_files: set[str] = set()
+        for raw in file_params:
+            rel = str(raw or "").strip()
+            if not rel or rel in seen_files:
+                continue
+            seen_files.add(rel)
+            try:
+                target = (root / rel).resolve()
+                target.relative_to(root)
+            except Exception:
+                return [], 400, "invalid file path"
+            if not target.exists() or not target.is_file():
+                return [], 404, "catalog file not found"
+            text = target.read_text(encoding="utf-8")
+            for sid in re.findall(r"^- ([0-9a-f]{8}) \|", text, re.MULTILINE):
+                if sid in seen_ids:
+                    continue
+                seen_ids.add(sid)
+                short_ids.append(sid)
+        return short_ids, None, None
 
     def _build_catalog_tree(self, catalog_dir: Path) -> list[dict]:
         """Build a tree structure from the catalog for the sidebar browser."""
