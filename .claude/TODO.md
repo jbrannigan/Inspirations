@@ -21,51 +21,96 @@
 
 ---
 
-## Priority: Sidebar Tree Redesign
+## Sprint Buckets (updated Feb 28, 2026)
 
-The browse tree is the main navigation but has fundamental problems that make it confusing and misleading.
+### Next Sprint — Implementation (easiest-first)
 
-### Problems
+1. **Side tree header/folder click filters both Grid + Explorer**
+   - Clicking a side-tree main header or folder must apply a filter.
+   - Filter scope is recursive descendants (all nested children under that node).
+   - Grid and Explorer canvas should reflect the same filtered scope.
 
-1. **Counts include hidden items** — Facebook shows 1190 but only ~550 are visible. Exercise shows 94 but 90 are hidden. Users click expecting N items and see far fewer.
+2. **Hidden visibility rule in Explorer (role-gated)**
+   - Hidden assets render only for owner/Jim role when Hidden status is explicitly active.
+   - Collaborators never see hidden assets in Explorer.
+   - If Focus is unchecked, hidden still must not appear unless hidden view is active for owner/Jim.
 
-2. **Status filter and tree are disconnected** — clicking "Hidden" status filters the grid, but the tree doesn't update counts or visual state. The two controls feel independent when they should cross-reference.
+3. **Header button to hide/show side panel**
+   - Add side panel toggle in header (header button only).
+   - Persist state locally per browser via localStorage.
 
-3. **Hidden items inflate the tree structure** — Exercise exists as a prominent Facebook sub-board only because of 90 hidden exercise reels. With hidden excluded it's 4 items — barely worth showing.
+4. **PDF source-link bug fix**
+   - Current issue: PDF items link back to the master PDF instead of the individual source item.
+   - Fix link mapping so each PDF item opens its own original source context.
+   - Preserve multipage UX (existing page-through behavior on multipage scans).
 
-4. **Gemini board names don't match existing boards** — The reel pipeline assigned granular names like "Kitchen Renovation Tips" instead of mapping to existing "kitchen" board. ~200 reels have orphaned board names, all lumped into "(Unsorted Reels) 799".
+### Explore Sprint — UX responsiveness + interactive validation
 
-5. **Tree is static** — Built from a pre-generated catalog `_index.md` file with baked-in counts. Cannot dynamically respond to triage changes or status filters. This is the root cause of problems 1-3.
+1. **Slow-render feedback behavior**
+   - User should see immediate UI acknowledgment for expensive Explorer actions.
+   - Explore small busy indicator/hourglass behavior while canvas recompute/render is in progress.
+   - Goal is responsiveness perception, then finalize implementation details.
 
-### Design direction
+2. **3D hover preview experiment (interactive test with Jim first)**
+   - Test a non-modal hover enlarge behavior for crowded 3D thumbnails.
+   - Not a committed feature until validated interactively.
 
-- Tree counts should reflect what the user will actually see (exclude hidden by default)
-- When a status filter is active, tree counts should update to match
-- Consider making the tree DB-driven (live queries) rather than catalog-file-driven
-- Normalize Gemini board names to existing boards (map "Kitchen Renovation Tips" → "kitchen")
-- Small boards with <3 visible items should collapse into "(Small Boards)" or not show at all
+3. **Re-evaluate additional 2D/3D perf work after current gains**
+   - Reassess whether separate 3D button, 2D precompute parity, and background thumb cache are still necessary.
+   - Keep as exploratory unless profiling proves need.
 
----
+### Elaboration Sprint — define before build
 
-## Deployment: Authentication
+1. **AI title quality audit + replacement workflow**
+   - Treat AI titles as suspect pending audit.
+   - Produce count, quality trend/reason breakdown, and candidate replacement strategy.
+   - Evaluate source click-through + DOM title extraction as background workflow, then human vet.
 
-Before deploying publicly, gate access with email whitelist + magic links:
-- Visitor enters email → if on whitelist, receive a magic-link email
-- Magic link sets an actor token cookie (same mechanism as current `?actor=` flow)
-- No password needed — token-based auth via email verification
-- Whitelist managed in Admin page or DB table
-- Anonymous visitors see nothing (or a login prompt) instead of the full browse UI
+2. **Collaboration context-link sprint (new)**
+   - Sprint spec: `docs/SPRINT_COLLAB_CONTEXT_LINK.md`
+   - Generate shareable link for a specific item in collection context ("look at this").
+   - Link should restore the same item context for authenticated collaborator.
+   - Link policy: durable by default (expiration/revocation policy deferred to later vote).
+   - Link opens latest collection state (not historical snapshot), while preserving item reference.
+   - Shared links must include a fixed `item_id` anchor so context always lands on the referenced item.
+   - Transport targets: email/text/message copy flow from app UI.
+   - Collaborator annotations are allowed and should be visually distinct from owner annotations.
+   - Distinction style: annotation shows collaborator name + color.
+   - Permissions:
+     - collaborators can edit/delete their own annotations,
+     - owner/Jim can edit/delete collaborator annotations.
+   - Access scope: any authenticated collaborator can open shared context links.
+   - If target item is no longer in the collection, show explicit "no longer in collection" state.
+   - Question/reply workflow is intentionally split to a separate elaboration sprint item.
+   - Define auth constraints and context snapshot shape before build:
+     - actor role/permissions,
+     - collection scope,
+     - exact item reference,
+     - view state needed for reproducible context.
 
----
+3. **Collaborator question workflow (separate elaboration sprint)**
+   - Sprint spec: `docs/SPRINT_COLLAB_QUESTION_WORKFLOW.md`
+   - Define how collaborators ask questions tied to shared context links.
+   - Define response/threading behavior in an in-app thread panel.
+   - Ensure question context is unambiguous without requiring brittle manual quoting.
 
-## Other Known Issues
+4. **Ingestion pipeline harmonization harness (nice-to-have)**
+   - Plan idempotent incremental ingestion (skip existing, ingest only new/changed).
+   - Move from bulk-only mindset to repeatable incremental updates.
 
-- **Detail modal** needs more context: post text, AI labels, video analysis results
-- **Sidebar state** doesn't persist when closing/reopening the detail modal
-- **"Small boards"** UX could be improved — currently just a catch-all bucket
-- **Jim's 16 tagged items** still need interactive Claude Code review (the original anomaly diagnosis workflow)
-- **45 failed reel downloads** (private/deleted) — could retry or mark as permanently unavailable
+5. **Tagging completeness confidence framework (TBD)**
+   - Define if this is needed and, if so, the measurable target by source/pipeline.
+   - Set acceptance metric before implementation.
+
+### Deferred / Platform
+
+- **Deployment auth** (before public exposure): email whitelist + magic links.
+- **Detail modal context expansion**: post text, AI labels, video analysis context.
+- **Sidebar state persistence** when closing/reopening modal.
+- **Small boards UX** refinements.
+- **Jim's 16 tagged items** interactive review workflow.
+- **45 failed reel downloads** retry/mark-unavailable decision.
 
 ## Tag System (Jim's Anomaly Markers)
 
-Tags are separate from Flags. Tags mark items where Jim noticed something unusual (e.g., thumbnail label doesn't match actual content). The 16 tagged reels now have video analysis stored but were intentionally NOT auto-triaged — they're preserved for Leslie + Jim to review together.
+Tags are separate from Flags. Tags mark items where Jim noticed something unusual (for example thumbnail label mismatch). The 16 tagged reels have video analysis stored but were intentionally not auto-triaged; they are preserved for collaborative review.
