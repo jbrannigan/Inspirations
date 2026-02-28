@@ -351,6 +351,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   white-space: nowrap;
 }
 .header-btn:hover { color: var(--text); border-color: var(--border-hover); background: var(--panel-hover); }
+.header-btn[aria-pressed="true"] { color: var(--text); border-color: var(--border-hover); background: var(--surface-subtle); }
 .adminLink { display: inline-flex; align-items: center; }
 .header-actions [hidden] { display: none; }
 .sidebar[hidden] { display: none; }
@@ -397,9 +398,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   height: calc(100vh - 57px);
   overflow: hidden;
 }
+.layout.sidebar-hidden { grid-template-columns: 1fr; }
 .layout.explorer-active {
   grid-template-columns: 240px 1fr;
 }
+.layout.sidebar-hidden.explorer-active { grid-template-columns: 1fr; }
 .layout.explorer-active .content {
   padding: 8px 8px 0;
 }

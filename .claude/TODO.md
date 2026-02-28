@@ -43,9 +43,13 @@
      - Server gates `include_hidden=1` on `/api/explorer/attractor-data` and `/api/explorer/layout` to owner role.
      - Explorer auto-reloads payload scope when entering/exiting hidden status so hidden nodes are never present outside hidden view.
 
-3. **Header button to hide/show side panel**
+3. **[x] Header button to hide/show side panel**
    - Add side panel toggle in header (header button only).
    - Persist state locally per browser via localStorage.
+   - Implemented (Feb 28, 2026):
+     - Added `Hide Panel`/`Show Panel` header button.
+     - Sidebar visibility now toggles in both Grid and Explorer layouts.
+     - Preference is persisted via localStorage key `inspirations.ui.sidebar.hidden.v1`.
 
 4. **PDF source-link bug fix**
    - Current issue: PDF items link back to the master PDF instead of the individual source item.

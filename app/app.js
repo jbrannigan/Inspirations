@@ -2,6 +2,7 @@
 const state = {
   // Navigation
   view: "browse",               // "browse" | "review"
+  sidebarHidden: false,         // side panel collapsed state
   currentBoard: null,           // board filter (null = all)
   currentSource: null,          // source filter (null = all)
   currentCollection: null,      // collection ID filter
@@ -70,6 +71,7 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 const escapeHtml = Shared.escapeHtml;
 const api = Shared.api;
 const formatApiError = Shared.formatApiError;
+const SIDEBAR_VISIBILITY_KEY = "inspirations.ui.sidebar.hidden.v1";
 
 const IMAGE_SUFFIX_RE = /\.(jpg|jpeg|png|webp|gif|bmp|svg)(\?.*)?$/i;
 const PDF_FILE_EXT_RE = /\.pdf$/i;
@@ -267,6 +269,50 @@ function _wireTreeArrowToggle(toggleEl, nodeKey, childrenEl) {
     e.preventDefault();
     e.stopPropagation();
     _toggleTreeNodeExpanded(nodeKey, toggleEl, childrenEl);
+  });
+}
+
+function _readSidebarHiddenPref() {
+  try {
+    return localStorage.getItem(SIDEBAR_VISIBILITY_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function _writeSidebarHiddenPref(hidden) {
+  try {
+    localStorage.setItem(SIDEBAR_VISIBILITY_KEY, hidden ? "1" : "0");
+  } catch {
+    // no-op
+  }
+}
+
+function applySidebarVisibility() {
+  const layout = $(".layout");
+  const sidebar = $("aside.sidebar");
+  const toggleBtn = $("#toggleSidebarBtn");
+  if (layout) layout.classList.toggle("sidebar-hidden", state.sidebarHidden);
+  if (sidebar) sidebar.hidden = !!state.sidebarHidden;
+  if (toggleBtn) {
+    toggleBtn.setAttribute("aria-pressed", state.sidebarHidden ? "true" : "false");
+    toggleBtn.textContent = state.sidebarHidden ? "Show Panel" : "Hide Panel";
+    toggleBtn.title = state.sidebarHidden ? "Show side panel" : "Hide side panel";
+  }
+}
+
+function setSidebarHidden(hidden, { persist = true } = {}) {
+  state.sidebarHidden = !!hidden;
+  applySidebarVisibility();
+  if (persist) _writeSidebarHiddenPref(state.sidebarHidden);
+}
+
+function wireSidebarToggle() {
+  const toggleBtn = $("#toggleSidebarBtn");
+  setSidebarHidden(_readSidebarHiddenPref(), { persist: false });
+  if (!toggleBtn) return;
+  toggleBtn.addEventListener("click", () => {
+    setSidebarHidden(!state.sidebarHidden);
   });
 }
 
@@ -3301,6 +3347,7 @@ setPhotoImportButtonState();
 // ─── Init ─────────────────────────────────────────────────────────────────────────
 
 wireStatusChips();
+wireSidebarToggle();
 
 function isOwner() {
   return state.actor && state.actor.role === "owner";
