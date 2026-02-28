@@ -703,7 +703,7 @@
       }
     }
 
-    const chipOrder = ["rooms", "styles", "materials", "colors"];
+    const chipOrder = ["rooms", "styles", "materials", "colors", "image_type", "elements"];
     for (const catKey of chipOrder) {
       const options = _attractorOptions[catKey];
       if (!options || options.length === 0) continue;

@@ -792,6 +792,24 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: rgba(255,255,255,0.45);
   white-space: nowrap;
 }
+.attractor-sliders .slider-with-value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+}
+.attractor-sliders .slider-with-value .slider-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.attractor-sliders .slider-value {
+  margin-left: 2px;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255,255,255,0.55);
+  line-height: 1;
+}
 .attractor-sliders input[type="range"] {
   width: 80px;
   accent-color: var(--accent);

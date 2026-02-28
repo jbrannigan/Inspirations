@@ -2533,6 +2533,95 @@ const _Explorer2D = window.AttractorExplorer || null;
 let _explorerMode = "2d";   // "2d" | "3d"
 let _ExplorerImpl = _Explorer2D || window.Explorer || null;
 function _getExplorer3D() { return window.AttractorExplorer3D || null; }
+let _cachedExplorerAttractorData = null;
+let _busyCursorDepth = 0;
+
+function _setGlobalBusyCursor(cursor) {
+  if (document.body) document.body.style.cursor = cursor;
+  if (document.documentElement) document.documentElement.style.cursor = cursor;
+  const container = document.getElementById("explorerContainer");
+  if (container) container.style.cursor = cursor;
+}
+
+function _pushBusyCursor() {
+  _busyCursorDepth += 1;
+  _setGlobalBusyCursor("wait");
+}
+
+function _popBusyCursor() {
+  _busyCursorDepth = Math.max(0, _busyCursorDepth - 1);
+  if (_busyCursorDepth === 0) _setGlobalBusyCursor("");
+}
+
+function _isAttractorPayload(data) {
+  return !!(
+    data &&
+    Array.isArray(data.assets) &&
+    Array.isArray(data.dimensions) &&
+    data.categories &&
+    data.attractors
+  );
+}
+
+function _merge3DExplorerData(layoutData, attractorData) {
+  const base = attractorData || {};
+  const assets = Array.isArray(base.assets) ? base.assets : [];
+  const layoutNodes = Array.isArray(layoutData?.nodes) ? layoutData.nodes : [];
+  const layoutById = new Map(layoutNodes.map((node) => [node.id, node]));
+  let matched = 0;
+
+  const mergedAssets = assets.map((asset) => {
+    const layoutNode = layoutById.get(asset.id);
+    if (!layoutNode) return asset;
+    matched += 1;
+    return {
+      ...asset,
+      x: Number.isFinite(layoutNode.x) ? layoutNode.x : asset.x,
+      y: Number.isFinite(layoutNode.y) ? layoutNode.y : asset.y,
+      z: Number.isFinite(layoutNode.z) ? layoutNode.z : asset.z,
+      title: asset.title || layoutNode.title || "",
+      t: asset.t || layoutNode.thumb_url || "",
+    };
+  });
+
+  if (layoutNodes.length === 0) {
+    console.warn("[Explorer] 3D layout returned no nodes; using PCA fallback positions");
+  } else if (matched === 0) {
+    console.warn("[Explorer] 3D layout IDs did not overlap; using PCA fallback positions");
+  } else {
+    console.log(`[Explorer] 3D layout merged ${matched}/${assets.length} nodes`);
+  }
+
+  return {
+    ...base,
+    assets: mergedAssets,
+    layout_clusters: Array.isArray(layoutData?.clusters) ? layoutData.clusters : [],
+  };
+}
+
+async function _loadExplorerPayload(mode) {
+  if (mode === "3d") {
+    // Keep 3D switches fast: reuse attractor metadata (vectors/chips) already
+    // loaded for 2D, and only fetch layout coords for the mode switch.
+    const layoutPromise = api("/api/explorer/layout");
+    let baseData =
+      _isAttractorPayload(explorerData) ? explorerData : _cachedExplorerAttractorData;
+    if (!_isAttractorPayload(baseData)) {
+      baseData = await api("/api/explorer/attractor-data?dims=2");
+    }
+    _cachedExplorerAttractorData = baseData;
+    try {
+      const layoutData = await layoutPromise;
+      return _merge3DExplorerData(layoutData, baseData);
+    } catch (e) {
+      console.warn("[Explorer] 3D layout request failed; using PCA fallback positions", e);
+      return baseData;
+    }
+  }
+  const data = await api("/api/explorer/attractor-data?dims=2");
+  _cachedExplorerAttractorData = data;
+  return data;
+}
 
 function setViewMode(mode) {
   if (state.canvasReview) exitCanvasReview();
@@ -2580,7 +2669,12 @@ async function switchExplorerMode(newMode) {
     _ExplorerImpl = _Explorer2D || window.Explorer || null;
     _explorerMode = "2d";
   }
-  await loadExplorerView();
+  _pushBusyCursor();
+  try {
+    await loadExplorerView();
+  } finally {
+    _popBusyCursor();
+  }
 }
 
 async function loadExplorerView() {
@@ -2619,16 +2713,17 @@ async function loadExplorerView() {
   }
 
   // Load data from appropriate endpoint
+  _pushBusyCursor();
   try {
-    const dims = _explorerMode === "3d" ? 3 : 2;
     Shared.showToast(`Loading ${_explorerMode.toUpperCase()} attractor map…`, { type: "info", duration: 2000 });
-    const endpoint = `/api/explorer/attractor-data?dims=${dims}`;
-    const data = await api(endpoint);
+    const data = await _loadExplorerPayload(_explorerMode);
     explorerData = data;
     _ExplorerImpl.loadData(data);
     syncExplorerFilter();   // apply any active grid filters as dim
   } catch (e) {
     Shared.showToast(`Explorer: ${formatApiError(e)}`, { type: "error" });
+  } finally {
+    _popBusyCursor();
   }
 }
 

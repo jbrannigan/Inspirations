@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from pathlib import Path
 
@@ -390,6 +391,39 @@ def _apply_text(vec: list[float], text: str, weight: float = 0.3) -> None:
             _set_dim(vec, dim_name, weight)
 
 
+def _apply_high_df_idf(vectors: list[list[float]], threshold_ratio: float = 0.5) -> dict[str, float]:
+    """Downweight dimensions that appear in most items using log(N / df)."""
+    if not vectors:
+        return {}
+    n = len(vectors)
+    d = len(vectors[0]) if vectors[0] else 0
+    if n <= 1 or d == 0:
+        return {}
+
+    dim_counts = [0] * d
+    for vec in vectors:
+        for i, v in enumerate(vec):
+            if v > 0:
+                dim_counts[i] += 1
+
+    applied: dict[str, float] = {}
+    for i, df in enumerate(dim_counts):
+        if df <= 0:
+            continue
+        if (df / n) <= threshold_ratio:
+            continue
+        scale = math.log(n / df)
+        if scale < 0:
+            scale = 0.0
+        if scale >= 1.0:
+            continue
+        for vec in vectors:
+            if vec[i] > 0:
+                vec[i] *= scale
+        applied[ALL_DIMS[i]] = scale
+    return applied
+
+
 # ─── PCA projection ─────────────────────────────────────────────────────────
 
 def _pca_2d(vectors: list[list[float]]) -> list[tuple[float, float]]:
@@ -555,6 +589,7 @@ def build_feature_vectors(db: Db, data_dir: Path | None = None, dims: int = 2) -
     # 4. Build vectors
     vectors: list[list[float]] = []
     node_list: list[dict] = []
+    node_meta: list[dict] = []
 
     for asset in assets:
         vec = [0.0] * NUM_DIMS
@@ -592,26 +627,36 @@ def build_feature_vectors(db: Db, data_dir: Path | None = None, dims: int = 2) -
 
         vectors.append(vec)
 
-        # Build sparse vector for transport (only non-zero entries)
-        sparse: dict[str, float] = {}
-        for i, v in enumerate(vec):
-            if v > 0:
-                sparse[str(i)] = round(v, 2)
-
         thumb = f"/media/{aid}?kind=thumb" if asset["thumb_path"] else ""
         display_title = title or asset["ai_summary"] or board or ""
         if len(display_title) > 80:
             display_title = display_title[:77] + "..."
 
-        node_list.append({
+        node_meta.append({
             "id": aid,
-            "v": sparse,
             "t": thumb,
             "title": display_title,
             "src": src,
         })
 
-    # 5. PCA for initial positions (2D or 3D)
+    # 5. IDF downweighting for high-frequency dimensions
+    _apply_high_df_idf(vectors, threshold_ratio=0.5)
+
+    # Build sparse vectors for transport (only non-zero entries)
+    for i, meta in enumerate(node_meta):
+        sparse: dict[str, float] = {}
+        for dim_idx, value in enumerate(vectors[i]):
+            if value > 0:
+                sparse[str(dim_idx)] = round(value, 2)
+        node_list.append({
+            "id": meta["id"],
+            "v": sparse,
+            "t": meta["t"],
+            "title": meta["title"],
+            "src": meta["src"],
+        })
+
+    # 6. PCA for initial positions (2D or 3D)
     if dims == 3:
         coords_3d = _pca_3d(vectors)
         coords_3d = _normalize_coords_3d(coords_3d, spread=350.0)
@@ -626,7 +671,7 @@ def build_feature_vectors(db: Db, data_dir: Path | None = None, dims: int = 2) -
             node["x"] = round(coords[i][0], 1)
             node["y"] = round(coords[i][1], 1)
 
-    # 6. Compute attractor options (dims with enough items to be useful)
+    # 7. Compute attractor options (dims with enough items to be useful)
     dim_counts = [0] * NUM_DIMS
     for vec in vectors:
         for i, v in enumerate(vec):
@@ -649,10 +694,12 @@ def build_feature_vectors(db: Db, data_dir: Path | None = None, dims: int = 2) -
         if options:
             attractors[cat_key] = options
 
-    # 7. Cache result
+    # 8. Cache result
     if data_dir:
         data_dir.mkdir(parents=True, exist_ok=True)
-        cache_key = hashlib.sha256(f"{','.join(sorted(asset_ids))}:dims={dims}".encode()).hexdigest()[:16]
+        cache_key = hashlib.sha256(
+            f"{','.join(sorted(asset_ids))}:dims={dims}:idf=v1".encode()
+        ).hexdigest()[:16]
         cache_file = data_dir / f"attractors_{cache_key}.json"
         payload = {
             "dimensions": ALL_DIMS,

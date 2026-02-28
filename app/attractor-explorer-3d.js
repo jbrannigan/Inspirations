@@ -53,8 +53,9 @@
   let _attractorOptions = {};
   let _activeAttractors = [];   // [{dim, name, count, px, py, pz}]
 
-  let _meshes = [];              // [{id, mesh, node}]
-  let _meshMap = new Map();      // id → entry, for O(1) lookup in _applyTexToMesh
+  let _instanceMesh = null;      // THREE.InstancedMesh for all colored base tiles
+  let _instanceNodes = [];       // instanceId -> node
+  let _overlayMeshes = new Map();// id -> {mesh, node} textured near-camera overlays
   let _poleMarkers = [];         // [{mesh, labelEl, att}]
   let _clickCallback = null;
   let _selectCallback = null;
@@ -84,14 +85,50 @@
   let _texLoading = 0;
   let _texQueue = [];
   const MAX_CONCURRENT_TEX = 12;
+  // 0 means "no cap" (use all visible nodes).
+  const MAX_TEXTURE_OVERLAYS = 0;
+  const TEX_PREFETCH_COUNT = 0;
+  const OVERLAY_SYNC_MIN_MS = 90;
+  const SETTINGS_KEY = "inspirations.attractor3d.settings.v2";
 
   // Shared geometry + billboard tracking
   let _sharedGeo = null;
   let _lastCameraQuat = null;
+  let _lastCameraPos = null;
   let _resizeObserver = null;
+  let _needsVisualUpdate = false;
+  let _needsInstanceUpdate = false;
+  let _needsOverlaySync = false;
+  let _lastOverlaySyncAt = 0;
+
+  // Hot-path temp objects
+  let _tmpMatrix = null;
+  let _tmpPosition = null;
+  let _tmpScale = null;
+  let _tmpColor = null;
+  let _tmpBgColor = null;
+  let _tmpCameraOffset = null;
 
   // UI state
   let _showThumbs = true;
+  let _sizeManuallySet = false;
+  let _settingsLoaded = false;
+  let _hasSavedNodeSize = false;
+  let _liveCalm = 0;            // 0 = active movement, 1 = settled/calmed
+
+  // Click suppression to prevent drag-release opening detail modal
+  const CLICK_DRAG_PX = 6;
+  const CLICK_SUPPRESS_MS = 220;
+  let _pointerDown = null;
+  let _dragMoved = false;
+  let _controlsDragging = false;
+  let _suppressClickUntil = 0;
+  let _pointerDownHandler = null;
+  let _pointerMoveHandler = null;
+  let _pointerUpHandler = null;
+  let _pointerCancelHandler = null;
+  let _controlsStartHandler = null;
+  let _controlsEndHandler = null;
 
   // Source colors
   const SOURCE_COLORS = {
@@ -108,9 +145,158 @@
     return style.getPropertyValue("--bg").trim() || "#faf8f5";
   }
 
+  function _armClickSuppression() {
+    _suppressClickUntil = performance.now() + CLICK_SUPPRESS_MS;
+  }
+
+  function _settleTicksForNodeCount(nodeCount) {
+    // Large datasets can spend too long in synchronous settle loops.
+    // Scale ticks down with size to keep mode switches responsive.
+    if (nodeCount >= 5000) return 18;
+    if (nodeCount >= 3000) return 28;
+    if (nodeCount >= 1500) return 50;
+    return SETTLE_TICKS;
+  }
+
+  function _retickTicksForNodeCount(nodeCount) {
+    if (nodeCount >= 5000) return 16;
+    if (nodeCount >= 3000) return 30;
+    if (nodeCount >= 1500) return 55;
+    return RETICK;
+  }
+
+  function _sameIdSet(a, b) {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    if (a.size !== b.size) return false;
+    for (const id of a) {
+      if (!b.has(id)) return false;
+    }
+    return true;
+  }
+
+  function _sourceColorValue(source) {
+    return SOURCE_COLORS[source] || 0x999999;
+  }
+
+  function _nodeOpacity(node) {
+    let opacity = 1.0;
+    if (_filterIds && !_filterIds.has(node.id)) opacity = 0.05;
+    if (_highlightedIds && !_highlightedIds.has(node.id)) opacity = 0.06;
+    if (_searchTerm && !node.title.toLowerCase().includes(_searchTerm)) opacity = 0.08;
+    return opacity;
+  }
+
+  function _markSceneDirty() {
+    _needsInstanceUpdate = true;
+    _needsOverlaySync = true;
+  }
+
+  function _markVisualsDirty() {
+    _needsVisualUpdate = true;
+  }
+
+  function _fmtNum(value, digits) {
+    return Number(value).toFixed(digits);
+  }
+
+  function _defaultNodeSizeForCount(nodeCount) {
+    if (nodeCount >= 4500) return 4.0;
+    if (nodeCount >= 3000) return 4.8;
+    if (nodeCount >= 1800) return 5.8;
+    if (nodeCount >= 900) return 7.0;
+    return 9.0;
+  }
+
+  function _loadSettingsOnce() {
+    if (_settingsLoaded) return;
+    _settingsLoaded = true;
+    try {
+      const raw = window.localStorage.getItem(SETTINGS_KEY);
+      if (!raw) return;
+      const s = JSON.parse(raw);
+      if (Number.isFinite(s.strength)) _attractStrength = Math.max(0.05, Math.min(0.8, s.strength));
+      if (Number.isFinite(s.spread)) _repulsion = Math.max(1, Math.min(20, s.spread));
+      if (Number.isFinite(s.size)) {
+        _nodeSize = Math.max(0.05, Math.min(30, s.size));
+        _hasSavedNodeSize = true;
+      }
+      if (typeof s.focusedMode === "boolean") _focusedMode = s.focusedMode;
+      if (typeof s.showThumbs === "boolean") _showThumbs = s.showThumbs;
+      if (typeof s.liveMode === "boolean") _liveMode = s.liveMode;
+    } catch (_) {
+      // Ignore malformed local settings
+    }
+  }
+
+  function _saveSettings() {
+    try {
+      window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+        strength: _attractStrength,
+        spread: _repulsion,
+        size: _nodeSize,
+        focusedMode: _focusedMode,
+        showThumbs: _showThumbs,
+        liveMode: _liveMode,
+      }));
+    } catch (_) {
+      // Ignore localStorage failures
+    }
+  }
+
+  function _resetNodesToRest() {
+    for (const node of _nodes) {
+      node.vx = 0;
+      node.vy = 0;
+      node.vz = 0;
+      node.x = node._restX;
+      node.y = node._restY;
+      node.z = node._restZ;
+    }
+    _markSceneDirty();
+  }
+
+  function _normalizeRestLayoutToScene() {
+    if (_nodes.length === 0) return;
+
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (const node of _nodes) {
+      if (node._restX < minX) minX = node._restX;
+      if (node._restY < minY) minY = node._restY;
+      if (node._restZ < minZ) minZ = node._restZ;
+      if (node._restX > maxX) maxX = node._restX;
+      if (node._restY > maxY) maxY = node._restY;
+      if (node._restZ > maxZ) maxZ = node._restZ;
+    }
+
+    const spanX = maxX - minX;
+    const spanY = maxY - minY;
+    const spanZ = maxZ - minZ;
+    const maxSpan = Math.max(spanX, spanY, spanZ);
+    if (!Number.isFinite(maxSpan) || maxSpan <= 1e-6) return;
+
+    const centerX = (minX + maxX) * 0.5;
+    const centerY = (minY + maxY) * 0.5;
+    const centerZ = (minZ + maxZ) * 0.5;
+    const targetSpan = 320;
+    const scale = Math.min(120, Math.max(0.5, targetSpan / maxSpan));
+
+    for (const node of _nodes) {
+      node._restX = (node._restX - centerX) * scale;
+      node._restY = (node._restY - centerY) * scale;
+      node._restZ = (node._restZ - centerZ) * scale;
+      node.x = (node.x - centerX) * scale;
+      node.y = (node.y - centerY) * scale;
+      node.z = (node.z - centerZ) * scale;
+    }
+  }
+
   // ─── Init ─────────────────────────────────────────────────────────────────
 
   function init(containerId) {
+    _loadSettingsOnce();
+
     _container = document.getElementById(containerId);
     if (!_container) return;
     _container.style.position = "relative";
@@ -133,6 +319,14 @@
     _controls.enableDamping = true;
     _controls.dampingFactor = 0.08;
     _controls.screenSpacePanning = true;
+    _controlsStartHandler = () => {
+      _controlsDragging = true;
+    };
+    _controlsEndHandler = () => {
+      _controlsDragging = false;
+    };
+    _controls.addEventListener("start", _controlsStartHandler);
+    _controls.addEventListener("end", _controlsEndHandler);
 
     // Lights
     const ambient = new THREE.AmbientLight(0xffffff, 0.85);
@@ -156,14 +350,52 @@
     // Texture loader
     _texLoader = new THREE.TextureLoader();
 
-    // Shared geometry for all node meshes (one instance, ~5k draw calls saved)
+    // Shared geometry for base instances and texture overlays
     _sharedGeo = new THREE.PlaneGeometry(1, 1);
+
+    _tmpMatrix = new THREE.Matrix4();
+    _tmpPosition = new THREE.Vector3();
+    _tmpScale = new THREE.Vector3(1, 1, 1);
+    _tmpColor = new THREE.Color(1, 1, 1);
+    _tmpBgColor = new THREE.Color(_bgColor());
+    _tmpCameraOffset = new THREE.Vector3();
+    _lastCameraPos = _camera.position.clone();
 
     // Sentinel: (0,0,0,0) is not a valid unit quaternion — forces first billboard update
     _lastCameraQuat = new THREE.Quaternion(0, 0, 0, 0);
 
     // Click detection
     _renderer.domElement.addEventListener("click", _onClick);
+    _pointerDownHandler = (e) => {
+      _pointerDown = { x: e.clientX, y: e.clientY };
+      _dragMoved = false;
+    };
+    _pointerMoveHandler = (e) => {
+      if (!_pointerDown) return;
+      const dx = e.clientX - _pointerDown.x;
+      const dy = e.clientY - _pointerDown.y;
+      if ((dx * dx + dy * dy) > (CLICK_DRAG_PX * CLICK_DRAG_PX)) {
+        _dragMoved = true;
+      }
+    };
+    _pointerUpHandler = () => {
+      if (_dragMoved) _armClickSuppression();
+      _pointerDown = null;
+      _dragMoved = false;
+      _controlsDragging = false; // failsafe if OrbitControls end event is missed
+    };
+    _pointerCancelHandler = () => {
+      _armClickSuppression();
+      _pointerDown = null;
+      _dragMoved = false;
+      _controlsDragging = false;
+    };
+    _renderer.domElement.addEventListener("pointerdown", _pointerDownHandler);
+    _renderer.domElement.addEventListener("pointermove", _pointerMoveHandler);
+    _renderer.domElement.addEventListener("pointerup", _pointerUpHandler);
+    _renderer.domElement.addEventListener("pointercancel", _pointerCancelHandler);
+    window.addEventListener("pointerup", _pointerUpHandler);
+    window.addEventListener("pointercancel", _pointerCancelHandler);
 
     // Resize
     _resizeObserver = new ResizeObserver(() => {
@@ -193,7 +425,31 @@
 
   // ─── Data loading ─────────────────────────────────────────────────────────
 
-  function loadData(data) {
+  function _normalizeDataPayload(rawData) {
+    if (rawData && Array.isArray(rawData.assets)) return rawData;
+    if (!rawData || !Array.isArray(rawData.nodes)) {
+      return { dimensions: [], categories: {}, attractors: {}, assets: [] };
+    }
+    // Accept /api/explorer/layout shape for backward compatibility.
+    return {
+      dimensions: rawData.dimensions || [],
+      categories: rawData.categories || {},
+      attractors: rawData.attractors || {},
+      assets: rawData.nodes.map((node) => ({
+        id: node.id,
+        x: node.x,
+        y: node.y,
+        z: node.z,
+        t: node.thumb_url || "",
+        title: node.title || "",
+        src: node.src || "",
+        v: node.v || {},
+      })),
+    };
+  }
+
+  function loadData(rawData) {
+    const data = _normalizeDataPayload(rawData);
     _clearScene();
 
     _dimensions = data.dimensions || [];
@@ -213,81 +469,136 @@
       // Add small random jitter to prevent exact coincidence (fallback PCA
       // may produce very few unique positions — collision needs seed offsets)
       const jit = () => (Math.random() - 0.5) * 2;  // ±1 world unit jitter
-      const x = (a.x || 0) + jit();
-      const y = (a.y || 0) + jit();
-      const z = (a.z || 0) + jit();
+      const jx = jit();
+      const jy = jit();
+      const jz = jit();
+      const x = (a.x || 0) + jx;
+      const y = (a.y || 0) + jy;
+      const z = (a.z || 0) + jz;
       return {
         id: a.id,
         vector: vec,
         x, y, z,
-        _restX: a.x || 0,
-        _restY: a.y || 0,
-        _restZ: a.z || 0,
+        _restX: (a.x || 0) + jx,
+        _restY: (a.y || 0) + jy,
+        _restZ: (a.z || 0) + jz,
         vx: 0, vy: 0, vz: 0,
         thumb_url: a.t,
         title: a.title || "",
         source: a.src || "",
         _tex: null,
         _texQueued: false,
+        _texFailed: false,
+        _visAlpha: 1,
+        _visible: true,
+        _instanceIndex: -1,
       };
     });
 
+    _normalizeRestLayoutToScene();
     _allNodes = _nodes.slice();
+    _liveCalm = 0;
 
-    // Create meshes
-    _nodes.forEach((node) => {
-      const mesh = _createNodeMesh(node);
-      const entry = { id: node.id, mesh, node };
-      _meshes.push(entry);
-      _meshMap.set(node.id, entry);
-    });
+    if (!_hasSavedNodeSize && !_sizeManuallySet) {
+      _nodeSize = _defaultNodeSizeForCount(_nodes.length);
+    }
 
     // Build controls
     _buildControls();
 
-    // Collision resolve to separate coincident/overlapping nodes
-    _settleSimulation(SETTLE_TICKS);
-    _syncMeshPositions();
+    // Start from precomputed layout coordinates (avoids "everything is a sphere")
+    _resetNodesToRest();
+    _buildInstanceMesh();
+    _markVisualsDirty();
+    _updateNodeVisuals(true);
+    _syncInstanceMesh();
+    _lastCameraQuat.set(0, 0, 0, 0);
+    if (_lastCameraPos) _lastCameraPos.copy(_camera.position);
 
     console.log(`[3D] Loaded ${_nodes.length} nodes, camera Z=${_camera.position.z.toFixed(0)}, nodeSize=${_nodeSize}`);
 
     // Start render loop (Three.js always needs one for OrbitControls)
-    _startRenderLoop();
+    if (!_animFrameId) _startRenderLoop();
 
-    // Queue textures for visible nodes
-    _queueVisibleTextures();
+    // Queue nearby textures and build initial overlay set
+    _queueNearTextures();
+    _syncTextureOverlays(true);
   }
 
-  function _createNodeMesh(node) {
-    const geo = _sharedGeo;
-    const color = SOURCE_COLORS[node.source] || 0x999999;
+  function _disposeInstanceMesh() {
+    if (!_instanceMesh) return;
+    _scene.remove(_instanceMesh);
+    _instanceMesh.material.dispose();
+    _instanceMesh = null;
+    _instanceNodes = [];
+  }
+
+  function _clearOverlayMeshes() {
+    for (const { mesh } of _overlayMeshes.values()) {
+      mesh.material.map = null;
+      mesh.material.dispose();
+      _scene && _scene.remove(mesh);
+    }
+    _overlayMeshes.clear();
+  }
+
+  function _buildInstanceMesh() {
+    _disposeInstanceMesh();
+    _instanceNodes = _nodes.slice();
+    if (_instanceNodes.length === 0) return;
+
     const mat = new THREE.MeshBasicMaterial({
-      color: color,             // always source color as placeholder (visible on light bg)
+      color: 0xffffff,
       side: THREE.DoubleSide,
       transparent: true,
     });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.set(node.x, node.y, node.z);
-    mesh.scale.setScalar(_nodeSize);
-    mesh.userData = { nodeId: node.id, node };
-    _scene.add(mesh);
-    return mesh;
+    _instanceMesh = new THREE.InstancedMesh(_sharedGeo, mat, _instanceNodes.length);
+    _instanceMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    _instanceMesh.frustumCulled = false;
+
+    for (let i = 0; i < _instanceNodes.length; i++) {
+      _instanceNodes[i]._instanceIndex = i;
+    }
+    _scene.add(_instanceMesh);
+    _markSceneDirty();
   }
 
-  function _syncMeshPositions() {
-    for (const { mesh, node } of _meshes) {
-      mesh.position.set(node.x, node.y, node.z);
+  function _syncInstanceMesh() {
+    if (!_instanceMesh || !_camera) return;
+
+    const q = _camera.quaternion;
+    for (const node of _instanceNodes) {
+      const idx = node._instanceIndex;
+      const alpha = node._visAlpha ?? 1;
+      const visible = alpha > 0.02;
+      const scaleMul = visible ? (0.3 + alpha * 0.7) : 0.001;
+      const hasTextureOverlay = _showThumbs && !!node._tex && node._visible;
+      const baseScaleAdjust = hasTextureOverlay ? 0.02 : 1.0;
+      const scale = _nodeSize * scaleMul * baseScaleAdjust;
+
+      _tmpPosition.set(node.x, node.y, node.z);
+      _tmpScale.setScalar(scale);
+      _tmpMatrix.compose(_tmpPosition, q, _tmpScale);
+      _instanceMesh.setMatrixAt(idx, _tmpMatrix);
+
+      _tmpColor.setHex(_sourceColorValue(node.source));
+      if (alpha < 1) {
+        _tmpColor.lerp(_tmpBgColor, Math.min(0.95, 1 - alpha));
+      }
+      _instanceMesh.setColorAt(idx, _tmpColor);
     }
+
+    _instanceMesh.instanceMatrix.needsUpdate = true;
+    if (_instanceMesh.instanceColor) {
+      _instanceMesh.instanceColor.needsUpdate = true;
+    }
+    _instanceMesh.computeBoundingSphere();
+    _needsInstanceUpdate = false;
   }
 
   function _clearScene() {
-    for (const { mesh } of _meshes) {
-      mesh.material.dispose();
-      if (mesh.material.map) mesh.material.map.dispose();
-      _scene && _scene.remove(mesh);
-    }
-    _meshes = [];
-    _meshMap.clear();
+    _clearOverlayMeshes();
+    _disposeInstanceMesh();
 
     for (const { mesh, labelEl } of _poleMarkers) {
       mesh.geometry.dispose();
@@ -300,6 +611,10 @@
     _nodes = [];
     _allNodes = [];
     _activeAttractors = [];
+    _needsVisualUpdate = false;
+    _needsInstanceUpdate = false;
+    _needsOverlaySync = false;
+    _lastOverlaySyncAt = 0;
     Object.values(_texCache).forEach((t) => t.dispose());
     for (const key in _texCache) delete _texCache[key];
     _texQueue.length = 0;
@@ -311,6 +626,11 @@
   function _forceTick() {
     const n = _nodes.length;
     if (n === 0) return;
+    let totalSpeed2 = 0;
+    let totalForceAbs = 0;
+    const damping = 0.65 - (_liveCalm * 0.22); // stronger damping as system settles
+    const velEps = 0.006 + (_liveCalm * 0.01);
+    const forceEps = 0.004 + (_liveCalm * 0.008);
 
     for (const node of _nodes) {
       let fx = 0, fy = 0, fz = 0;
@@ -334,14 +654,32 @@
       fz += (node._restZ - node.z) * restStr;
 
       // Apply velocity with damping
-      node.vx = node.vx * 0.65 + fx;
-      node.vy = node.vy * 0.65 + fy;
-      node.vz = node.vz * 0.65 + fz;
+      node.vx = node.vx * damping + fx;
+      node.vy = node.vy * damping + fy;
+      node.vz = node.vz * damping + fz;
+
+      // Deadzone: remove tiny residual vibration once the system is near equilibrium
+      if (Math.abs(node.vx) < velEps && Math.abs(fx) < forceEps) node.vx = 0;
+      if (Math.abs(node.vy) < velEps && Math.abs(fy) < forceEps) node.vy = 0;
+      if (Math.abs(node.vz) < velEps && Math.abs(fz) < forceEps) node.vz = 0;
 
       node.x += node.vx;
       node.y += node.vy;
       node.z += node.vz;
+
+      totalSpeed2 += (node.vx * node.vx) + (node.vy * node.vy) + (node.vz * node.vz);
+      totalForceAbs += Math.abs(fx) + Math.abs(fy) + Math.abs(fz);
     }
+
+    // Track whether simulation is "hot" or "calm" to adapt damping each frame.
+    const avgSpeed2 = totalSpeed2 / n;
+    const avgForceAbs = totalForceAbs / n;
+    const speedHot = Math.min(1, avgSpeed2 / 0.012);
+    const forceHot = Math.min(1, avgForceAbs / 0.09);
+    const targetCalm = 1 - Math.max(speedHot, forceHot);
+    _liveCalm += (targetCalm - _liveCalm) * 0.12;
+    if (_liveCalm < 0) _liveCalm = 0;
+    if (_liveCalm > 1) _liveCalm = 1;
 
     // Simple collision avoidance via grid hash
     _collisionPass();
@@ -369,6 +707,8 @@
 
     const minDist = _nodeSize * 1.1 * scale;
     const minDist2 = minDist * minDist;
+    const slop = minDist * (0.01 + 0.02 * _liveCalm); // ignore tiny overlap when calm
+    const pushK = 0.25 - (0.10 * _liveCalm);          // soften collision impulses when calm
 
     for (const [key, cell] of grid) {
       const cx = Math.floor(key / _CELL_S2) - _CELL_OFF;
@@ -404,7 +744,9 @@
                     ny = ddy / d;
                     nz = ddz / d;
                   }
-                  const overlap = (minDist - d) * 0.25;
+                  const rawOverlap = minDist - d;
+                  if (rawOverlap <= slop) continue;
+                  const overlap = rawOverlap * pushK;
                   a.x += nx * overlap;
                   a.y += ny * overlap;
                   a.z += nz * overlap;
@@ -424,6 +766,7 @@
     for (let i = 0; i < ticks; i++) {
       _forceTick();
     }
+    _markSceneDirty();
   }
 
   function _settleAndTween(ticks) {
@@ -473,11 +816,12 @@
     for (const node of _nodes) {
       node.vx = 0; node.vy = 0; node.vz = 0;
     }
+    _liveCalm = 0;
 
     if (_liveMode) {
       // Live mode: render loop handles ticking
     } else {
-      _settleAndTween(RETICK);
+      _settleAndTween(_retickTicksForNodeCount(_nodes.length));
     }
 
     _updatePoleMarkers();
@@ -553,10 +897,29 @@
       _animFrameId = requestAnimationFrame(loop);
       if (_paused) return;
 
+      if (_controls) _controls.update();
+
+      // Billboard orientation changes
+      if (!_camera.quaternion.equals(_lastCameraQuat)) {
+        _lastCameraQuat.copy(_camera.quaternion);
+        _needsInstanceUpdate = true;
+        _needsOverlaySync = true;
+      }
+
+      // Track camera movement for overlay selection/placement
+      const camDx = _camera.position.x - _lastCameraPos.x;
+      const camDy = _camera.position.y - _lastCameraPos.y;
+      const camDz = _camera.position.z - _lastCameraPos.z;
+      const cameraMoved = (camDx * camDx + camDy * camDy + camDz * camDz) > 0.01;
+      if (cameraMoved) {
+        _lastCameraPos.copy(_camera.position);
+        _needsOverlaySync = true;
+      }
+
       // Live mode: tick forces each frame
       if (_liveMode) {
         _forceTick();
-        _syncMeshPositions();
+        _markSceneDirty();
       }
 
       // Tween interpolation
@@ -570,31 +933,28 @@
           node.y = node._tweenFromY + (node._targetY - node._tweenFromY) * ease;
           node.z = node._tweenFromZ + (node._targetZ - node._tweenFromZ) * ease;
         }
-        _syncMeshPositions();
+        _markSceneDirty();
 
         if (t >= 1) {
           _tweening = false;
-          _queueVisibleTextures();
+          _queueNearTextures();
         }
       }
 
-      // Billboard: face camera (skip when quaternion unchanged)
-      if (!_camera.quaternion.equals(_lastCameraQuat)) {
-        _lastCameraQuat.copy(_camera.quaternion);
-        for (const { mesh } of _meshes) {
-          if (mesh.visible) {
-            mesh.quaternion.copy(_camera.quaternion);
-          }
-        }
+      // Update node visibility and instance color/scale dimming only when needed
+      if (_needsVisualUpdate) _updateNodeVisuals(false);
+      if (_needsInstanceUpdate) {
+        _syncInstanceMesh();
       }
 
-      // Update node visibility / opacity
-      _updateNodeVisuals();
+      const now = performance.now();
+      if (_needsOverlaySync && (now - _lastOverlaySyncAt) >= OVERLAY_SYNC_MIN_MS) {
+        _syncTextureOverlays();
+      }
 
       // Update pole label positions
       _updatePoleLabelsScreen();
 
-      _controls.update();
       _renderer.render(_scene, _camera);
     }
     _animFrameId = requestAnimationFrame(loop);
@@ -607,28 +967,63 @@
     }
   }
 
-  function _updateNodeVisuals() {
-    for (const { id, mesh, node } of _meshes) {
-      let opacity = 1.0;
-      if (_filterIds && !_filterIds.has(id)) opacity = 0.05;
-      if (_highlightedIds && !_highlightedIds.has(id)) opacity = 0.06;
-      if (_searchTerm && !node.title.toLowerCase().includes(_searchTerm))
-        opacity = 0.08;
+  function _updateNodeVisuals(force) {
+    if (!force && !_needsVisualUpdate) return;
+    _needsVisualUpdate = false;
 
-      mesh.material.opacity = opacity;
-      mesh.visible = opacity > 0.02;
+    let changed = false;
+    for (const node of _nodes) {
+      const opacity = _nodeOpacity(node);
+      const visible = opacity > 0.02;
+      if (Math.abs((node._visAlpha ?? 1) - opacity) > 0.001 || node._visible !== visible) {
+        node._visAlpha = opacity;
+        node._visible = visible;
+        changed = true;
+      }
+    }
+    if (changed) {
+      _needsInstanceUpdate = true;
+      _needsOverlaySync = true;
     }
   }
 
   // ─── Texture loading ──────────────────────────────────────────────────────
 
-  function _queueVisibleTextures() {
-    // Queue all nodes that have thumb_url and no texture yet
+  function _rankNearestNodes(maxCount, requireUnloaded) {
+    if (!_camera) return [];
+    const cam = _camera.position;
+    const camDir = _tmpCameraOffset.copy(_camera.getWorldDirection(new THREE.Vector3())).normalize();
+    const ranked = [];
+
     for (const node of _nodes) {
-      if (node.thumb_url && !node._tex && !node._texQueued) {
-        node._texQueued = true;
-        _texQueue.push(node);
-      }
+      if (!node._visible || !node.thumb_url) continue;
+      if (requireUnloaded && (node._tex || node._texQueued || node._texFailed)) continue;
+      const dx = node.x - cam.x;
+      const dy = node.y - cam.y;
+      const dz = node.z - cam.z;
+      // Prefer nodes near the camera plane depth so thumbs cover the silhouette
+      // instead of only the visual center.
+      const depth = dx * camDir.x + dy * camDir.y + dz * camDir.z;
+      const lateral2 = dx * dx + dy * dy + dz * dz - depth * depth;
+      const score = depth * depth + Math.max(0, lateral2) * 0.06;
+      ranked.push({ node, d2: score });
+    }
+
+    // For prefetch queues we want nearest-first ordering.
+    // For uncapped overlay sync (maxCount=0), sorting is unnecessary work.
+    if (requireUnloaded || maxCount > 0) {
+      ranked.sort((a, b) => a.d2 - b.d2);
+    }
+    if (maxCount > 0 && ranked.length > maxCount) ranked.length = maxCount;
+    return ranked;
+  }
+
+  function _queueNearTextures() {
+    if (!_showThumbs) return;
+    const toLoad = _rankNearestNodes(TEX_PREFETCH_COUNT, true);
+    for (const { node } of toLoad) {
+      node._texQueued = true;
+      _texQueue.push(node);
     }
     _processTexQueue();
   }
@@ -636,11 +1031,17 @@
   function _processTexQueue() {
     while (_texLoading < MAX_CONCURRENT_TEX && _texQueue.length > 0) {
       const node = _texQueue.shift();
+      if (!node || node._tex || node._texFailed || !node.thumb_url) {
+        if (node) node._texQueued = false;
+        continue;
+      }
       _texLoading++;
 
       if (_texCache[node.thumb_url]) {
         node._tex = _texCache[node.thumb_url];
-        _applyTexToMesh(node);
+        node._texQueued = false;
+        _needsInstanceUpdate = true;
+        _needsOverlaySync = true;
         _texLoading--;
         _processTexQueue();
         continue;
@@ -652,12 +1053,17 @@
           tex.colorSpace = THREE.SRGBColorSpace;
           _texCache[node.thumb_url] = tex;
           node._tex = tex;
-          _applyTexToMesh(node);
+          node._texQueued = false;
+          _needsInstanceUpdate = true;
+          _needsOverlaySync = true;
           _texLoading--;
           _processTexQueue();
         },
         undefined,
-        () => {
+        (err) => {
+          console.warn('[3D] tex error', node.thumb_url.slice(0, 40), err);
+          node._texQueued = false;
+          node._texFailed = true;
           _texLoading--;
           _processTexQueue();
         }
@@ -665,20 +1071,112 @@
     }
   }
 
-  function _applyTexToMesh(node) {
-    if (!_showThumbs) return;
-    const entry = _meshMap.get(node.id);
-    if (entry) {
-      entry.mesh.material.color.set(0xffffff); // reset to white so texture is not tinted
-      entry.mesh.material.map = node._tex;
-      entry.mesh.material.needsUpdate = true;
+  function _removeOverlay(nodeId) {
+    const entry = _overlayMeshes.get(nodeId);
+    if (!entry) return;
+    entry.mesh.material.map = null;
+    entry.mesh.material.dispose();
+    _scene.remove(entry.mesh);
+    _overlayMeshes.delete(nodeId);
+  }
+
+  function _ensureOverlay(node) {
+    let entry = _overlayMeshes.get(node.id);
+    if (entry) return entry;
+    if (!node._tex || !_showThumbs) return null;
+
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      side: THREE.DoubleSide,
+      transparent: true,
+      map: node._tex,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+    });
+    const mesh = new THREE.Mesh(_sharedGeo, mat);
+    mesh.renderOrder = 1;
+    mesh.userData = { nodeId: node.id, node, isOverlay: true };
+    _scene.add(mesh);
+    entry = { mesh, node };
+    _overlayMeshes.set(node.id, entry);
+    return entry;
+  }
+
+  function _syncOverlayTransform(entry) {
+    const { mesh, node } = entry;
+    const alpha = node._visAlpha ?? 1;
+    if (!_showThumbs || !node._visible || alpha <= 0.02) {
+      mesh.visible = false;
+      return;
     }
+
+    mesh.visible = true;
+    mesh.quaternion.copy(_camera.quaternion);
+    _tmpCameraOffset.copy(_camera.position).sub(_tmpPosition.set(node.x, node.y, node.z));
+    const lenSq = _tmpCameraOffset.lengthSq();
+    if (lenSq > 1e-6) {
+      _tmpCameraOffset.multiplyScalar(0.24 / Math.sqrt(lenSq));
+    } else {
+      _tmpCameraOffset.set(0, 0, 0);
+    }
+    mesh.position.set(
+      node.x + _tmpCameraOffset.x,
+      node.y + _tmpCameraOffset.y,
+      node.z + _tmpCameraOffset.z
+    );
+    mesh.scale.setScalar(_nodeSize * (0.3 + alpha * 0.7) * 1.08);
+    mesh.material.opacity = Math.max(0.2, Math.min(1, alpha + 0.1));
+    if (mesh.material.map !== node._tex) {
+      mesh.material.map = node._tex;
+      mesh.material.needsUpdate = true;
+    }
+  }
+
+  function _syncTextureOverlays(force) {
+    if (!_camera) return;
+
+    if (!_showThumbs) {
+      if (_overlayMeshes.size > 0) _clearOverlayMeshes();
+      _needsOverlaySync = false;
+      _lastOverlaySyncAt = performance.now();
+      return;
+    }
+
+    const ranked = _rankNearestNodes(MAX_TEXTURE_OVERLAYS, false);
+    const wantedIds = new Set();
+    for (const { node } of ranked) {
+      wantedIds.add(node.id);
+      if (!node._tex) {
+        if (!node._texQueued && !node._texFailed) {
+          node._texQueued = true;
+          _texQueue.push(node);
+        }
+        continue;
+      }
+      const entry = _ensureOverlay(node);
+      if (entry) _syncOverlayTransform(entry);
+    }
+
+    for (const [nodeId] of _overlayMeshes) {
+      if (!wantedIds.has(nodeId)) _removeOverlay(nodeId);
+    }
+
+    if (force || _texQueue.length > 0) _processTexQueue();
+    _needsOverlaySync = false;
+    _lastOverlaySyncAt = performance.now();
   }
 
   // ─── Click detection ──────────────────────────────────────────────────────
 
   function _onClick(e) {
     if (!_scene || !_camera) return;
+    // OrbitControls can miss end events on some browsers/devices.
+    // If no pointer is currently down, treat a lingering drag flag as stale.
+    if (_controlsDragging && !_pointerDown) _controlsDragging = false;
+    if (_controlsDragging) return;
+    if (performance.now() < _suppressClickUntil) return;
     const rect = _renderer.domElement.getBoundingClientRect();
     const mouse = new THREE.Vector2(
       ((e.clientX - rect.left) / rect.width) * 2 - 1,
@@ -686,11 +1184,24 @@
     );
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(mouse, _camera);
-    const visibleMeshes = _meshes.filter((m) => m.mesh.visible).map((m) => m.mesh);
-    const hits = raycaster.intersectObjects(visibleMeshes);
+    const pickTargets = [];
+    if (_instanceMesh) pickTargets.push(_instanceMesh);
+    for (const { mesh } of _overlayMeshes.values()) {
+      if (mesh.visible) pickTargets.push(mesh);
+    }
+    const hits = raycaster.intersectObjects(pickTargets, false);
     if (hits[0]) {
-      const { nodeId, node } = hits[0].object.userData;
-      if (_clickCallback) _clickCallback(nodeId, node);
+      const hit = hits[0];
+      let node = null;
+      let nodeId = null;
+      if (hit.object === _instanceMesh && hit.instanceId !== undefined) {
+        node = _instanceNodes[hit.instanceId] || null;
+        nodeId = node ? node.id : null;
+      } else {
+        node = hit.object?.userData?.node || null;
+        nodeId = hit.object?.userData?.nodeId || (node ? node.id : null);
+      }
+      if (node && nodeId && _clickCallback) _clickCallback(nodeId, node);
     }
   }
 
@@ -707,9 +1218,18 @@
     slidersRow.className = "attractor-sliders";
 
     slidersRow.innerHTML = `
-      <label>Strength <input type="range" id="_attr3dStr" min="0.05" max="0.8" step="0.05" value="${_attractStrength}"></label>
-      <label>Spread <input type="range" id="_attr3dSpread" min="1" max="20" step="1" value="${_repulsion}"></label>
-      <label>Size <input type="range" id="_attr3dSize" min="2" max="30" step="1" value="${_nodeSize}"></label>
+      <label class="slider-with-value">
+        <span class="slider-head">Strength <input type="range" id="_attr3dStr" min="0.05" max="0.8" step="0.05" value="${_attractStrength}"></span>
+        <span class="slider-value" id="_attr3dStrVal">${_fmtNum(_attractStrength, 2)}</span>
+      </label>
+      <label class="slider-with-value">
+        <span class="slider-head">Spread <input type="range" id="_attr3dSpread" min="1" max="20" step="1" value="${_repulsion}"></span>
+        <span class="slider-value" id="_attr3dSpreadVal">${_fmtNum(_repulsion, 0)}</span>
+      </label>
+      <label class="slider-with-value">
+        <span class="slider-head">Size <input type="range" id="_attr3dSize" min="0.05" max="30" step="0.05" value="${_nodeSize}"></span>
+        <span class="slider-value" id="_attr3dSizeVal">${_fmtNum(_nodeSize, 2)}</span>
+      </label>
       <label class="physics-toggle">3D <input type="checkbox" id="_attr3dToggle" checked></label>
       <label class="physics-toggle">Focus <input type="checkbox" id="_attr3dFocus" ${_focusedMode ? "checked" : ""}></label>
       <label class="physics-toggle">Live <input type="checkbox" id="_attr3dLive" ${_liveMode ? "checked" : ""}></label>
@@ -755,7 +1275,7 @@
       }
     }
 
-    const chipOrder = ["rooms", "styles", "materials", "colors"];
+    const chipOrder = ["rooms", "styles", "materials", "colors", "image_type", "elements"];
     for (const catKey of chipOrder) {
       const options = _attractorOptions[catKey];
       if (!options || options.length === 0) continue;
@@ -790,41 +1310,50 @@
 
     // Wire sliders
     const strSlider = _controlsEl.querySelector("#_attr3dStr");
+    const strVal = _controlsEl.querySelector("#_attr3dStrVal");
     if (strSlider)
       strSlider.addEventListener("input", (e) => {
         _attractStrength = parseFloat(e.target.value);
+        if (strVal) strVal.textContent = _fmtNum(_attractStrength, 2);
+        _saveSettings();
         if (_activeAttractors.length > 0) {
           if (_liveMode) { /* forces update each frame */ }
-          else _settleAndTween(RETICK);
+          else _settleAndTween(_retickTicksForNodeCount(_nodes.length));
         }
       });
 
     const spreadSlider = _controlsEl.querySelector("#_attr3dSpread");
+    const spreadVal = _controlsEl.querySelector("#_attr3dSpreadVal");
     if (spreadSlider)
       spreadSlider.addEventListener("input", (e) => {
         _repulsion = parseFloat(e.target.value);
+        if (spreadVal) spreadVal.textContent = _fmtNum(_repulsion, 0);
+        _saveSettings();
         if (_activeAttractors.length > 0) {
           if (_liveMode) { /* forces update each frame */ }
-          else _settleAndTween(RETICK);
+          else _settleAndTween(_retickTicksForNodeCount(_nodes.length));
         } else {
-          _settleSimulation(RETICK);
-          _syncMeshPositions();
+          _resetNodesToRest();
+          _syncInstanceMesh();
         }
       });
 
     const sizeSlider = _controlsEl.querySelector("#_attr3dSize");
+    const sizeVal = _controlsEl.querySelector("#_attr3dSizeVal");
     if (sizeSlider)
       sizeSlider.addEventListener("input", (e) => {
         _nodeSize = parseFloat(e.target.value);
-        for (const { mesh } of _meshes) {
-          mesh.scale.setScalar(_nodeSize);
-        }
+        _sizeManuallySet = true;
+        if (sizeVal) sizeVal.textContent = _fmtNum(_nodeSize, 2);
+        _saveSettings();
+        _markSceneDirty();
       });
 
     const focusToggle = _controlsEl.querySelector("#_attr3dFocus");
     if (focusToggle)
       focusToggle.addEventListener("change", (e) => {
         _focusedMode = e.target.checked;
+        _saveSettings();
         _rebuildForFocusedMode();
       });
 
@@ -832,10 +1361,17 @@
     if (liveToggle)
       liveToggle.addEventListener("change", (e) => {
         _liveMode = e.target.checked;
+        _liveCalm = 0;
+        _saveSettings();
         if (!_liveMode) {
-          _settleSimulation(RETICK);
-          _syncMeshPositions();
-          _queueVisibleTextures();
+          if (_activeAttractors.length > 0) {
+            _settleSimulation(_retickTicksForNodeCount(_nodes.length));
+          } else {
+            _resetNodesToRest();
+          }
+          _syncInstanceMesh();
+          _queueNearTextures();
+          _syncTextureOverlays(true);
         }
       });
 
@@ -843,23 +1379,13 @@
     if (thumbsToggle)
       thumbsToggle.addEventListener("change", (e) => {
         _showThumbs = e.target.checked;
+        _saveSettings();
+        _needsInstanceUpdate = true;
         if (!_showThumbs) {
-          for (const { mesh, node } of _meshes) {
-            if (mesh.material.map) {
-              mesh.material.map = null;
-              mesh.material.color.set(SOURCE_COLORS[node.source] || 0x999999);
-              mesh.material.needsUpdate = true;
-            }
-          }
+          _clearOverlayMeshes();
         } else {
-          for (const { mesh, node } of _meshes) {
-            if (node._tex) {
-              mesh.material.color.set(0xffffff);
-              mesh.material.map = node._tex;
-              mesh.material.needsUpdate = true;
-            }
-          }
-          _queueVisibleTextures();
+          _queueNearTextures();
+          _syncTextureOverlays(true);
         }
       });
 
@@ -974,18 +1500,13 @@
   // ─── Focused mode ─────────────────────────────────────────────────────────
 
   function _rebuildForFocusedMode() {
-    // Remove old meshes from scene.
-    // Do NOT dispose texture maps — they are shared via _texCache and
-    // referenced by node._tex for instant re-application.
-    for (const { mesh } of _meshes) {
-      mesh.material.map = null;          // detach without disposing
-      mesh.material.dispose();
-      _scene.remove(mesh);
-    }
-    _meshes = [];
-    _meshMap.clear();
+    _clearOverlayMeshes();
+    _disposeInstanceMesh();
     _texQueue.length = 0;               // clear pending queue
     _texLoading = 0;
+    for (const node of _allNodes) {    // reset so nodes can be re-queued after rebuild
+      if (!node._tex && !node._texFailed) node._texQueued = false;
+    }
 
     // Determine visible node set
     if (_focusedMode) {
@@ -1004,18 +1525,7 @@
       _nodes = _allNodes.slice();
     }
 
-    // Recreate meshes — re-apply cached textures immediately
-    _nodes.forEach((node) => {
-      const mesh = _createNodeMesh(node);
-      const entry = { id: node.id, mesh, node };
-      _meshes.push(entry);
-      _meshMap.set(node.id, entry);
-      if (node._tex) {
-        mesh.material.color.set(0xffffff);
-        mesh.material.map = node._tex;
-        mesh.material.needsUpdate = true;
-      }
-    });
+    _buildInstanceMesh();
 
     // Reset velocities
     for (const node of _nodes) {
@@ -1025,24 +1535,34 @@
     if (_activeAttractors.length > 0) {
       _updateAttractorForces();
     } else {
-      _settleSimulation(SETTLE_TICKS);
-      _syncMeshPositions();
+      _resetNodesToRest();
+      _syncInstanceMesh();
     }
+
+    _markVisualsDirty();
+    _updateNodeVisuals(true);
+    _syncInstanceMesh();
     // Queue texture loads for any nodes that still need them
-    _queueVisibleTextures();
+    _queueNearTextures();
+    _syncTextureOverlays(true);
   }
 
   // ─── Public API ───────────────────────────────────────────────────────────
 
   function setFilter(nodeIds) {
-    _filterIds = nodeIds ? new Set(nodeIds) : null;
+    const nextFilter = nodeIds ? new Set(nodeIds) : null;
+    if (_sameIdSet(_filterIds, nextFilter)) return;
+    _filterIds = nextFilter;
     if (_focusedMode) {
       _rebuildForFocusedMode();
+    } else {
+      _markVisualsDirty();
     }
   }
 
   function setSearch(term) {
     _searchTerm = (term || "").toLowerCase().trim();
+    _markVisualsDirty();
   }
 
   function setFocusedMode(on) {
@@ -1054,6 +1574,7 @@
 
   function highlight(nodeIds) {
     _highlightedIds = nodeIds ? new Set(nodeIds) : null;
+    _markVisualsDirty();
   }
 
   function onSelect(callback) {
@@ -1076,6 +1597,42 @@
   function destroy() {
     _stopRenderLoop();
     _clearScene();
+    if (_controls) {
+      if (_controlsStartHandler) _controls.removeEventListener("start", _controlsStartHandler);
+      if (_controlsEndHandler) _controls.removeEventListener("end", _controlsEndHandler);
+      _controlsStartHandler = null;
+      _controlsEndHandler = null;
+      _controls.dispose();
+      _controls = null;
+    }
+    if (_renderer?.domElement) {
+      _renderer.domElement.removeEventListener("click", _onClick);
+      if (_pointerDownHandler) _renderer.domElement.removeEventListener("pointerdown", _pointerDownHandler);
+      if (_pointerMoveHandler) _renderer.domElement.removeEventListener("pointermove", _pointerMoveHandler);
+      if (_pointerUpHandler) _renderer.domElement.removeEventListener("pointerup", _pointerUpHandler);
+      if (_pointerCancelHandler) _renderer.domElement.removeEventListener("pointercancel", _pointerCancelHandler);
+    }
+    if (_pointerUpHandler) window.removeEventListener("pointerup", _pointerUpHandler);
+    if (_pointerCancelHandler) window.removeEventListener("pointercancel", _pointerCancelHandler);
+    _pointerDownHandler = null;
+    _pointerMoveHandler = null;
+    _pointerUpHandler = null;
+    _pointerCancelHandler = null;
+    _pointerDown = null;
+    _dragMoved = false;
+    _controlsDragging = false;
+    _suppressClickUntil = 0;
+    _lastCameraPos = null;
+    _needsVisualUpdate = false;
+    _needsInstanceUpdate = false;
+    _needsOverlaySync = false;
+    _lastOverlaySyncAt = 0;
+    _tmpMatrix = null;
+    _tmpPosition = null;
+    _tmpScale = null;
+    _tmpColor = null;
+    _tmpBgColor = null;
+    _tmpCameraOffset = null;
     if (_sharedGeo) {
       _sharedGeo.dispose();
       _sharedGeo = null;
