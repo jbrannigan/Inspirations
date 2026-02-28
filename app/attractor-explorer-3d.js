@@ -90,6 +90,74 @@
   const TEX_PREFETCH_COUNT = 0;
   const OVERLAY_SYNC_MIN_MS = 90;
   const SETTINGS_KEY = "inspirations.attractor3d.settings.v2";
+  const MAX_PRESET_NAME_LEN = 32;
+  const MAX_PRESET_COUNT = 12;
+  const SIZE_BUCKET = Object.freeze({
+    SMALL: "small",
+    MEDIUM: "medium",
+    LARGE: "large",
+  });
+  // Tuned per dataset size bucket:
+  // small <= 300, medium 301-1500, large > 1500 visible nodes.
+  const PHYSICS_PROFILE = Object.freeze({
+    small: Object.freeze({
+      dampingHot: 0.69,
+      dampingCalm: 0.47,
+      velEpsBase: 0.0055,
+      velEpsCalmAdd: 0.007,
+      forceEpsBase: 0.0038,
+      forceEpsCalmAdd: 0.0062,
+      speedHotNorm: 0.013,
+      forceHotNorm: 0.1,
+      calmLerp: 0.14,
+      collisionMinDistMul: 0.98,
+      collisionSlopBase: 0.008,
+      collisionSlopCalmAdd: 0.014,
+      collisionPushHot: 0.22,
+      collisionPushCalmDrop: 0.06,
+      overlayScale: 1.14,
+      overlayOffset: 0.18,
+      baseTileWhenOverlay: 0.025,
+    }),
+    medium: Object.freeze({
+      dampingHot: 0.66,
+      dampingCalm: 0.44,
+      velEpsBase: 0.006,
+      velEpsCalmAdd: 0.009,
+      forceEpsBase: 0.004,
+      forceEpsCalmAdd: 0.0075,
+      speedHotNorm: 0.012,
+      forceHotNorm: 0.09,
+      calmLerp: 0.12,
+      collisionMinDistMul: 1.06,
+      collisionSlopBase: 0.01,
+      collisionSlopCalmAdd: 0.02,
+      collisionPushHot: 0.24,
+      collisionPushCalmDrop: 0.09,
+      overlayScale: 1.09,
+      overlayOffset: 0.22,
+      baseTileWhenOverlay: 0.02,
+    }),
+    large: Object.freeze({
+      dampingHot: 0.68,
+      dampingCalm: 0.5,
+      velEpsBase: 0.005,
+      velEpsCalmAdd: 0.0075,
+      forceEpsBase: 0.0035,
+      forceEpsCalmAdd: 0.0065,
+      speedHotNorm: 0.0085,
+      forceHotNorm: 0.065,
+      calmLerp: 0.09,
+      collisionMinDistMul: 1.12,
+      collisionSlopBase: 0.008,
+      collisionSlopCalmAdd: 0.015,
+      collisionPushHot: 0.26,
+      collisionPushCalmDrop: 0.08,
+      overlayScale: 1.04,
+      overlayOffset: 0.26,
+      baseTileWhenOverlay: 0.016,
+    }),
+  });
 
   // Shared geometry + billboard tracking
   let _sharedGeo = null;
@@ -114,6 +182,8 @@
   let _sizeManuallySet = false;
   let _settingsLoaded = false;
   let _hasSavedNodeSize = false;
+  let _presets = [];
+  let _startupPresetName = "";
   let _liveCalm = 0;            // 0 = active movement, 1 = settled/calmed
 
   // Click suppression to prevent drag-release opening detail modal
@@ -200,12 +270,65 @@
     return Number(value).toFixed(digits);
   }
 
+  function _clamp(value, min, max, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(min, Math.min(max, n));
+  }
+
+  function _sizeBucketForCount(nodeCount) {
+    if (nodeCount <= 300) return SIZE_BUCKET.SMALL;
+    if (nodeCount <= 1500) return SIZE_BUCKET.MEDIUM;
+    return SIZE_BUCKET.LARGE;
+  }
+
+  function _physicsProfileForCount(nodeCount) {
+    return PHYSICS_PROFILE[_sizeBucketForCount(nodeCount)] || PHYSICS_PROFILE.medium;
+  }
+
+  function _activePhysicsProfile() {
+    const n = _nodes.length || _allNodes.length || 0;
+    return _physicsProfileForCount(n);
+  }
+
+  function _normalizePreset(rawPreset) {
+    if (!rawPreset || typeof rawPreset !== "object") return null;
+    const name = String(rawPreset.name || "").trim().slice(0, MAX_PRESET_NAME_LEN);
+    if (!name) return null;
+    return {
+      name,
+      strength: _clamp(rawPreset.strength, 0.05, 0.8, 0.35),
+      spread: _clamp(rawPreset.spread, 1, 20, 6),
+      size: _clamp(rawPreset.size, 0.05, 30, 8),
+      focusedMode: !!rawPreset.focusedMode,
+      liveMode: !!rawPreset.liveMode,
+      showThumbs: typeof rawPreset.showThumbs === "boolean" ? rawPreset.showThumbs : true,
+    };
+  }
+
+  function _applyLookToState(look, opts = {}) {
+    const markManualSize = opts.markManualSize !== false;
+    _attractStrength = _clamp(look?.strength, 0.05, 0.8, _attractStrength);
+    _repulsion = _clamp(look?.spread, 1, 20, _repulsion);
+    const nextSize = _clamp(look?.size, 0.05, 30, _nodeSize);
+    if (Number.isFinite(nextSize)) {
+      _nodeSize = nextSize;
+      _hasSavedNodeSize = true;
+      if (markManualSize) _sizeManuallySet = true;
+    }
+    if (typeof look?.focusedMode === "boolean") _focusedMode = look.focusedMode;
+    if (typeof look?.liveMode === "boolean") _liveMode = look.liveMode;
+    if (typeof look?.showThumbs === "boolean") _showThumbs = look.showThumbs;
+  }
+
   function _defaultNodeSizeForCount(nodeCount) {
-    if (nodeCount >= 4500) return 4.0;
-    if (nodeCount >= 3000) return 4.8;
-    if (nodeCount >= 1800) return 5.8;
-    if (nodeCount >= 900) return 7.0;
-    return 9.0;
+    if (nodeCount > 5500) return 3.6;
+    if (nodeCount > 4000) return 4.2;
+    if (nodeCount > 2500) return 5.1;
+    if (nodeCount > 1500) return 6.0;
+    if (nodeCount > 900) return 6.9;
+    if (nodeCount > 300) return 8.0;
+    return 9.2;
   }
 
   function _loadSettingsOnce() {
@@ -215,15 +338,28 @@
       const raw = window.localStorage.getItem(SETTINGS_KEY);
       if (!raw) return;
       const s = JSON.parse(raw);
-      if (Number.isFinite(s.strength)) _attractStrength = Math.max(0.05, Math.min(0.8, s.strength));
-      if (Number.isFinite(s.spread)) _repulsion = Math.max(1, Math.min(20, s.spread));
+      if (Number.isFinite(s.strength)) _attractStrength = _clamp(s.strength, 0.05, 0.8, _attractStrength);
+      if (Number.isFinite(s.spread)) _repulsion = _clamp(s.spread, 1, 20, _repulsion);
       if (Number.isFinite(s.size)) {
-        _nodeSize = Math.max(0.05, Math.min(30, s.size));
+        _nodeSize = _clamp(s.size, 0.05, 30, _nodeSize);
         _hasSavedNodeSize = true;
       }
       if (typeof s.focusedMode === "boolean") _focusedMode = s.focusedMode;
       if (typeof s.showThumbs === "boolean") _showThumbs = s.showThumbs;
       if (typeof s.liveMode === "boolean") _liveMode = s.liveMode;
+      if (Array.isArray(s.presets)) {
+        _presets = s.presets
+          .map((p) => _normalizePreset(p))
+          .filter(Boolean)
+          .slice(0, MAX_PRESET_COUNT);
+      }
+      if (typeof s.startupPresetName === "string") {
+        _startupPresetName = s.startupPresetName.trim().slice(0, MAX_PRESET_NAME_LEN);
+      }
+      if (_startupPresetName) {
+        const startupPreset = _presets.find((p) => p.name === _startupPresetName);
+        if (startupPreset) _applyLookToState(startupPreset, { markManualSize: true });
+      }
     } catch (_) {
       // Ignore malformed local settings
     }
@@ -238,6 +374,16 @@
         focusedMode: _focusedMode,
         showThumbs: _showThumbs,
         liveMode: _liveMode,
+        presets: _presets.map((p) => ({
+          name: p.name,
+          strength: p.strength,
+          spread: p.spread,
+          size: p.size,
+          focusedMode: p.focusedMode,
+          liveMode: p.liveMode,
+          showThumbs: p.showThumbs,
+        })),
+        startupPresetName: _startupPresetName || "",
       }));
     } catch (_) {
       // Ignore localStorage failures
@@ -566,6 +712,7 @@
   function _syncInstanceMesh() {
     if (!_instanceMesh || !_camera) return;
 
+    const profile = _activePhysicsProfile();
     const q = _camera.quaternion;
     for (const node of _instanceNodes) {
       const idx = node._instanceIndex;
@@ -573,7 +720,7 @@
       const visible = alpha > 0.02;
       const scaleMul = visible ? (0.3 + alpha * 0.7) : 0.001;
       const hasTextureOverlay = _showThumbs && !!node._tex && node._visible;
-      const baseScaleAdjust = hasTextureOverlay ? 0.02 : 1.0;
+      const baseScaleAdjust = hasTextureOverlay ? profile.baseTileWhenOverlay : 1.0;
       const scale = _nodeSize * scaleMul * baseScaleAdjust;
 
       _tmpPosition.set(node.x, node.y, node.z);
@@ -626,11 +773,12 @@
   function _forceTick() {
     const n = _nodes.length;
     if (n === 0) return;
+    const profile = _physicsProfileForCount(n);
     let totalSpeed2 = 0;
     let totalForceAbs = 0;
-    const damping = 0.65 - (_liveCalm * 0.22); // stronger damping as system settles
-    const velEps = 0.006 + (_liveCalm * 0.01);
-    const forceEps = 0.004 + (_liveCalm * 0.008);
+    const damping = profile.dampingHot - (_liveCalm * (profile.dampingHot - profile.dampingCalm));
+    const velEps = profile.velEpsBase + (_liveCalm * profile.velEpsCalmAdd);
+    const forceEps = profile.forceEpsBase + (_liveCalm * profile.forceEpsCalmAdd);
 
     for (const node of _nodes) {
       let fx = 0, fy = 0, fz = 0;
@@ -674,10 +822,10 @@
     // Track whether simulation is "hot" or "calm" to adapt damping each frame.
     const avgSpeed2 = totalSpeed2 / n;
     const avgForceAbs = totalForceAbs / n;
-    const speedHot = Math.min(1, avgSpeed2 / 0.012);
-    const forceHot = Math.min(1, avgForceAbs / 0.09);
+    const speedHot = Math.min(1, avgSpeed2 / profile.speedHotNorm);
+    const forceHot = Math.min(1, avgForceAbs / profile.forceHotNorm);
     const targetCalm = 1 - Math.max(speedHot, forceHot);
-    _liveCalm += (targetCalm - _liveCalm) * 0.12;
+    _liveCalm += (targetCalm - _liveCalm) * profile.calmLerp;
     if (_liveCalm < 0) _liveCalm = 0;
     if (_liveCalm > 1) _liveCalm = 1;
 
@@ -692,6 +840,7 @@
   const _CELL_OFF = 512;
 
   function _collisionPass() {
+    const profile = _activePhysicsProfile();
     const scale = _repulsion / 6;  // 6 is baseline
     const cellSize = _nodeSize * 2.5 * scale;
     const grid = new Map();
@@ -705,10 +854,10 @@
       grid.get(key).push(node);
     }
 
-    const minDist = _nodeSize * 1.1 * scale;
+    const minDist = _nodeSize * profile.collisionMinDistMul * scale;
     const minDist2 = minDist * minDist;
-    const slop = minDist * (0.01 + 0.02 * _liveCalm); // ignore tiny overlap when calm
-    const pushK = 0.25 - (0.10 * _liveCalm);          // soften collision impulses when calm
+    const slop = minDist * (profile.collisionSlopBase + (profile.collisionSlopCalmAdd * _liveCalm));
+    const pushK = profile.collisionPushHot - (profile.collisionPushCalmDrop * _liveCalm);
 
     for (const [key, cell] of grid) {
       const cx = Math.floor(key / _CELL_S2) - _CELL_OFF;
@@ -1106,6 +1255,7 @@
 
   function _syncOverlayTransform(entry) {
     const { mesh, node } = entry;
+    const profile = _activePhysicsProfile();
     const alpha = node._visAlpha ?? 1;
     if (!_showThumbs || !node._visible || alpha <= 0.02) {
       mesh.visible = false;
@@ -1117,7 +1267,7 @@
     _tmpCameraOffset.copy(_camera.position).sub(_tmpPosition.set(node.x, node.y, node.z));
     const lenSq = _tmpCameraOffset.lengthSq();
     if (lenSq > 1e-6) {
-      _tmpCameraOffset.multiplyScalar(0.24 / Math.sqrt(lenSq));
+      _tmpCameraOffset.multiplyScalar(profile.overlayOffset / Math.sqrt(lenSq));
     } else {
       _tmpCameraOffset.set(0, 0, 0);
     }
@@ -1126,7 +1276,7 @@
       node.y + _tmpCameraOffset.y,
       node.z + _tmpCameraOffset.z
     );
-    mesh.scale.setScalar(_nodeSize * (0.3 + alpha * 0.7) * 1.08);
+    mesh.scale.setScalar(_nodeSize * (0.3 + alpha * 0.7) * profile.overlayScale);
     mesh.material.opacity = Math.max(0.2, Math.min(1, alpha + 0.1));
     if (mesh.material.map !== node._tex) {
       mesh.material.map = node._tex;
@@ -1209,6 +1359,140 @@
 
   let _on3DToggleCb = null;
 
+  function _sanitizePresetName(rawName) {
+    return String(rawName || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .slice(0, MAX_PRESET_NAME_LEN);
+  }
+
+  function _findPresetByName(name) {
+    if (!name) return null;
+    return _presets.find((p) => p.name === name) || null;
+  }
+
+  function _currentLookSnapshot(name) {
+    return _normalizePreset({
+      name: name || "Current look",
+      strength: _attractStrength,
+      spread: _repulsion,
+      size: _nodeSize,
+      focusedMode: _focusedMode,
+      liveMode: _liveMode,
+      showThumbs: _showThumbs,
+    });
+  }
+
+  function _syncControlInputsFromState() {
+    if (!_controlsEl) return;
+    const strSlider = _controlsEl.querySelector("#_attr3dStr");
+    const spreadSlider = _controlsEl.querySelector("#_attr3dSpread");
+    const sizeSlider = _controlsEl.querySelector("#_attr3dSize");
+    const strVal = _controlsEl.querySelector("#_attr3dStrVal");
+    const spreadVal = _controlsEl.querySelector("#_attr3dSpreadVal");
+    const sizeVal = _controlsEl.querySelector("#_attr3dSizeVal");
+    const focusToggle = _controlsEl.querySelector("#_attr3dFocus");
+    const liveToggle = _controlsEl.querySelector("#_attr3dLive");
+    const thumbsToggle = _controlsEl.querySelector("#_attr3dThumbs");
+    if (strSlider) strSlider.value = String(_attractStrength);
+    if (spreadSlider) spreadSlider.value = String(_repulsion);
+    if (sizeSlider) sizeSlider.value = String(_nodeSize);
+    if (strVal) strVal.textContent = _fmtNum(_attractStrength, 2);
+    if (spreadVal) spreadVal.textContent = _fmtNum(_repulsion, 0);
+    if (sizeVal) sizeVal.textContent = _fmtNum(_nodeSize, 2);
+    if (focusToggle) focusToggle.checked = _focusedMode;
+    if (liveToggle) liveToggle.checked = _liveMode;
+    if (thumbsToggle) thumbsToggle.checked = _showThumbs;
+  }
+
+  function _refreshPresetControls(selectedName) {
+    if (!_controlsEl) return;
+    const presetSelect = _controlsEl.querySelector("#_attr3dPresetSelect");
+    const presetDelete = _controlsEl.querySelector("#_attr3dPresetDelete");
+    const startupToggle = _controlsEl.querySelector("#_attr3dPresetStartup");
+    if (!presetSelect) return;
+
+    const currentSelection = selectedName || presetSelect.value || "";
+    presetSelect.innerHTML = `<option value="">Looks…</option>`;
+    for (const preset of _presets) {
+      const option = document.createElement("option");
+      option.value = preset.name;
+      option.textContent = preset.name;
+      presetSelect.appendChild(option);
+    }
+
+    const nextSelection = _findPresetByName(currentSelection)
+      ? currentSelection
+      : (_findPresetByName(_startupPresetName) ? _startupPresetName : "");
+    presetSelect.value = nextSelection;
+    if (presetDelete) presetDelete.disabled = !nextSelection;
+    if (startupToggle) {
+      startupToggle.disabled = !nextSelection;
+      startupToggle.checked = !!nextSelection && nextSelection === _startupPresetName;
+    }
+  }
+
+  function _saveCurrentLookAsPreset(name) {
+    const cleanName = _sanitizePresetName(name);
+    if (!cleanName) return false;
+    const look = _currentLookSnapshot(cleanName);
+    if (!look) return false;
+    const idx = _presets.findIndex((p) => p.name === cleanName);
+    if (idx >= 0) {
+      _presets[idx] = look;
+      _saveSettings();
+      return true;
+    }
+    if (_presets.length >= MAX_PRESET_COUNT) {
+      window.alert(`Preset limit reached (${MAX_PRESET_COUNT}). Delete one before adding another.`);
+      return false;
+    }
+    _presets.push(look);
+    _saveSettings();
+    return true;
+  }
+
+  function _deletePreset(name) {
+    const idx = _presets.findIndex((p) => p.name === name);
+    if (idx < 0) return false;
+    _presets.splice(idx, 1);
+    if (_startupPresetName === name) _startupPresetName = "";
+    _saveSettings();
+    return true;
+  }
+
+  function _applyLookAndRefresh(look) {
+    if (!look) return false;
+    const prevFocusedMode = _focusedMode;
+    const prevShowThumbs = _showThumbs;
+    _applyLookToState(look, { markManualSize: true });
+    _liveCalm = 0;
+    _syncControlInputsFromState();
+    _saveSettings();
+
+    if (prevFocusedMode !== _focusedMode) {
+      _rebuildForFocusedMode();
+      return true;
+    }
+
+    if (!_showThumbs) _clearOverlayMeshes();
+    if (_activeAttractors.length > 0) {
+      if (_liveMode) {
+        _markSceneDirty();
+      } else {
+        _settleAndTween(_retickTicksForNodeCount(_nodes.length));
+      }
+    } else {
+      _resetNodesToRest();
+      _syncInstanceMesh();
+    }
+    if (_showThumbs) {
+      if (!prevShowThumbs) _queueNearTextures();
+      _syncTextureOverlays(true);
+    }
+    return true;
+  }
+
   function _buildControls() {
     if (!_controlsEl) return;
     _controlsEl.innerHTML = "";
@@ -1236,6 +1520,22 @@
       <label class="physics-toggle">Thumbs <input type="checkbox" id="_attr3dThumbs" ${_showThumbs ? "checked" : ""}></label>
     `;
     _controlsEl.appendChild(slidersRow);
+
+    const presetsRow = document.createElement("div");
+    presetsRow.className = "attractor-presets-row";
+    presetsRow.innerHTML = `
+      <span class="preset-label">Looks</span>
+      <select id="_attr3dPresetSelect" class="attractor-preset-select" aria-label="3D presets">
+        <option value="">Looks…</option>
+      </select>
+      <button type="button" class="attractor-preset-btn" id="_attr3dPresetSave">Save</button>
+      <button type="button" class="attractor-preset-btn" id="_attr3dPresetDelete" disabled>Delete</button>
+      <label class="attractor-preset-startup">
+        <input type="checkbox" id="_attr3dPresetStartup" disabled>
+        Startup
+      </label>
+    `;
+    _controlsEl.appendChild(presetsRow);
 
     // Chip groups in hover-reveal section
     const chipsSection = document.createElement("div");
@@ -1389,12 +1689,75 @@
         }
       });
 
+    const presetSelect = _controlsEl.querySelector("#_attr3dPresetSelect");
+    const presetSave = _controlsEl.querySelector("#_attr3dPresetSave");
+    const presetDelete = _controlsEl.querySelector("#_attr3dPresetDelete");
+    const startupToggle = _controlsEl.querySelector("#_attr3dPresetStartup");
+
+    if (presetSelect) {
+      presetSelect.addEventListener("change", () => {
+        const name = _sanitizePresetName(presetSelect.value);
+        if (!name) {
+          _refreshPresetControls("");
+          return;
+        }
+        const preset = _findPresetByName(name);
+        if (!preset) {
+          _refreshPresetControls("");
+          return;
+        }
+        _applyLookAndRefresh(preset);
+        _refreshPresetControls(name);
+      });
+    }
+
+    if (presetSave) {
+      presetSave.addEventListener("click", () => {
+        const seed = _sanitizePresetName(presetSelect?.value) || "";
+        const rawName = window.prompt("Save current 3D look as:", seed || "My look");
+        const name = _sanitizePresetName(rawName);
+        if (!name) return;
+        if (_saveCurrentLookAsPreset(name)) {
+          _refreshPresetControls(name);
+        }
+      });
+    }
+
+    if (presetDelete) {
+      presetDelete.addEventListener("click", () => {
+        const name = _sanitizePresetName(presetSelect?.value);
+        if (!name) return;
+        if (!window.confirm(`Delete preset "${name}"?`)) return;
+        if (_deletePreset(name)) {
+          _refreshPresetControls("");
+        }
+      });
+    }
+
+    if (startupToggle) {
+      startupToggle.addEventListener("change", () => {
+        const selectedName = _sanitizePresetName(presetSelect?.value);
+        if (!selectedName) {
+          startupToggle.checked = false;
+          startupToggle.disabled = true;
+          _startupPresetName = "";
+          _saveSettings();
+          return;
+        }
+        _startupPresetName = startupToggle.checked ? selectedName : "";
+        _saveSettings();
+        _refreshPresetControls(selectedName);
+      });
+    }
+
     // 3D toggle — fires callback to switch back to 2D
     const toggle3D = _controlsEl.querySelector("#_attr3dToggle");
     if (toggle3D)
       toggle3D.addEventListener("change", (e) => {
         if (_on3DToggleCb) _on3DToggleCb(e.target.checked);
       });
+
+    _refreshPresetControls("");
   }
 
   function _toggleAttractor(opt) {
