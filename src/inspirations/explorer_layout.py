@@ -114,11 +114,32 @@ def _project_umap(vectors: list[list[float]]) -> list[list[float]] | None:
 
 
 def _project_pca(vectors: list[list[float]]) -> list[list[float]] | None:
+    n = len(vectors)
+    if n == 0:
+        return []
+    d = len(vectors[0]) if vectors[0] else 0
     try:
         from sklearn.decomposition import PCA  # type: ignore
         import numpy as np  # type: ignore
     except Exception:
-        return None
+        # Pure-Python fallback when sklearn/numpy are unavailable:
+        # center vectors and project on the top-variance dimensions.
+        if d == 0:
+            return [[0.0, 0.0, 0.0] for _ in range(n)]
+        mean = [sum(v[j] for v in vectors) / n for j in range(d)]
+        var = [sum((v[j] - mean[j]) ** 2 for v in vectors) / n for j in range(d)]
+        ranked = sorted(range(d), key=lambda j: var[j], reverse=True)
+        top = ranked[:3]
+        while len(top) < 3:
+            top.append(-1)
+        out: list[list[float]] = []
+        for v in vectors:
+            out.append([
+                (v[top[0]] - mean[top[0]]) if top[0] >= 0 else 0.0,
+                (v[top[1]] - mean[top[1]]) if top[1] >= 0 else 0.0,
+                (v[top[2]] - mean[top[2]]) if top[2] >= 0 else 0.0,
+            ])
+        return out
     X = np.array(vectors, dtype=float)
     n_components = min(3, X.shape[0], X.shape[1])
     coords = PCA(n_components=n_components, random_state=42).fit_transform(X)
