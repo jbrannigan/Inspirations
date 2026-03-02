@@ -361,6 +361,17 @@ Validation:
 ### Known operational note
 
 - If another launcher process auto-starts an old `--reload` server, browser behavior can appear stale even after code fixes. When in doubt, stop existing `:8001` listeners and restart with the command above before validating.
+
+## Session Update (Mar 3, 2026 — Agenda vs Stabilization Split)
+
+User direction:
+- Continue with planned agenda work now.
+- Queue a dedicated bug-fix sprint immediately after agenda slice completion.
+
+Tracking updates:
+- Added queued stabilization sprint in `.claude/TODO.md` as:
+  - `Sprint 6 — P1/P2 Stabilization Bug-Fix Sprint`
+  - Includes intake, repro, severity-order fix execution, and regression/sign-off steps.
 - Marked iPhone Explorer crash work as deferred to a future mobile sprint.
 - Explicit scope decision recorded: active platform target is iPad + desktop.
 

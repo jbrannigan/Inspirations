@@ -52,6 +52,7 @@ removes duplicate entries (Dave multiline/follow-up appeared twice).
 
 1. **[ ] Review UX unification (Grid + Explorer + role model)**
    - Existing backlog item #5.
+   - Active scope/acceptance doc: `docs/SPRINT1_AGENDA_NEXT.md`
 2. **[x] Collaborator default entry = Collections-first shared scope**
    - Open collaborators directly into shared-collections scope (no per-collaborator custom workflow).
    - Implemented (Mar 2, 2026): collaborator init now defaults to `Shared Collections` scope and starts with broader browse tree locked.
@@ -69,6 +70,7 @@ removes duplicate entries (Dave multiline/follow-up appeared twice).
    - Single owner entry point for media ingestion (`Add Media`).
    - Include photos and video upload/import paths in the same flow (not scan-only).
    - Keep current scan ingest capability while expanding to multi-media support.
+   - Active scope/acceptance doc: `docs/SPRINT1_AGENDA_NEXT.md`
 
 #### Sprint 2 — P1 Dave conversation upgrade
 
@@ -104,6 +106,26 @@ removes duplicate entries (Dave multiline/follow-up appeared twice).
    - Idempotent incremental ingest path (skip existing; ingest only new/changed).
 3. **[ ] Optional Explorer edges revisit**
    - Evaluate edge rendering as toggle-only experiment (not default).
+
+#### Sprint 6 — P1/P2 Stabilization Bug-Fix Sprint (queued after current agenda)
+
+Context:
+- Post-merge validation on real devices surfaced multiple regressions/behavior mismatches.
+- Decision: finish the current agenda slice first, then run a focused bug-fix sprint.
+
+Planned workflow:
+1. **[ ] Bug intake consolidation**
+   - Collect all newly observed breakages from iPad + desktop into one numbered list.
+   - Deduplicate and tag each as `P1`/`P2`/`P3`.
+2. **[ ] Repro + owner assignment**
+   - Add clear repro steps and expected vs actual behavior for each issue.
+   - Mark owner (`UI`, `API`, `3D`, `IA`, `mobile-deferred`).
+3. **[ ] Fix in severity order**
+   - Execute P1 blockers first, then P2 UX regressions, then P3 polish.
+4. **[ ] Regression pack**
+   - Re-run Sprint 0 + Sprint 1 acceptance checks after each fix batch.
+5. **[ ] Sign-off checklist**
+   - iPad + desktop pass list before closing sprint.
 
 ### Next Sprint — Implementation (easiest-first)
 
