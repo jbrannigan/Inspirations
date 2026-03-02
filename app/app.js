@@ -1235,7 +1235,7 @@ function renderCatalogTree() {
   const collaboratorLockedTree = isCollaboratorActor() && !state.collaboratorTreeUnlocked;
   const collapseRest = (allItemsActive && !!state.allItemsTreeCollapsed) || collaboratorLockedTree;
 
-  // "All items" node at top with collapse/expand for the rest of Browse tree
+  // "All items" node (root order differs for collaborator view)
   const allBtn = document.createElement("button");
   allBtn.className = `tree-toggle${allItemsActive ? " active" : ""}${!collapseRest ? " expanded" : ""}`;
   allBtn.innerHTML = `<span class="tree-arrow">&#9654;</span><span>All Items</span>`;
@@ -1260,13 +1260,21 @@ function renderCatalogTree() {
     renderCatalogTree();
     loadAssets();
   };
-  wrap.appendChild(allBtn);
-
-  // Collections are a peer of "All Items" and stay visible even when
-  // the rest of the browse tree is collapsed.
+  const appendAllItemsRoot = () => wrap.appendChild(allBtn);
   const collectionsNodes = tree.filter((n) => n.type === "collections_group");
-  for (const node of collectionsNodes) {
-    wrap.appendChild(buildCollectionsGroupNode(node));
+  const appendCollectionsRoots = () => {
+    for (const node of collectionsNodes) {
+      wrap.appendChild(buildCollectionsGroupNode(node));
+    }
+  };
+
+  // Collaborator IA: Collections first, then All Items.
+  if (isCollaboratorActor()) {
+    appendCollectionsRoots();
+    appendAllItemsRoot();
+  } else {
+    appendAllItemsRoot();
+    appendCollectionsRoots();
   }
 
   if (collaboratorLockedTree) {
@@ -1467,6 +1475,9 @@ function buildCollectionsGroupNode(node) {
   children.className = "tree-children";
 
   const hasActiveChild = (node.children || []).some((c) => selectedCollectionSet.has(c.collection_id));
+  if (isCollaboratorActor() && !state.collaboratorTreeUnlocked) {
+    state.expandedTreeNodes.add(nodeKey);
+  }
   if (hasActiveChild || isActiveHeader) state.expandedTreeNodes.add(nodeKey);
   _setTreeNodeExpanded(nodeKey, toggle, children, state.expandedTreeNodes.has(nodeKey));
   _wireTreeArrowToggle(toggle, nodeKey, children);
@@ -4482,7 +4493,14 @@ async function checkFlaggedCount() {
     await Promise.all([loadCollections(), loadFacets(), loadCatalogTree()]);
     _applyCollaboratorCollectionsDefaultScope();
     await loadAssets();
-    const preferredView = _readViewModeFromUrl() || _readViewModePref();
+    const viewFromUrl = _readViewModeFromUrl();
+    const hasContextLink = !!_contextLinkPayloadFromUrl();
+    let preferredView = viewFromUrl || _readViewModePref();
+    // Shared context links and collaborator entry should default to Grid unless
+    // the URL explicitly requests a specific view.
+    if (!viewFromUrl && (hasContextLink || isCollaboratorActor())) {
+      preferredView = "grid";
+    }
     if (preferredView === "explorer") {
       setViewMode("explorer", { persist: false });
     }
