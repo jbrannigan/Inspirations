@@ -619,6 +619,23 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   cursor: pointer;
 }
 .new-item-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.browse-owner-tree-btn {
+  width: 100%;
+  margin-top: 6px;
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-hover);
+  background: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.browse-owner-tree-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
 
 /* ── Catalog tree ─────────────────────────────────────────────────────────── */
 .sidebar-tree-section { flex: 1; min-height: 0; overflow-y: auto; }

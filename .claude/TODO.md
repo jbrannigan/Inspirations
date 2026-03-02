@@ -52,10 +52,12 @@ removes duplicate entries (Dave multiline/follow-up appeared twice).
 
 1. **[ ] Review UX unification (Grid + Explorer + role model)**
    - Existing backlog item #5.
-2. **[ ] Collaborator default entry = Collections-first shared scope**
+2. **[x] Collaborator default entry = Collections-first shared scope**
    - Open collaborators directly into shared-collections scope (no per-collaborator custom workflow).
-3. **[ ] Explicit secondary browse affordance**
+   - Implemented (Mar 2, 2026): collaborator init now defaults to `Shared Collections` scope and starts with broader browse tree locked.
+3. **[x] Explicit secondary browse affordance**
    - Add `Browse Leslie's collection` action to reveal the rest of the browse tree on demand.
+   - Implemented (Mar 2, 2026): added collaborator-only `Browse Leslie's collection` button that unlocks source/dimension tree and switches to all-items browsing.
 4. **[ ] Harmonize Inspirations IA with new Home websites**
    - Align naming, flow, and shared IA conventions across properties.
 5. **[ ] Upgrade `Add Scan` / `Add Clip` to unified `Add Media` intake**

@@ -263,3 +263,18 @@ Planning/docs updates:
 
 Next sprint entry point:
 - Start Sprint 1 IA harmonization with collaborator-first browsing defaults (`Collections` first), then owner review UX unification.
+
+## Session Update (Mar 2, 2026 — Sprint 1 IA: Collaborator Entry Defaults)
+
+Files changed:
+- `app/app.js`
+- `app/styles.css`
+- `.claude/TODO.md`
+
+Implemented:
+- Collaborators now default into shared `Collections` scope on load (`Shared Collections`) instead of opening into broad all-items browsing.
+- Added collaborator gate for browse tree expansion: source/dimension branches stay hidden initially.
+- Added collaborator-only `Browse Leslie's collection` button to intentionally unlock broader tree + all-items browsing.
+
+Scope note:
+- Phone-specific concerns remain deferred; this IA work targets iPad + desktop flows.

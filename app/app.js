@@ -63,6 +63,8 @@ const state = {
   hiddenTree: null,             // hidden items tree for sidebar (owners only)
   expandedTreeNodes: new Set(), // track which tree nodes are expanded by user
   allItemsTreeCollapsed: null,  // collaborator default: collapse browse tree under "All Items"
+  collaboratorTreeUnlocked: false, // collaborator default: hide broader tree until explicit browse
+  collaboratorDefaultScopeApplied: false, // avoid re-applying collaborator default collection scope
   openQuestions: [],             // open question annotations (owners only)
   questionPollTimer: null,
 };
@@ -613,6 +615,42 @@ function setCollectionFilterIds(ids, { label = "", nodeId = null } = {}) {
     state.currentCollectionLabel = label || "";
     state.currentTreeNodeId = nodeId;
   }
+}
+
+function isCollaboratorActor() {
+  return !!(state.actor && state.actor.role !== "owner");
+}
+
+function _findCollectionsGroupNode() {
+  const tree = Array.isArray(state.catalogTree) ? state.catalogTree : [];
+  return tree.find((node) => node && node.type === "collections_group") || null;
+}
+
+function _applyCollaboratorCollectionsDefaultScope() {
+  if (!isCollaboratorActor()) return;
+  if (state.collaboratorDefaultScopeApplied) return;
+  state.collaboratorDefaultScopeApplied = true;
+
+  const hasExistingScope = !isAllItemsScopeActive()
+    || !!state.triageFilter
+    || !!(state.q && state.q.trim())
+    || !!(state.chatItemIds && state.chatItemIds.length);
+  if (hasExistingScope) return;
+
+  const collectionsNode = _findCollectionsGroupNode();
+  if (!collectionsNode) return;
+  const collectionIds = collectDescendantCollectionIds(collectionsNode);
+  if (!collectionIds.length) return;
+
+  resetTriageFilter();
+  state.currentSource = null;
+  state.currentBoard = null;
+  clearCatalogFilter();
+  setCollectionFilterIds(collectionIds, { label: "Shared Collections", nodeId: collectionsNode.id });
+  state.expandedTreeNodes.add("collections");
+  state.allItemsTreeCollapsed = true;
+  state.collaboratorTreeUnlocked = false;
+  renderCatalogTree();
 }
 
 function collectDescendantCatalogFiles(node) {
@@ -1194,7 +1232,8 @@ function renderCatalogTree() {
   }
 
   const allItemsActive = isAllItemsScopeActive();
-  const collapseRest = allItemsActive && !!state.allItemsTreeCollapsed;
+  const collaboratorLockedTree = isCollaboratorActor() && !state.collaboratorTreeUnlocked;
+  const collapseRest = (allItemsActive && !!state.allItemsTreeCollapsed) || collaboratorLockedTree;
 
   // "All items" node at top with collapse/expand for the rest of Browse tree
   const allBtn = document.createElement("button");
@@ -1202,7 +1241,7 @@ function renderCatalogTree() {
   allBtn.innerHTML = `<span class="tree-arrow">&#9654;</span><span>All Items</span>`;
   allBtn.onclick = () => {
     const wasAllItemsActive = isAllItemsScopeActive();
-    if (wasAllItemsActive) {
+    if (wasAllItemsActive && !collaboratorLockedTree) {
       state.allItemsTreeCollapsed = !state.allItemsTreeCollapsed;
       renderCatalogTree();
       return;
@@ -1212,6 +1251,7 @@ function renderCatalogTree() {
     state.currentBoard = null;
     clearCollectionFilter();
     clearCatalogFilter();
+    if (isCollaboratorActor()) state.collaboratorTreeUnlocked = true;
     state.currentTreeNodeId = null;
     state.offset = 0;
     renderCatalogTree();
@@ -1224,6 +1264,26 @@ function renderCatalogTree() {
   const collectionsNodes = tree.filter((n) => n.type === "collections_group");
   for (const node of collectionsNodes) {
     wrap.appendChild(buildCollectionsGroupNode(node));
+  }
+
+  if (collaboratorLockedTree) {
+    const browseBtn = document.createElement("button");
+    browseBtn.type = "button";
+    browseBtn.className = "browse-owner-tree-btn";
+    browseBtn.textContent = "Browse Leslie's collection";
+    browseBtn.onclick = () => {
+      resetTriageFilter();
+      state.currentSource = null;
+      state.currentBoard = null;
+      clearCollectionFilter();
+      clearCatalogFilter();
+      state.currentTreeNodeId = null;
+      state.collaboratorTreeUnlocked = true;
+      state.offset = 0;
+      renderCatalogTree();
+      loadAssets();
+    };
+    wrap.appendChild(browseBtn);
   }
 
   if (!collapseRest) {
@@ -4424,6 +4484,7 @@ async function checkFlaggedCount() {
     applyRoleVisibility();
 
     await Promise.all([loadCollections(), loadFacets(), loadCatalogTree()]);
+    _applyCollaboratorCollectionsDefaultScope();
     await loadAssets();
     const preferredView = _readViewModeFromUrl() || _readViewModePref();
     if (preferredView === "explorer") {
