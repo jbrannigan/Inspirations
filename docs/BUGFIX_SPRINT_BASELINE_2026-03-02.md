@@ -107,3 +107,15 @@ Locked outcomes:
 3. Scan title override remains suffix-preserving for split doc/page items.
 4. Video poster generation is required in this bug-fix sprint.
 5. Sprint closure requires a real manual run log (no assumed passes).
+
+## Execution Updates (Mar 2, 2026)
+
+- `JIM-1` implemented: ingest taxonomy chips now match Explorer groups and ingest auto-tags include `actor:*` + `ingested_at:*`.
+- `JIM-2` implemented: Clip subtype branches (`Scan/Photo/Video`) are exposed and wired in tree filters.
+- `JIM-3` verified: scan title override continues to preserve doc/page suffixes.
+- `JIM-4` implemented: video ingest now attempts poster generation and UI uses poster thumbnails when available.
+
+Latest automated validation:
+- `tools/run_bugfix_suite.py` → `PASS`
+- lint: `PASS`
+- unit tests: `PASS` (`216` tests)

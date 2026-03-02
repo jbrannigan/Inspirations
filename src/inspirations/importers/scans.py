@@ -227,6 +227,63 @@ def _detect_pdf_delimiter_pages(*, pdf_path: Path, max_pages: int, renderer: str
         return set()
 
 
+def _video_poster_tool() -> str | None:
+    if shutil.which("ffmpeg"):
+        return "ffmpeg"
+    return None
+
+
+def _extract_video_poster_ffmpeg(*, video_path: Path, poster_path: Path) -> None:
+    poster_path.parent.mkdir(parents=True, exist_ok=True)
+    attempts = [
+        [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            "00:00:00.500",
+            "-i",
+            str(video_path),
+            "-frames:v",
+            "1",
+            "-q:v",
+            "2",
+            str(poster_path),
+        ],
+        [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(video_path),
+            "-frames:v",
+            "1",
+            "-q:v",
+            "2",
+            str(poster_path),
+        ],
+    ]
+    last_error: Exception | None = None
+    for args in attempts:
+        try:
+            subprocess.run(
+                args,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if poster_path.exists() and poster_path.stat().st_size > 0:
+                return
+            raise RuntimeError("poster file not created")
+        except Exception as e:
+            last_error = e
+    raise RuntimeError(f"poster extraction failed: {last_error}")
+
+
 def _split_pages_into_documents(total_pages: int, delimiter_pages: set[int]) -> tuple[dict[int, tuple[int, int, int]], int]:
     docs: list[list[int]] = []
     current_doc: list[int] | None = None
@@ -553,6 +610,9 @@ def import_videos_inbox(
     unsupported_files = 0
     errors: list[dict[str, str]] = []
     imported_at = _now_iso()
+    poster_tool = _video_poster_tool()
+    poster_generated = 0
+    poster_errors: list[dict[str, str]] = []
 
     existing_refs = {str(r["source_ref"]) for r in db.query("select source_ref from assets where source=?", (source,))}
     pending_refs: set[str] = set()
@@ -569,6 +629,7 @@ def import_videos_inbox(
             skipped += 1
             continue
         try:
+            asset_id = str(uuid.uuid4())
             sha = _sha256_file(path)
             source_ref = f"{source_ref_scheme}://{sha}"
             if source_ref in existing_refs or source_ref in pending_refs:
@@ -580,10 +641,21 @@ def import_videos_inbox(
             out_path = dest / f"{sha}{suffix}"
             if not out_path.exists():
                 shutil.copy2(path, out_path)
+
+            thumb_path = ""
+            if poster_tool == "ffmpeg":
+                poster_path = store / "thumbs" / "video" / f"{asset_id}.jpg"
+                try:
+                    _extract_video_poster_ffmpeg(video_path=out_path, poster_path=poster_path)
+                    thumb_path = str(poster_path)
+                    poster_generated += 1
+                except Exception as e:
+                    poster_errors.append({"file": str(path), "error": str(e)})
+
             pending_refs.add(source_ref)
             rows.append(
                 (
-                    str(uuid.uuid4()),
+                    asset_id,
                     source,
                     source_ref,
                     path.stem,
@@ -592,6 +664,7 @@ def import_videos_inbox(
                     None,
                     imported_at,
                     None,
+                    thumb_path or None,
                     str(out_path),
                     sha,
                     "video",
@@ -607,9 +680,9 @@ def import_videos_inbox(
         insert or ignore into assets
           (
             id, source, source_ref, title, description, board, created_at, imported_at, image_url,
-            stored_path, sha256, media_status, content_kind, stored_video_path
+            thumb_path, stored_path, sha256, media_status, content_kind, stored_video_path
           )
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """,
         rows,
     )
@@ -631,5 +704,11 @@ def import_videos_inbox(
         "duplicates_skipped": duplicates_skipped,
         "unsupported_files": unsupported_files,
         "errors": errors[:25],
+        "poster": {
+            "tool": poster_tool or "",
+            "generated": poster_generated,
+            "errors": poster_errors[:25],
+            "note": "Poster generation errors are truncated to 25 in output.",
+        },
         "note": "Errors are truncated to 25 in output.",
     }

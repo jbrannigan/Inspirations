@@ -538,3 +538,34 @@ Validation:
 - `python3 tools/run_bugfix_suite.py` → PASS
   - lint: PASS
   - full unit discover: PASS (`214` tests)
+
+## Session Update (Mar 2, 2026 — JIM-4 Implemented: Video Poster Generation)
+
+Implemented `JIM-4` to generate and use video poster thumbnails in ingest and display flows.
+
+Files changed:
+- `src/inspirations/importers/scans.py`
+- `app/app.js`
+- `tests/test_scans_import.py`
+- `.claude/TODO.md`
+- `.claude/RESUME.md`
+
+Delivered:
+- Added `ffmpeg`-backed poster extraction during video ingest in `import_videos_inbox`.
+- Video imports now assign deterministic asset IDs before ingest and attempt poster write to:
+  - `store/thumbs/video/<asset_id>.jpg`
+- Poster generation is non-blocking:
+  - if `ffmpeg` is missing or extraction fails, ingest still succeeds.
+- Import report now includes poster diagnostics:
+  - `poster.tool`
+  - `poster.generated`
+  - `poster.errors`
+- UI now prefers generated posters for video assets:
+  - Grid cards use video thumb endpoint when available.
+  - Modal video element sets `poster` when a thumb exists, preserving current playback behavior.
+
+Validation:
+- `PYTHONPATH=src python3 -m unittest tests.test_scans_import tests.test_server_api.TestServerApi.test_video_upload_runs_import tests.test_server_api.TestServerApi.test_video_upload_applies_title_and_tags_to_import_batch` → PASS (`12` tests)
+- `python3 tools/run_bugfix_suite.py` → PASS
+  - lint: PASS
+  - full unit discover: PASS (`216` tests)

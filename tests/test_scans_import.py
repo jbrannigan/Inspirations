@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -207,6 +208,69 @@ class TestScansImport(unittest.TestCase):
             self.assertEqual(str(row["media_status"]), "video")
             self.assertEqual(str(row["content_kind"]), "video")
             self.assertTrue(str(row["stored_video_path"]).endswith(".mp4"))
+
+    def test_import_single_video_generates_poster_when_ffmpeg_available(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            inbox = base / "inbox"
+            store = base / "store"
+            inbox.mkdir()
+            vid = inbox / "walkthrough.mp4"
+            vid.write_bytes(b"\x00\x00\x00\x18ftypmp42mock")
+
+            def _fake_ffmpeg(args, **kwargs):
+                poster = Path(str(args[-1]))
+                poster.parent.mkdir(parents=True, exist_ok=True)
+                poster.write_bytes(b"jpg")
+                return subprocess.CompletedProcess(args=args, returncode=0)
+
+            db_path = base / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                with (
+                    mock.patch("inspirations.importers.scans.shutil.which", side_effect=lambda cmd: "/usr/bin/ffmpeg" if cmd == "ffmpeg" else None),
+                    mock.patch("inspirations.importers.scans.subprocess.run", side_effect=_fake_ffmpeg),
+                ):
+                    report = import_videos_inbox(db, inbox_dir=inbox, store_dir=store)
+                row = db.query(
+                    "select thumb_path, stored_video_path from assets where source='video' limit 1"
+                )[0]
+
+            self.assertEqual(report["created_assets"], 1)
+            self.assertEqual(report["poster"]["tool"], "ffmpeg")
+            self.assertEqual(report["poster"]["generated"], 1)
+            self.assertEqual(report["poster"]["errors"], [])
+            self.assertTrue(str(row["stored_video_path"]).endswith(".mp4"))
+            self.assertTrue(str(row["thumb_path"]).endswith(".jpg"))
+            self.assertTrue(Path(str(row["thumb_path"])).exists())
+
+    def test_import_single_video_poster_failure_does_not_block_ingest(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            inbox = base / "inbox"
+            store = base / "store"
+            inbox.mkdir()
+            vid = inbox / "walkthrough.mp4"
+            vid.write_bytes(b"\x00\x00\x00\x18ftypmp42mock")
+
+            db_path = base / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                with (
+                    mock.patch("inspirations.importers.scans.shutil.which", side_effect=lambda cmd: "/usr/bin/ffmpeg" if cmd == "ffmpeg" else None),
+                    mock.patch("inspirations.importers.scans.subprocess.run", side_effect=RuntimeError("ffmpeg failed")),
+                ):
+                    report = import_videos_inbox(db, inbox_dir=inbox, store_dir=store)
+                row = db.query(
+                    "select thumb_path, stored_video_path from assets where source='video' limit 1"
+                )[0]
+
+            self.assertEqual(report["created_assets"], 1)
+            self.assertEqual(report["poster"]["tool"], "ffmpeg")
+            self.assertEqual(report["poster"]["generated"], 0)
+            self.assertTrue(report["poster"]["errors"])
+            self.assertTrue(str(row["stored_video_path"]).endswith(".mp4"))
+            self.assertIsNone(row["thumb_path"])
 
 
 if __name__ == "__main__":

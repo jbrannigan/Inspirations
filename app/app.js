@@ -1232,7 +1232,9 @@ function buildCard(a) {
   el.className = "card" + selectedClass;
 
   const mediaHtml = showVideo
-    ? `<video src="${escapeHtml(videoUrl)}" preload="metadata" playsinline muted></video>`
+    ? (imgUrl
+      ? `<img src="${escapeHtml(imgUrl)}" loading="lazy" alt="" class="video-poster" />`
+      : `<video src="${escapeHtml(videoUrl)}" preload="metadata" playsinline muted></video>`)
     : imgUrl
       ? `<img src="${escapeHtml(imgUrl)}" loading="lazy" alt="" />`
       : `<div class="card-placeholder">${escapeHtml(displayTitle(a))}</div>`;
@@ -2188,6 +2190,9 @@ async function openModal(asset) {
     }
     if (video) {
       video.src = modalVideoUrl;
+      const poster = asset.thumb_path ? `/media/${asset.id}?kind=thumb` : "";
+      if (poster) video.poster = poster;
+      else video.removeAttribute("poster");
       video.hidden = false;
     }
   } else {

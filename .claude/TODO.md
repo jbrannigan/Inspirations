@@ -143,10 +143,20 @@ Planned workflow:
          - Grid + Explorer filter sync now includes `content_kind` so both views stay aligned.
          - Tree contract tests extended to assert subtype branches exist and each subtype node resolves to items.
      - `JIM-3`: preserve scan doc/page suffix behavior on title override (already aligned; keep regression coverage).
+       - Verified (Mar 2, 2026):
+         - Upload metadata title override keeps split scan document/page suffix behavior.
+         - Regression coverage maintained in ingest metadata upload tests.
      - `JIM-4`: add video poster generation in ingest/display pipeline.
+       - Implemented (Mar 2, 2026):
+         - Video ingest now generates deterministic asset IDs first, then attempts poster extraction with `ffmpeg` into `store/thumbs/video/<asset_id>.jpg`.
+         - Poster extraction is fail-open: video ingest completes even when poster generation fails or `ffmpeg` is unavailable.
+         - Import reports now include poster execution metadata (`tool`, `generated`, `errors`) for diagnostics.
+         - Grid cards and modal playback now use poster thumbs for videos when available, with existing video playback fallback intact.
+         - Added importer regression tests for both poster success and poster failure non-blocking paths.
 4. **[ ] Regression pack**
    - Re-run Sprint 0 + Sprint 1 acceptance checks after each fix batch.
    - Update (Mar 2, 2026): canonical bug-fix suite runner added at `tools/run_bugfix_suite.py` (lint + full unit discover).
+   - Update (Mar 2, 2026): re-ran bug-fix suite after `JIM-4`; lint + full unit discover PASS (`216` tests).
 5. **[ ] Sign-off checklist**
    - iPad + desktop pass list before closing sprint.
    - `JIM-5` gate (approved): no assumed passes; execute manual run log with per-item pass/fail notes.
