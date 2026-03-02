@@ -137,6 +137,11 @@ Planned workflow:
          - Backend ingest metadata now auto-applies `actor:<name|unknown>` and `ingested_at:<iso8601>` tags with case-insensitive dedupe.
          - Regression coverage added for unknown actor + authenticated actor auto-tag behavior.
      - `JIM-2`: expose `Clip > Scan/Photo/Video` subtype branches in tree/filter UX.
+       - Implemented (Mar 2, 2026):
+         - `/api/catalog/tree` now injects `source_subtype` children under Clip (`Scan`, `Photo`, `Video`) with counts derived from visible (non-hidden) `content_kind` rows.
+         - Sidebar source tree now supports subtype node clicks, applying `source=scan` + `content_kind=<scan|photo|video>` filters.
+         - Grid + Explorer filter sync now includes `content_kind` so both views stay aligned.
+         - Tree contract tests extended to assert subtype branches exist and each subtype node resolves to items.
      - `JIM-3`: preserve scan doc/page suffix behavior on title override (already aligned; keep regression coverage).
      - `JIM-4`: add video poster generation in ingest/display pipeline.
 4. **[ ] Regression pack**

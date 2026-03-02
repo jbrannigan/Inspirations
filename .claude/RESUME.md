@@ -506,3 +506,35 @@ Validation:
 - `python3 tools/run_bugfix_suite.py` → PASS
   - lint: PASS
   - full unit discover: PASS (`213` tests)
+
+## Session Update (Mar 2, 2026 — JIM-2 Implemented: Clip Subtype Branches)
+
+Implemented `JIM-2` to expose and wire Clip subtype branches (`Scan`, `Photo`, `Video`) in browse tree UX.
+
+Files changed:
+- `src/inspirations/server.py`
+- `app/app.js`
+- `tests/test_tree_contract.py`
+- `.claude/TODO.md`
+
+Delivered:
+- `/api/catalog/tree` now adds `source_subtype` children under `Scan` source with visible-count-based totals:
+  - `Scan` (includes legacy blank `content_kind` rows)
+  - `Photo`
+  - `Video`
+- Sidebar source tree now handles subtype clicks as first-class filters.
+- Added `currentContentKind` filter state in frontend; propagated to:
+  - `/api/assets`
+  - `/api/asset-ids` (Explorer sync path)
+  - filter indicator text
+- Filter resets were updated so subtype state clears when switching scopes (All Items, collections, catalog folders, source boards, hidden folders, chat-driven clear/filter flows).
+
+Contract validation updates:
+- Extended tree contract checks so `source_subtype` nodes validate via:
+  - `/api/assets?source=scan&content_kind=<kind>`
+- Added explicit contract test ensuring scan source exposes `scan/photo/video` subtype branches with non-zero counts in seeded fixture.
+
+Validation:
+- `python3 tools/run_bugfix_suite.py` → PASS
+  - lint: PASS
+  - full unit discover: PASS (`214` tests)

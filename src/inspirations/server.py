@@ -1703,9 +1703,18 @@ class ApiHandler(BaseHTTPRequestHandler):
                 "from assets where triage_status is null or triage_status != 'hidden' "
                 "group by 1, 2"
             )
+            # Visible counts per source+content_kind (for subtype browsing under Clip)
+            kind_rows = db.query(
+                "select lower(source) as src, lower(coalesce(content_kind,'')) as kind, count(*) as n "
+                "from assets where triage_status is null or triage_status != 'hidden' "
+                "group by 1, 2"
+            )
         visible_by_source: dict[str, int] = {r["src"]: r["n"] for r in src_rows}
         visible_by_board: dict[tuple[str, str], int] = {
             (r["src"], r["brd"]): r["n"] for r in board_rows
+        }
+        visible_by_kind: dict[tuple[str, str], int] = {
+            (r["src"], r["kind"]): r["n"] for r in kind_rows
         }
 
         for node in tree:
@@ -1721,7 +1730,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             # Adjust known board children
             accounted = 0
             synthetic_children = []  # children that aggregate multiple DB boards
-            for child in node.get("children", []):
+            board_children = [c for c in node.get("children", []) if c.get("type") == "board"]
+            for child in board_children:
                 board_name = (child.get("board_name") or "").lower()
                 # Synthetic groups like "(unsorted reels)" aggregate many DB boards
                 if board_name.startswith("("):
@@ -1736,8 +1746,48 @@ class ApiHandler(BaseHTTPRequestHandler):
                 old_total = sum(c["count"] for c in synthetic_children) or 1
                 for child in synthetic_children:
                     child["count"] = max(0, round(remaining * child["count"] / old_total))
-            # Remove zero-count children (all items hidden)
-            node["children"] = [c for c in node.get("children", []) if c["count"] > 0]
+            # Remove zero-count board children (all items hidden)
+            board_children = [c for c in board_children if c.get("count", 0) > 0]
+
+            # JIM-2: expose Clip subtype branches under source=scan.
+            if src == "scan":
+                scan_count = visible_by_kind.get((src, "scan"), 0) + visible_by_kind.get((src, ""), 0)
+                photo_count = visible_by_kind.get((src, "photo"), 0)
+                video_count = visible_by_kind.get((src, "video"), 0)
+                known_total = scan_count + photo_count + video_count
+                # Keep subtype totals aligned with visible source count even if
+                # legacy rows use unexpected content_kind values.
+                if known_total < visible_total:
+                    scan_count += visible_total - known_total
+                subtype_children = [
+                    {
+                        "id": "source_subtype:scan:scan",
+                        "label": "Scan",
+                        "count": scan_count,
+                        "type": "source_subtype",
+                        "source": "scan",
+                        "content_kind": "scan",
+                    },
+                    {
+                        "id": "source_subtype:scan:photo",
+                        "label": "Photo",
+                        "count": photo_count,
+                        "type": "source_subtype",
+                        "source": "scan",
+                        "content_kind": "photo",
+                    },
+                    {
+                        "id": "source_subtype:scan:video",
+                        "label": "Video",
+                        "count": video_count,
+                        "type": "source_subtype",
+                        "source": "scan",
+                        "content_kind": "video",
+                    },
+                ]
+                node["children"] = [c for c in subtype_children if c["count"] > 0] + board_children
+            else:
+                node["children"] = board_children
 
         # Remove zero-count source nodes (all items hidden)
         tree[:] = [n for n in tree if n.get("type") != "source" or n["count"] > 0]
