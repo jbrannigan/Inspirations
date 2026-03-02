@@ -65,6 +65,7 @@ const state = {
   allItemsTreeCollapsed: null,  // collaborator default: collapse browse tree under "All Items"
   collaboratorTreeUnlocked: false, // collaborator default: hide broader tree until explicit browse
   collaboratorDefaultScopeApplied: false, // avoid re-applying collaborator default collection scope
+  lastCollaboratorBrowseUnlockAt: 0, // guards accidental follow-up taps right after browse unlock
   openQuestions: [],             // open question annotations (owners only)
   questionPollTimer: null,
 };
@@ -619,6 +620,15 @@ function setCollectionFilterIds(ids, { label = "", nodeId = null } = {}) {
 
 function isCollaboratorActor() {
   return !!(state.actor && state.actor.role !== "owner");
+}
+
+function shouldIgnorePostBrowseUnlockTreeClick() {
+  if (!isCollaboratorActor()) return false;
+  if (!state.lastCollaboratorBrowseUnlockAt) return false;
+  const elapsed = Date.now() - state.lastCollaboratorBrowseUnlockAt;
+  if (elapsed < 0 || elapsed > 500) return false;
+  // Only guard while collaborator is still in collection scope.
+  return hasCollectionFilter();
 }
 
 function _findCollectionsGroupNode() {
@@ -1240,6 +1250,7 @@ function renderCatalogTree() {
   allBtn.className = `tree-toggle${allItemsActive ? " active" : ""}${!collapseRest ? " expanded" : ""}`;
   allBtn.innerHTML = `<span class="tree-arrow">&#9654;</span><span>All Items</span>`;
   allBtn.onclick = () => {
+    if (shouldIgnorePostBrowseUnlockTreeClick()) return;
     const wasAllItemsActive = isAllItemsScopeActive();
     if (wasAllItemsActive && !collaboratorLockedTree) {
       state.allItemsTreeCollapsed = !state.allItemsTreeCollapsed;
@@ -1282,9 +1293,15 @@ function renderCatalogTree() {
     browseBtn.type = "button";
     browseBtn.className = "browse-owner-tree-btn";
     browseBtn.textContent = "Browse Leslie's collection";
-    browseBtn.onclick = () => {
+    browseBtn.onclick = (e) => {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
       state.collaboratorTreeUnlocked = true;
       state.allItemsTreeCollapsed = false;
+      state.expandedTreeNodes.add("collections");
+      state.lastCollaboratorBrowseUnlockAt = Date.now();
       renderCatalogTree();
     };
     wrap.appendChild(browseBtn);
@@ -1338,6 +1355,7 @@ function buildSourceNode(node) {
 
   // Header click filters to the full source scope (all descendant folders).
   toggle.onclick = () => {
+    if (shouldIgnorePostBrowseUnlockTreeClick()) return;
     resetTriageFilter();
     state.currentSource = sourceKey;
     state.currentBoard = null;
@@ -1365,6 +1383,7 @@ function buildSourceNode(node) {
     leaf.className = `tree-leaf${isActive ? " active" : ""}`;
     leaf.innerHTML = `<span>${escapeHtml(boardName)}</span><span class="tree-count">${child.count}</span>`;
     leaf.onclick = () => {
+      if (shouldIgnorePostBrowseUnlockTreeClick()) return;
       resetTriageFilter();
       if (isCatchAll) {
         // Use catalog file mode for catch-all entries
@@ -1426,6 +1445,7 @@ function buildDimensionNode(node) {
 
   // Header click filters to all descendant catalog files.
   toggle.onclick = () => {
+    if (shouldIgnorePostBrowseUnlockTreeClick()) return;
     resetTriageFilter();
     state.currentSource = null;
     state.currentBoard = null;
@@ -1442,6 +1462,7 @@ function buildDimensionNode(node) {
     leaf.className = `tree-leaf${isActive ? " active" : ""}`;
     leaf.innerHTML = `<span>${escapeHtml(child.label)}</span><span class="tree-count">${child.count}</span>`;
     leaf.onclick = () => {
+      if (shouldIgnorePostBrowseUnlockTreeClick()) return;
       resetTriageFilter();
       state.currentSource = null;
       state.currentBoard = null;
