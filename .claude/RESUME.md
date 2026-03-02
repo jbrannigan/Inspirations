@@ -427,3 +427,34 @@ Implemented:
 Validation:
 - `PYTHONPATH=src python3 -m unittest -q tests.test_scans_import tests.test_server_api` (pass, 47 tests).
 - `python3 -m py_compile src/inspirations/server.py src/inspirations/importers/scans.py` (pass).
+
+## Session Update (Mar 2, 2026 — Bug-Fix Sprint Kickoff: Inventory + Validation Suite)
+
+User direction:
+- Pause new feature work and shift to a dedicated bug-fix sprint.
+- Document known features/workflows, define a complete validation suite, run it, and queue unclear decisions for Jim.
+
+Delivered:
+- Added bug-fix sprint baseline doc: `docs/BUGFIX_SPRINT_BASELINE_2026-03-02.md`
+  - Known feature/workflow inventory across auth, browse, collab links, review, explorer, ingest, media, AI, export, scrape, and security flows.
+  - Canonical validation commands and baseline run status.
+  - Explicit decision queue for Jim (`JIM-1` ... `JIM-5`).
+- Added workflow test matrix: `docs/WORKFLOW_TEST_MATRIX_2026-03-02.md`
+  - Automated coverage map by workflow area and current status.
+  - Manual-only validation matrix for iPad/desktop sign-off.
+- Added canonical runner: `tools/run_bugfix_suite.py`
+  - Runs lint + full unit-test discover with JSON output for repeatable sprint validation.
+
+Coverage improvements:
+- Added ingest-metadata workflow tests in `tests/test_server_api.py`:
+  - scan upload metadata apply (title/tags + scan doc suffix preservation),
+  - photo upload metadata apply,
+  - video upload metadata apply.
+
+Clear bug fixes applied:
+- Fixed CI lint break (`F821 undefined name uuid`) by importing `uuid` in `src/inspirations/server.py`.
+
+Validation run (bug-fix baseline):
+- `tools/run_bugfix_suite.py` → PASS
+  - lint: PASS
+  - full unit discover: PASS (`212` tests)

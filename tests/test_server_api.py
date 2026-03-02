@@ -126,6 +126,34 @@ class TestServerApi(unittest.TestCase):
             finally:
                 e.close()
 
+    def _insert_asset(
+        self,
+        *,
+        asset_id: str,
+        source: str,
+        source_ref: str,
+        title: str,
+        imported_at: str,
+    ) -> None:
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into assets (id, source, source_ref, title, imported_at)
+                values (?, ?, ?, ?, ?)
+                """,
+                (asset_id, source, source_ref, title, imported_at),
+            )
+
+    def _labels_for_asset(self, asset_id: str) -> list[str]:
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            rows = db.query(
+                "select label from asset_labels where asset_id=? order by label",
+                (asset_id,),
+            )
+        return [str(r["label"]) for r in rows]
+
     def test_remove_items_from_collection_endpoint(self):
         status, body = self._request(
             "/api/collections/c1/items/remove",
@@ -1351,6 +1379,175 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(import_kwargs.get("limit"), 0)
         self.assertEqual(import_kwargs.get("source"), "scan")
         self.assertEqual(import_kwargs.get("content_kind"), "video")
+
+    def test_scan_upload_applies_title_and_tags_to_import_batch(self):
+        imported_at = "2026-03-02T15:45:00+00:00"
+        self._insert_asset(
+            asset_id="scan-meta-1",
+            source="scan",
+            source_ref="scan://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#p3",
+            title="Old Batch - doc 2 p1",
+            imported_at=imported_at,
+        )
+
+        boundary = "----insp-scan-meta-boundary"
+        pdf_data = b"%PDF-1.4\nmock\n%%EOF\n"
+        body = (
+            (
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="title"\r\n\r\n'
+                "Kitchen Batch\r\n"
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="tags"\r\n\r\n'
+                "kitchen, lighting, kitchen\r\n"
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="file"; filename="batch.pdf"\r\n'
+                "Content-Type: application/pdf\r\n\r\n"
+            ).encode("utf-8")
+            + pdf_data
+            + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        )
+        fake_import = {
+            "source": "scan",
+            "imported_at": imported_at,
+            "created_assets": 1,
+            "delimiter_pages_skipped": 0,
+            "detected_documents": 1,
+            "errors": [],
+        }
+        fake_thumbs = {"tool": "sips", "attempted": 1, "generated": 1, "errors": []}
+        with (
+            mock.patch("inspirations.server.import_scans_inbox", return_value=fake_import),
+            mock.patch("inspirations.server.generate_thumbnails", return_value=fake_thumbs),
+        ):
+            status, payload = self._request(
+                "/api/import/scans",
+                method="POST",
+                raw_data=body,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload.get("options", {}).get("title"), "Kitchen Batch")
+        self.assertEqual(payload.get("options", {}).get("tags"), ["kitchen", "lighting"])
+        self.assertEqual(payload.get("ingest_metadata", {}).get("updated_titles"), 1)
+        self.assertEqual(payload.get("ingest_metadata", {}).get("applied_tags"), 2)
+
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            title = db.query_value("select title from assets where id='scan-meta-1'")
+        self.assertEqual(str(title), "Kitchen Batch - doc 2 p1")
+        self.assertEqual(self._labels_for_asset("scan-meta-1"), ["kitchen", "lighting"])
+
+    def test_photo_upload_applies_title_and_tags_to_import_batch(self):
+        imported_at = "2026-03-02T15:46:00+00:00"
+        self._insert_asset(
+            asset_id="photo-meta-1",
+            source="scan",
+            source_ref="clip-photo://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            title="Old Photo Title",
+            imported_at=imported_at,
+        )
+
+        boundary = "----insp-photo-meta-boundary"
+        jpg_data = b"\xff\xd8\xff\xe0" + b"mockjpegdata" + b"\xff\xd9"
+        body = (
+            (
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="title"\r\n\r\n'
+                "Mudroom Concept\r\n"
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="tags"\r\n\r\n'
+                "mudroom, storage\r\n"
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="file"; filename="kitchen.jpg"\r\n'
+                "Content-Type: image/jpeg\r\n\r\n"
+            ).encode("utf-8")
+            + jpg_data
+            + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        )
+        fake_import = {
+            "source": "scan",
+            "imported_at": imported_at,
+            "created_assets": 1,
+            "errors": [],
+        }
+        fake_thumbs = {"tool": "sips", "attempted": 1, "generated": 1, "errors": []}
+        with (
+            mock.patch("inspirations.server.import_photos_inbox", return_value=fake_import),
+            mock.patch("inspirations.server.generate_thumbnails", return_value=fake_thumbs),
+        ):
+            status, payload = self._request(
+                "/api/import/photos",
+                method="POST",
+                raw_data=body,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload.get("options", {}).get("title"), "Mudroom Concept")
+        self.assertEqual(payload.get("options", {}).get("tags"), ["mudroom", "storage"])
+        self.assertEqual(payload.get("ingest_metadata", {}).get("updated_titles"), 1)
+        self.assertEqual(payload.get("ingest_metadata", {}).get("applied_tags"), 2)
+
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            title = db.query_value("select title from assets where id='photo-meta-1'")
+        self.assertEqual(str(title), "Mudroom Concept")
+        self.assertEqual(self._labels_for_asset("photo-meta-1"), ["mudroom", "storage"])
+
+    def test_video_upload_applies_title_and_tags_to_import_batch(self):
+        imported_at = "2026-03-02T15:47:00+00:00"
+        self._insert_asset(
+            asset_id="video-meta-1",
+            source="scan",
+            source_ref="clip-video://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            title="Old Video Title",
+            imported_at=imported_at,
+        )
+
+        boundary = "----insp-video-meta-boundary"
+        mp4_data = b"\x00\x00\x00\x18ftypmp42mock"
+        body = (
+            (
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="title"\r\n\r\n'
+                "Pantry Walkthrough\r\n"
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="tags"\r\n\r\n'
+                "pantry, storage, pantry\r\n"
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="file"; filename="walkthrough.mp4"\r\n'
+                "Content-Type: video/mp4\r\n\r\n"
+            ).encode("utf-8")
+            + mp4_data
+            + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        )
+        fake_import = {
+            "source": "scan",
+            "imported_at": imported_at,
+            "created_assets": 1,
+            "errors": [],
+        }
+        with mock.patch("inspirations.server.import_videos_inbox", return_value=fake_import):
+            status, payload = self._request(
+                "/api/import/videos",
+                method="POST",
+                raw_data=body,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload.get("options", {}).get("title"), "Pantry Walkthrough")
+        self.assertEqual(payload.get("options", {}).get("tags"), ["pantry", "storage"])
+        self.assertEqual(payload.get("ingest_metadata", {}).get("updated_titles"), 1)
+        self.assertEqual(payload.get("ingest_metadata", {}).get("applied_tags"), 2)
+
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            title = db.query_value("select title from assets where id='video-meta-1'")
+        self.assertEqual(str(title), "Pantry Walkthrough")
+        self.assertEqual(self._labels_for_asset("video-meta-1"), ["pantry", "storage"])
 
 
 if __name__ == "__main__":

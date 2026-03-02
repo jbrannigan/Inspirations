@@ -119,16 +119,19 @@ Context:
 - Decision: finish the current agenda slice first, then run a focused bug-fix sprint.
 
 Planned workflow:
-1. **[ ] Bug intake consolidation**
+1. **[x] Bug intake consolidation**
    - Collect all newly observed breakages from iPad + desktop into one numbered list.
    - Deduplicate and tag each as `P1`/`P2`/`P3`.
-2. **[ ] Repro + owner assignment**
+   - Update (Mar 2, 2026): baseline inventory + scope captured in `docs/BUGFIX_SPRINT_BASELINE_2026-03-02.md`.
+2. **[x] Repro + owner assignment**
    - Add clear repro steps and expected vs actual behavior for each issue.
    - Mark owner (`UI`, `API`, `3D`, `IA`, `mobile-deferred`).
+   - Update (Mar 2, 2026): workflow/test matrix and manual validation ownership documented in `docs/WORKFLOW_TEST_MATRIX_2026-03-02.md`.
 3. **[ ] Fix in severity order**
    - Execute P1 blockers first, then P2 UX regressions, then P3 polish.
 4. **[ ] Regression pack**
    - Re-run Sprint 0 + Sprint 1 acceptance checks after each fix batch.
+   - Update (Mar 2, 2026): canonical bug-fix suite runner added at `tools/run_bugfix_suite.py` (lint + full unit discover).
 5. **[ ] Sign-off checklist**
    - iPad + desktop pass list before closing sprint.
 
