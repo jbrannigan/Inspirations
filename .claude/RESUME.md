@@ -458,3 +458,19 @@ Validation run (bug-fix baseline):
 - `tools/run_bugfix_suite.py` → PASS
   - lint: PASS
   - full unit discover: PASS (`212` tests)
+
+## Session Update (Mar 2, 2026 — Jim Decision Interview Completed)
+
+Decision interview completed and recorded in:
+- `docs/JIM_DECISION_TICKETS_2026-03-02.md`
+
+Approved outcomes:
+- `JIM-1`: ingest chips should align to Explorer taxonomy groups (`source`, `rooms`, `styles`, `materials`, `types`, `colors`, `elements`) and auto-apply actor/date-time ingest tags.
+- `JIM-2`: expose Clip subtype branches now (`Clip > Scan / Photo / Video`).
+- `JIM-3`: keep scan title override suffix-preserving behavior for split pages.
+- `JIM-4`: implement video poster generation now.
+- `JIM-5`: no assumed manual passes; sprint closure requires explicit manual run log with pass/fail and bug tracking for failures.
+
+Sprint docs updated to reflect locked outcomes:
+- `docs/BUGFIX_SPRINT_BASELINE_2026-03-02.md`
+- `.claude/TODO.md`

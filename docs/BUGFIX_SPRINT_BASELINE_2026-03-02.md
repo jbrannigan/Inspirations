@@ -96,23 +96,14 @@
 - Fixed CI lint failure in `src/inspirations/server.py` by importing `uuid` for ingest-label inserts.
 - Added automated ingest-metadata coverage for scan/photo/video upload workflows.
 
-## Queue for Jim (Unclear Workflow/Feature Decisions)
+## Jim Decisions (Captured Mar 2, 2026)
 
-1. `JIM-1` Tag-chip source set for ingest UI.
-- Current behavior: uses top label facets (`/api/facets` labels).
-- Decision needed: should ingest chips be limited to a curated “system type tags” subset only?
+- Decision tickets and final outcomes: `docs/JIM_DECISION_TICKETS_2026-03-02.md`
+- Outcome status: all `JIM-1` ... `JIM-5` approved.
 
-2. `JIM-2` Clip-bucket taxonomy visibility.
-- Current behavior: scan/photo/video uploads all land in `source='scan'` (Clip), subtype tracked in `content_kind`.
-- Decision needed: should sidebar/source counts expose subtype branches (`Clip > Scan/Photo/Video`) or remain unified?
-
-3. `JIM-3` Scan title override semantics for multi-page docs.
-- Current behavior: title override keeps existing doc suffix (` - doc N pM`) for scan pages.
-- Decision needed: keep suffix-preserving behavior or flatten to exact owner title for all pages?
-
-4. `JIM-4` Video poster/thumb strategy.
-- Current behavior: video assets render with `<video>` in grid/modal; no generated poster policy is enforced here.
-- Decision needed: require poster generation, or accept runtime first-frame behavior?
-
-5. `JIM-5` Manual acceptance gate for bug-fix closure.
-- Decision needed: confirm minimum manual regression list for sign-off (owner view, collaborator view, iPad explorer, import modals).
+Locked outcomes:
+1. Ingest tag chips will use Explorer-aligned groups and include actor/date-time auto-tags.
+2. Clip subtype branches (`Scan/Photo/Video`) will be exposed in UI now.
+3. Scan title override remains suffix-preserving for split doc/page items.
+4. Video poster generation is required in this bug-fix sprint.
+5. Sprint closure requires a real manual run log (no assumed passes).

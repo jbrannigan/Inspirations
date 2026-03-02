@@ -129,11 +129,18 @@ Planned workflow:
    - Update (Mar 2, 2026): workflow/test matrix and manual validation ownership documented in `docs/WORKFLOW_TEST_MATRIX_2026-03-02.md`.
 3. **[ ] Fix in severity order**
    - Execute P1 blockers first, then P2 UX regressions, then P3 polish.
+   - Decision-locked implementation tasks:
+     - `JIM-1`: ingest chips align to Explorer groups + auto-tags (`actor`, `ingested_at`).
+     - `JIM-2`: expose `Clip > Scan/Photo/Video` subtype branches in tree/filter UX.
+     - `JIM-3`: preserve scan doc/page suffix behavior on title override (already aligned; keep regression coverage).
+     - `JIM-4`: add video poster generation in ingest/display pipeline.
 4. **[ ] Regression pack**
    - Re-run Sprint 0 + Sprint 1 acceptance checks after each fix batch.
    - Update (Mar 2, 2026): canonical bug-fix suite runner added at `tools/run_bugfix_suite.py` (lint + full unit discover).
 5. **[ ] Sign-off checklist**
    - iPad + desktop pass list before closing sprint.
+   - `JIM-5` gate (approved): no assumed passes; execute manual run log with per-item pass/fail notes.
+   - Any failed manual item must be tracked as a bug with owner+repro before sprint closure.
 
 ### Next Sprint — Implementation (easiest-first)
 

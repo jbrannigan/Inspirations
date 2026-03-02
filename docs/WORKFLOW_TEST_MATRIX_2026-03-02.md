@@ -42,3 +42,8 @@ This matrix ties known workflows to automated validation and manual checks for t
 - Lint: PASS
 - Unit tests: PASS (`212` tests)
 - Manual matrix: pending owner acceptance
+
+## Decision Inputs
+
+- Final product decisions for this matrix are captured in:
+  - `docs/JIM_DECISION_TICKETS_2026-03-02.md`
