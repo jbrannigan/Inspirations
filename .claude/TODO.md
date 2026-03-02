@@ -57,7 +57,7 @@ removes duplicate entries (Dave multiline/follow-up appeared twice).
    - Implemented (Mar 2, 2026): collaborator init now defaults to `Shared Collections` scope and starts with broader browse tree locked.
 3. **[x] Explicit secondary browse affordance**
    - Add `Browse Leslie's collection` action to reveal the rest of the browse tree on demand.
-   - Implemented (Mar 2, 2026): added collaborator-only `Browse Leslie's collection` button that unlocks source/dimension tree and switches to all-items browsing.
+   - Implemented (Mar 2, 2026): added collaborator-only `Browse Leslie's collection` button that reveals source/dimension tree while preserving shared-collections scope until the collaborator explicitly changes filters.
 4. **[ ] Harmonize Inspirations IA with new Home websites**
    - Align naming, flow, and shared IA conventions across properties.
 5. **[ ] Upgrade `Add Scan` / `Add Clip` to unified `Add Media` intake**

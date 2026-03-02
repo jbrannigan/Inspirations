@@ -274,7 +274,7 @@ Files changed:
 Implemented:
 - Collaborators now default into shared `Collections` scope on load (`Shared Collections`) instead of opening into broad all-items browsing.
 - Added collaborator gate for browse tree expansion: source/dimension branches stay hidden initially.
-- Added collaborator-only `Browse Leslie's collection` button to intentionally unlock broader tree + all-items browsing.
+- Added collaborator-only `Browse Leslie's collection` button to reveal the broader tree while preserving shared-collections scope until collaborators deliberately change filters.
 
 Scope note:
 - Phone-specific concerns remain deferred; this IA work targets iPad + desktop flows.

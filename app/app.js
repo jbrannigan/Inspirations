@@ -1251,7 +1251,10 @@ function renderCatalogTree() {
     state.currentBoard = null;
     clearCollectionFilter();
     clearCatalogFilter();
-    if (isCollaboratorActor()) state.collaboratorTreeUnlocked = true;
+    if (isCollaboratorActor()) {
+      state.collaboratorTreeUnlocked = true;
+      state.allItemsTreeCollapsed = false;
+    }
     state.currentTreeNodeId = null;
     state.offset = 0;
     renderCatalogTree();
@@ -1272,16 +1275,9 @@ function renderCatalogTree() {
     browseBtn.className = "browse-owner-tree-btn";
     browseBtn.textContent = "Browse Leslie's collection";
     browseBtn.onclick = () => {
-      resetTriageFilter();
-      state.currentSource = null;
-      state.currentBoard = null;
-      clearCollectionFilter();
-      clearCatalogFilter();
-      state.currentTreeNodeId = null;
       state.collaboratorTreeUnlocked = true;
-      state.offset = 0;
+      state.allItemsTreeCollapsed = false;
       renderCatalogTree();
-      loadAssets();
     };
     wrap.appendChild(browseBtn);
   }
