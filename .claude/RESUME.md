@@ -258,6 +258,39 @@ Implemented (Sprint 0 prioritized items):
 
 Planning/docs updates:
 - Added consolidated observation intake and sprint structure in `.claude/TODO.md` (Sprints 0-5).
+
+## Session Update (Mar 2, 2026 — Sprint 0/1 Regression Recheck)
+
+Branch: `codex/sprint1-collaborator-collections-default`
+
+### Fixes finalized on branch
+
+- `app/app.js`:
+  - Collaborator root order now renders `Collections` before `All Items`.
+  - Collaborator locked mode keeps `Collections` expanded by default.
+  - `Browse Leslie's collection` reliably unlocks the broader tree without clearing shared-collections scope.
+  - Collaborator/context-link entry defaults to Grid unless URL explicitly sets `view=explorer`.
+- `app/index.html`:
+  - Bumped app script cache-buster to `app.js?v=15` to force delivery of latest collaborator IA logic.
+
+### QA verification (Playwright, Mar 2, 2026)
+
+- Sprint 0 checks:
+  - Header view-toggle icons present (`Grid`, `Explorer`).
+  - Explorer stats show scope count format (`N items`) with no stale `X of Y`.
+  - Explorer content container reports zero horizontal overflow in tested desktop viewport (`overflowX: 0`).
+  - Owner modal `Print` button exists and is inside `#modalShareGroup`.
+- Sprint 1 checks:
+  - Collaborator opens in Grid by default on plain actor link.
+  - Collaborator root order is `Collections`, then `All Items`.
+  - `Collections` is expanded by default with visible child leaves (`70` in test dataset).
+  - Default filter indicator shows shared collections scope.
+  - Clicking `Browse Leslie's collection` reveals broader tree (`By Room`, `By Style`, etc.) and preserves shared-collections filter indicator.
+  - Context-link URL (`collection_id` + `item_id`) also opens in Grid by default unless `view=` is explicitly set.
+
+### Notes
+
+- Console output in checks showed only favicon `404` noise.
 - Marked iPhone Explorer crash work as deferred to a future mobile sprint.
 - Explicit scope decision recorded: active platform target is iPad + desktop.
 
