@@ -427,6 +427,19 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .layout.sidebar-hidden.explorer-active { grid-template-columns: 1fr; }
 .layout.explorer-active .content {
   padding: 8px 8px 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.layout.explorer-active .stats-bar {
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+.layout.explorer-active .explorer-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
 }
 .sidebar {
   border-right: 1px solid var(--border);
@@ -736,6 +749,17 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   padding: 0;
   transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
+.view-toggle .view-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+  overflow: visible;
+  vector-effect: non-scaling-stroke;
+}
+.view-toggle .view-icon * {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 .view-toggle:hover { background: var(--surface-subtle); color: var(--text); }
 .view-toggle.active {
   background: var(--accent-soft);
@@ -810,6 +834,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   top: 8px;
   left: 8px;
   right: 8px;
+  box-sizing: border-box;
   z-index: 10;
   display: flex;
   flex-wrap: wrap;

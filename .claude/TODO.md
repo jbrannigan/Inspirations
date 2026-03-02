@@ -21,7 +21,82 @@
 
 ---
 
-## Sprint Buckets (updated Feb 28, 2026)
+## Sprint Buckets (updated Mar 2, 2026)
+
+### Observation Intake (Mar 2, 2026) — Consolidated Plan
+
+This plan merges the latest observation list with existing backlog items and
+removes duplicate entries (Dave multiline/follow-up appeared twice).
+
+#### Sprint 0 — P1 Stabilization + backlog carryover
+
+1. **[x] Header view-toggle icon polish (Grid + Explorer)**
+   - Existing backlog item #6; execute first.
+   - Matched visual weight, no Safari clipping, legible at standard + Retina scales.
+   - Implemented (Mar 2, 2026): replaced both icons with matched 16px SVG pair + Safari-safe stroke/padding styling.
+2. **[x] 3D canvas bogus side scrollbar / resize interference**
+   - Fix layout/overflow issue that blocks right-side window resize drag while Explorer is open.
+   - Implemented (Mar 2, 2026): Explorer mode content now uses flex + overflow containment; 3D controls use border-box width to avoid right-edge spill.
+3. **[x] Explorer count mismatch in 3D**
+   - Remove stale/paged count behavior (`240 of xxx`) in Explorer mode; show scope-accurate counts.
+   - Implemented (Mar 2, 2026): stats now show Explorer scope/filter counts instead of paged Grid counts while Explorer is active.
+4. **[x] Owner modal print-button placement verification**
+   - Confirm `Print` placement in owner mode with collaborator utility actions; adjust if still split.
+   - Implemented (Mar 2, 2026): moved modal `Print` into the share/utility action group row.
+5. **[→ Deferred] iPhone Explorer rotate crash triage**
+   - Reproduce/report path for `view=explore` repeat-crash on rotate/drag gesture.
+   - Capture diagnostics and containment fix scope for a future mobile sprint.
+   - Scope decision (Mar 2, 2026): active target platform is iPad + desktop only; phone reliability/UX is explicitly deprioritized for now.
+
+#### Sprint 1 — P1 IA harmonization + collaborator-first browsing
+
+1. **[ ] Review UX unification (Grid + Explorer + role model)**
+   - Existing backlog item #5.
+2. **[ ] Collaborator default entry = Collections-first shared scope**
+   - Open collaborators directly into shared-collections scope (no per-collaborator custom workflow).
+3. **[ ] Explicit secondary browse affordance**
+   - Add `Browse Leslie's collection` action to reveal the rest of the browse tree on demand.
+4. **[ ] Harmonize Inspirations IA with new Home websites**
+   - Align naming, flow, and shared IA conventions across properties.
+5. **[ ] Upgrade `Add Scan` / `Add Clip` to unified `Add Media` intake**
+   - Single owner entry point for media ingestion (`Add Media`).
+   - Include photos and video upload/import paths in the same flow (not scan-only).
+   - Keep current scan ingest capability while expanding to multi-media support.
+
+#### Sprint 2 — P1 Dave conversation upgrade
+
+1. **[ ] Multiline compose**
+   - `Shift+Enter` inserts newline, `Enter` sends.
+2. **[ ] Follow-up conversation continuity**
+   - Preserve short-lived conversation context so clarifying Q/A works across turns.
+3. **[ ] Threaded visible chat history**
+   - Replace transient one-line response bar with usable conversation thread.
+
+#### Sprint 3 — P1 shared user/role admin for 8499 site
+
+1. **[ ] Named user admin (email proxy identity)**
+2. **[ ] Multi-role management**
+   - Extend roles beyond current owner/collaborator model (for example builder, architect).
+3. **[ ] Cross-site admin scope**
+   - Serve entire `8499timberbridgeln.com` role/user administration from one interface/API.
+
+#### Sprint 4 — P2 Explorer clarity + interaction cleanup
+
+1. **[ ] Side panel vs control panel overlap audit**
+   - Decide if both are needed; remove redundancy.
+2. **[ ] Attractor/anchor clarity + spacing controls**
+   - Clarify terminology and improve controls for more distinct cluster balls.
+3. **[ ] Anchor de-select persistence bug**
+   - Anchors should fully clear after unselect.
+
+#### Sprint 5 — P3 architecture + ingestion harmonization
+
+1. **[ ] Unify Home + Inspirations server architecture (re-architecture sprint)**
+   - Backup and rollback plan required before structural changes.
+2. **[ ] Ingestion harness plan (nice-to-have)**
+   - Idempotent incremental ingest path (skip existing; ingest only new/changed).
+3. **[ ] Optional Explorer edges revisit**
+   - Evaluate edge rendering as toggle-only experiment (not default).
 
 ### Next Sprint — Implementation (easiest-first)
 
@@ -74,6 +149,8 @@
      - Hide the entire `Status` block.
      - Show `Collections` first, with `All Items` as peer below it.
      - Default `Collections` to expanded on initial load.
+     - Collaborators should start in shared collections scope by default.
+     - Provide explicit `Browse Leslie's collection` affordance to reveal broader tree when needed.
    - Collection lifecycle follow-up:
      - Add `Hide collection` and `Delete collection` actions (owner).
      - Hidden collections should move under a `Hidden` branch within `Collections`.
