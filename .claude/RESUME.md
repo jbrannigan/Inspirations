@@ -323,6 +323,44 @@ Tests added:
 Validation:
 - `PYTHONPATH=src python3 -m unittest -q tests.test_server_api` (pass; 38 tests).
 - Isolated server check against real dataset/catalog now shows `leak_files=0` for `/api/catalog/items` default requests (was 4 leak files before patch).
+
+## Night Handoff (Mar 2, 2026)
+
+### Branch / PR
+
+- Branch: `codex/sprint1-collaborator-collections-default`
+- PR: `#65` — `Sprint 1 IA: default collaborators to shared collections`
+
+### Commits from this session window (latest first)
+
+- `444339a` — fix: block hidden assets in collaborator browse catalogs
+- `6f38c4b` — fix: guard collaborator browse unlock from accidental scope drop
+- `8d1c40c` — docs: record sprint 0/1 regression recheck status
+- `778c066` — chore: bust app.js cache for collaborator IA order fix
+- `29ac2e3` — fix: stabilize collaborator tree order and grid entry
+- `f1a6764` — fix: reveal collaborator browse tree without changing scope
+- `4b856f1` — feat: default collaborators to shared collections scope
+
+### Current acceptance status
+
+- Sprint 0 checks: pass in automated regression.
+- Sprint 1 IA checks: pass in automated regression.
+- Reported collaborator hidden-leak during `Browse Leslie's collection`: fixed server-side and covered by tests.
+
+### Morning first-step checklist
+
+1. Start server from this repo root using local source path:
+   - `PYTHONPATH=src python3 -m inspirations --db data/inspirations.sqlite --store store serve --host 0.0.0.0 --port 8001`
+2. Open collaborator URL with cache-bust query:
+   - `http://localhost:8001/?actor=collab-b629bd3ae17e4be9&r=morning-check`
+3. Verify flow:
+   - `Collections` first, expanded.
+   - Click `Browse Leslie's collection`.
+   - Confirm hidden items do not appear in unlocked browse folders.
+
+### Known operational note
+
+- If another launcher process auto-starts an old `--reload` server, browser behavior can appear stale even after code fixes. When in doubt, stop existing `:8001` listeners and restart with the command above before validating.
 - Marked iPhone Explorer crash work as deferred to a future mobile sprint.
 - Explicit scope decision recorded: active platform target is iPad + desktop.
 

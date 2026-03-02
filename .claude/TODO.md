@@ -58,9 +58,14 @@ removes duplicate entries (Dave multiline/follow-up appeared twice).
 3. **[x] Explicit secondary browse affordance**
    - Add `Browse Leslie's collection` action to reveal the rest of the browse tree on demand.
    - Implemented (Mar 2, 2026): added collaborator-only `Browse Leslie's collection` button that reveals source/dimension tree while preserving shared-collections scope until the collaborator explicitly changes filters.
-4. **[ ] Harmonize Inspirations IA with new Home websites**
+   - Follow-up fix (Mar 2, 2026): added short post-unlock click guard to prevent accidental immediate scope-drop taps while the tree rerenders.
+4. **[x] Collaborator hidden-item leak after browse unlock**
+   - Hidden items should never appear for collaborator roles while browsing unlocked source/dimension folders.
+   - Implemented (Mar 2, 2026): server now role-gates `include_hidden` on `/api/assets`, `/api/asset-ids`, `/api/catalog/items`, and `/api/catalog/asset-ids` (owner-only).
+   - Added regression coverage in `tests/test_server_api.py` for both generic and catalog include-hidden endpoints.
+5. **[ ] Harmonize Inspirations IA with new Home websites**
    - Align naming, flow, and shared IA conventions across properties.
-5. **[ ] Upgrade `Add Scan` / `Add Clip` to unified `Add Media` intake**
+6. **[ ] Upgrade `Add Scan` / `Add Clip` to unified `Add Media` intake**
    - Single owner entry point for media ingestion (`Add Media`).
    - Include photos and video upload/import paths in the same flow (not scan-only).
    - Keep current scan ingest capability while expanding to multi-media support.
