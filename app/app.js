@@ -919,6 +919,11 @@ function updateLoadMoreBtn() {
 function updateStats() {
   const statsEl = $("#stats");
   if (!statsEl) return;
+  if (isExplorerViewActive() && Number.isFinite(_explorerFilterCount)) {
+    const count = Math.max(0, Number(_explorerFilterCount || 0));
+    statsEl.textContent = `${count} item${count === 1 ? "" : "s"}`;
+    return;
+  }
   const shown = state.assets.length;
   const total = state.totalCount;
   if (state.hasMore && total) {
@@ -3696,6 +3701,7 @@ function _resolveExplorerImpl() {
 }
 let _cachedExplorerAttractorData = null;
 let _cachedExplorerAttractorDataIncludesHidden = false;
+let _explorerFilterCount = null;
 let _explorerPayloadIncludesHidden = false;
 let _explorerScopeReloading = false;
 let _busyCursorDepth = 0;
@@ -3924,8 +3930,10 @@ async function loadExplorerView({ allow2DFallback = true } = {}) {
     await _nextPaint();
     explorerData = data;
     _explorerPayloadIncludesHidden = includeHidden;
+    _explorerFilterCount = Array.isArray(data?.assets) ? data.assets.length : null;
     _ExplorerImpl.loadData(data, { deferSettle: _explorerMode === "3d" });
     syncExplorerFilter();   // apply any active grid filters as dim
+    updateStats();
   } catch (e) {
     const canFallbackTo2D =
       allow2DFallback &&
@@ -3989,12 +3997,16 @@ async function syncExplorerFilter() {
   // No filters → show everything
   if (!_hasActiveFilters()) {
     _ExplorerImpl.setFilter(null);
+    _explorerFilterCount = Array.isArray(explorerData?.assets) ? explorerData.assets.length : null;
+    updateStats();
     return;
   }
 
   // Chat-curated items: highlight only those IDs
   if (state.chatItemIds) {
     _ExplorerImpl.setFilter(state.chatItemIds);
+    _explorerFilterCount = state.chatItemIds.length;
+    updateStats();
     return;
   }
 
@@ -4007,6 +4019,8 @@ async function syncExplorerFilter() {
       const data = await api(`/api/catalog/asset-ids?${catalogParams}`);
       if (seq !== _explorerFilterSeq) return; // stale
       _ExplorerImpl.setFilter(data.ids || []);
+      _explorerFilterCount = Array.isArray(data.ids) ? data.ids.length : 0;
+      updateStats();
     } catch (e) {
       // Silently ignore — filter dim is a nice-to-have
     }
@@ -4038,6 +4052,8 @@ async function syncExplorerFilter() {
     const data = await api(`/api/asset-ids?${params}`);
     if (seq !== _explorerFilterSeq) return; // stale
     _ExplorerImpl.setFilter(data.ids || []);
+    _explorerFilterCount = Array.isArray(data.ids) ? data.ids.length : 0;
+    updateStats();
   } catch (e) {
     // Silently ignore — filter dim is a nice-to-have
   }

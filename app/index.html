@@ -77,17 +77,22 @@
         <div class="header-actions">
           <div id="viewToggles" class="view-toggles">
             <button id="viewGrid" class="view-toggle active" title="Grid view" type="button">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="0.5" y="0.5" width="5" height="5" rx="1" stroke="currentColor"/><rect x="8.5" y="0.5" width="5" height="5" rx="1" stroke="currentColor"/><rect x="0.5" y="8.5" width="5" height="5" rx="1" stroke="currentColor"/><rect x="8.5" y="8.5" width="5" height="5" rx="1" stroke="currentColor"/></svg>
+              <svg class="view-icon view-icon-grid" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <rect x="2" y="2" width="4.5" height="4.5" rx="0.9" stroke="currentColor" stroke-width="1.15"/>
+                <rect x="9.5" y="2" width="4.5" height="4.5" rx="0.9" stroke="currentColor" stroke-width="1.15"/>
+                <rect x="2" y="9.5" width="4.5" height="4.5" rx="0.9" stroke="currentColor" stroke-width="1.15"/>
+                <rect x="9.5" y="9.5" width="4.5" height="4.5" rx="0.9" stroke="currentColor" stroke-width="1.15"/>
+              </svg>
             </button>
             <button id="viewExplorer" class="view-toggle" title="Explorer view (semantic map)" type="button">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-                <path d="M1.1 4.6L7 1.2L12.9 4.6L7 8L1.1 4.6Z" stroke="currentColor" stroke-width="0.95" stroke-linejoin="round"/>
-                <path d="M1.1 4.6V10.2L7 13.2V8L1.1 4.6Z" stroke="currentColor" stroke-width="0.95" stroke-linejoin="round"/>
-                <path d="M12.9 4.6V10.2L7 13.2V8L12.9 4.6Z" stroke="currentColor" stroke-width="0.95" stroke-linejoin="round"/>
-                <circle cx="4.3" cy="6.4" r="0.78" fill="currentColor" opacity="0.62"/>
-                <circle cx="7.1" cy="5.3" r="0.78" fill="currentColor" opacity="0.62"/>
-                <circle cx="9.8" cy="6.5" r="0.78" fill="currentColor" opacity="0.62"/>
-                <circle cx="7.1" cy="9.7" r="0.78" fill="currentColor" opacity="0.62"/>
+              <svg class="view-icon view-icon-explorer" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M2.9 5L8 2.1L13.1 5L8 7.9L2.9 5Z" stroke="currentColor" stroke-width="1.15"/>
+                <path d="M2.9 5V11.2L8 14V7.9L2.9 5Z" stroke="currentColor" stroke-width="1.15"/>
+                <path d="M13.1 5V11.2L8 14V7.9L13.1 5Z" stroke="currentColor" stroke-width="1.15"/>
+                <circle cx="5.2" cy="7.1" r="0.72" fill="currentColor" opacity="0.68"/>
+                <circle cx="8" cy="6.05" r="0.72" fill="currentColor" opacity="0.68"/>
+                <circle cx="10.8" cy="7.2" r="0.72" fill="currentColor" opacity="0.68"/>
+                <circle cx="8" cy="10.6" r="0.72" fill="currentColor" opacity="0.68"/>
               </svg>
             </button>
           </div>
@@ -272,8 +277,8 @@
                 <button id="modalShareLinkBtn" class="header-btn modal-utility-btn" type="button">Copy Link</button>
                 <button id="modalShareEmailBtn" class="header-btn modal-utility-btn" type="button">Email</button>
                 <button id="modalShareMessageBtn" class="header-btn modal-utility-btn" type="button">Message</button>
+                <button id="printAssetBtn" class="header-btn modal-utility-btn" type="button">Print</button>
               </div>
-              <button id="printAssetBtn" class="header-btn modal-utility-btn" type="button">Print</button>
             </div>
           <button id="closeModal" class="modalCloseX" type="button" aria-label="Close">&times;</button>
         </div>

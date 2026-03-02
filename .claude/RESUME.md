@@ -241,3 +241,25 @@ Validation:
 - All 160 tests pass
 - Three.js v0.160.0 via importmap from unpkg CDN
 - ES module cache tip: bump `?v=N` in `index.html` script tag when Chrome caches stale module
+
+## Session Update (Mar 2, 2026 — Sprint 0 Wrap + Sprint 1 Handoff)
+
+Files changed:
+- `.claude/TODO.md`
+- `app/index.html`
+- `app/styles.css`
+- `app/app.js`
+
+Implemented (Sprint 0 prioritized items):
+- Header Grid/Explorer view-toggle icon pair was polished as a matched 16px SVG set.
+- Explorer layout overflow/scroll behavior was tightened to remove right-edge scrollbar/resize interference.
+- Explorer stats now display scope-accurate Explorer counts (instead of paged Grid counts).
+- Modal `Print` action was moved into the share/utility action group.
+
+Planning/docs updates:
+- Added consolidated observation intake and sprint structure in `.claude/TODO.md` (Sprints 0-5).
+- Marked iPhone Explorer crash work as deferred to a future mobile sprint.
+- Explicit scope decision recorded: active platform target is iPad + desktop.
+
+Next sprint entry point:
+- Start Sprint 1 IA harmonization with collaborator-first browsing defaults (`Collections` first), then owner review UX unification.
