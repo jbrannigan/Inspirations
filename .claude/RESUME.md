@@ -291,6 +291,38 @@ Branch: `codex/sprint1-collaborator-collections-default`
 ### Notes
 
 - Console output in checks showed only favicon `404` noise.
+
+## Session Update (Mar 2, 2026 — Collaborator Hidden-Leak Fix)
+
+Issue reported:
+- In collaborator mode, after `Browse Leslie's collection`, some globally hidden assets were still visible.
+
+Root cause:
+- Server catalog endpoints used by unlocked browse-folder flows were not role-gating hidden access:
+  - `/api/catalog/items` forced `include_hidden=True`
+  - `/api/catalog/asset-ids` forced `include_hidden=True`
+- Also tightened parity hardening for generic endpoints:
+  - `/api/assets`
+  - `/api/asset-ids`
+  - `include_hidden=1` is now owner-only on all four routes.
+
+Implemented:
+- `src/inspirations/server.py`
+  - Added actor-aware `include_hidden` gating on:
+    - `/api/assets`
+    - `/api/asset-ids`
+    - `/api/catalog/items`
+    - `/api/catalog/asset-ids`
+  - Non-owner (or unauthenticated) requests now ignore `include_hidden=1`.
+
+Tests added:
+- `tests/test_server_api.py`
+  - `test_assets_and_asset_ids_include_hidden_require_owner`
+  - `test_catalog_endpoints_include_hidden_require_owner`
+
+Validation:
+- `PYTHONPATH=src python3 -m unittest -q tests.test_server_api` (pass; 38 tests).
+- Isolated server check against real dataset/catalog now shows `leak_files=0` for `/api/catalog/items` default requests (was 4 leak files before patch).
 - Marked iPhone Explorer crash work as deferred to a future mobile sprint.
 - Explicit scope decision recorded: active platform target is iPad + desktop.
 

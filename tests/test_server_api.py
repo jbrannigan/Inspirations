@@ -5,6 +5,7 @@ import threading
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import HTTPServer
 from pathlib import Path
@@ -343,6 +344,130 @@ class TestServerApi(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual((body.get("asset") or {}).get("id"), "a2")
+
+    def test_assets_and_asset_ids_include_hidden_require_owner(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec("update assets set triage_status='hidden' where id='a2'")
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-list", "Owner", "owner-list-token", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-list", "Collab", "collab-list-token", "collaborator"),
+            )
+
+        status, body = self._request("/api/assets?include_hidden=1")
+        self.assertEqual(status, 200)
+        self.assertEqual({a["id"] for a in body.get("assets", [])}, {"a1"})
+
+        status, body = self._request(
+            "/api/assets?include_hidden=1",
+            headers={"X-Actor-Token": "collab-list-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual({a["id"] for a in body.get("assets", [])}, {"a1"})
+
+        status, body = self._request(
+            "/api/assets?include_hidden=1",
+            headers={"X-Actor-Token": "owner-list-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual({a["id"] for a in body.get("assets", [])}, {"a1", "a2"})
+
+        status, body = self._request("/api/asset-ids?include_hidden=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(set(body.get("ids", [])), {"a1"})
+
+        status, body = self._request(
+            "/api/asset-ids?include_hidden=1",
+            headers={"X-Actor-Token": "collab-list-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(set(body.get("ids", [])), {"a1"})
+
+        status, body = self._request(
+            "/api/asset-ids?include_hidden=1",
+            headers={"X-Actor-Token": "owner-list-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(set(body.get("ids", [])), {"a1", "a2"})
+
+    def test_catalog_endpoints_include_hidden_require_owner(self):
+        visible_id = "feedface-0000-0000-0000-000000000000"
+        hidden_id = "deadbeef-0000-0000-0000-000000000000"
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into assets (id, source, source_ref, title, imported_at)
+                values (?, ?, ?, ?, datetime('now'))
+                """,
+                (visible_id, "pinterest", "pin://visible", "Visible Catalog Asset"),
+            )
+            db.exec(
+                """
+                insert into assets (id, source, source_ref, title, imported_at, triage_status)
+                values (?, ?, ?, ?, datetime('now'), 'hidden')
+                """,
+                (hidden_id, "pinterest", "pin://hidden", "Hidden Catalog Asset"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-cat", "Owner", "owner-cat-token", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-cat", "Collab", "collab-cat-token", "collaborator"),
+            )
+
+        catalog_dir = self.tmp_path / "catalog"
+        room_dir = catalog_dir / "room"
+        room_dir.mkdir(parents=True, exist_ok=True)
+        rel_file = "room/test.md"
+        (catalog_dir / rel_file).write_text(
+            "- feedface | visible\n- deadbeef | hidden\n",
+            encoding="utf-8",
+        )
+        self.server.catalog_dir = catalog_dir
+        rel_q = urllib.parse.quote(rel_file, safe="/")
+
+        status, body = self._request(f"/api/catalog/items?file={rel_q}&limit=100")
+        self.assertEqual(status, 200)
+        self.assertEqual({a["id"] for a in body.get("assets", [])}, {visible_id})
+
+        status, body = self._request(
+            f"/api/catalog/items?file={rel_q}&limit=100&include_hidden=1",
+            headers={"X-Actor-Token": "collab-cat-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual({a["id"] for a in body.get("assets", [])}, {visible_id})
+
+        status, body = self._request(
+            f"/api/catalog/items?file={rel_q}&limit=100&include_hidden=1",
+            headers={"X-Actor-Token": "owner-cat-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual({a["id"] for a in body.get("assets", [])}, {visible_id, hidden_id})
+
+        status, body = self._request(f"/api/catalog/asset-ids?file={rel_q}")
+        self.assertEqual(status, 200)
+        self.assertEqual(set(body.get("ids", [])), {visible_id})
+
+        status, body = self._request(
+            f"/api/catalog/asset-ids?file={rel_q}&include_hidden=1",
+            headers={"X-Actor-Token": "collab-cat-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(set(body.get("ids", [])), {visible_id})
+
+        status, body = self._request(
+            f"/api/catalog/asset-ids?file={rel_q}&include_hidden=1",
+            headers={"X-Actor-Token": "owner-cat-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(set(body.get("ids", [])), {visible_id, hidden_id})
 
     def test_assets_endpoint_supports_media_status_filter(self):
         status, body = self._request("/api/assets?media_status=metadata_only")

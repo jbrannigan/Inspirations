@@ -241,6 +241,9 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/assets":
             q = parse_qs(parsed.query)
+            include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
+            actor = _resolve_actor(self)
+            include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
             page_limit = int(q.get("limit", [str(DEFAULT_ASSETS_PAGE_SIZE)])[0])
             assets = self._with_db(
                 list_assets,
@@ -259,7 +262,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 needs_annotation=_parse_bool_param(q.get("needs_annotation", [""])[0], default=False),
                 flagged_only=_parse_bool_param(q.get("flagged", [""])[0], default=False),
                 tagged_only=_parse_bool_param(q.get("tagged", [""])[0], default=False),
-                include_hidden=_parse_bool_param(q.get("include_hidden", [""])[0], default=False),
+                include_hidden=include_hidden,
                 limit=page_limit + 1,
                 offset=int(q.get("offset", ["0"])[0]),
             )
@@ -293,6 +296,9 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/asset-ids":
             q = parse_qs(parsed.query)
+            include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
+            actor = _resolve_actor(self)
+            include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
             ids = self._with_db(
                 list_asset_ids,
                 q=q.get("q", [""])[0],
@@ -302,7 +308,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 triage_status=q.get("triage_status", [""])[0],
                 needs_annotation=_parse_bool_param(q.get("needs_annotation", [""])[0], default=False),
                 flagged_only=_parse_bool_param(q.get("flagged", [""])[0], default=False),
-                include_hidden=_parse_bool_param(q.get("include_hidden", [""])[0], default=False),
+                include_hidden=include_hidden,
             )
             return _send(self, 200, {"ids": ids})
 
@@ -472,6 +478,9 @@ class ApiHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/catalog/items":
             # Load items by one or more catalog file paths.
             q = parse_qs(parsed.query)
+            include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
+            actor = _resolve_actor(self)
+            include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
             catalog_dir = getattr(self.server, "catalog_dir", None)
             file_params = [str(v or "").strip() for v in q.get("file", []) if str(v or "").strip()]
             if not catalog_dir or not file_params:
@@ -487,7 +496,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             assets = self._with_db(
                 list_assets,
                 ids=ids_str,
-                include_hidden=True,
+                include_hidden=include_hidden,
                 limit=limit + 1,
                 offset=offset,
             )
@@ -504,6 +513,9 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/catalog/asset-ids":
             q = parse_qs(parsed.query)
+            include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
+            actor = _resolve_actor(self)
+            include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
             catalog_dir = getattr(self.server, "catalog_dir", None)
             file_params = [str(v or "").strip() for v in q.get("file", []) if str(v or "").strip()]
             if not catalog_dir or not file_params:
@@ -513,7 +525,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return _send(self, err_status, {"error": err_msg})
             if not short_ids:
                 return _send(self, 200, {"ids": []})
-            ids = self._with_db(list_asset_ids, ids=",".join(short_ids), include_hidden=True)
+            ids = self._with_db(list_asset_ids, ids=",".join(short_ids), include_hidden=include_hidden)
             return _send(self, 200, {"ids": ids})
 
         if parsed.path == "/api/tray":
