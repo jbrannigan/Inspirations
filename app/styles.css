@@ -2031,6 +2031,20 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .ingestTagChips {
+  display: grid;
+  gap: 8px;
+}
+.ingestTagGroup {
+  display: grid;
+  gap: 6px;
+}
+.ingestTagGroupLabel {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.ingestTagGroupChips {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;

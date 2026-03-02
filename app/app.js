@@ -106,9 +106,65 @@ const VIDEO_FILE_EXT_RE = /\.(mp4|mov|m4v|webm|avi|mkv|mpeg|mpg|wmv|3gp)$/i;
 const TITLE_DYNAMIC_SEGMENT_RE = /^(?:home|index|main|blog|news|latest|feed|explore|discover|topics?|category|categories|tag|tags|shop|products?|wirecutter)$/i;
 const TITLE_DYNAMIC_QUERY_KEY_RE = /^(?:page|p|offset|start|sort|view)$/i;
 const TITLE_GENERIC_PREVIEW_RE = /(?:og[_-]?(?:image|default|general)|default(?:[_-]?image)?|site[_-]?icon|logo|placeholder)/i;
+const INGEST_TAG_GROUPS = [
+  {
+    key: "source",
+    label: "Source",
+    tags: ["scan", "photo", "video"],
+  },
+  {
+    key: "rooms",
+    label: "Rooms",
+    tags: [
+      "bathroom", "kitchen", "bedroom", "living_room", "dining_room", "office",
+      "laundry", "mudroom", "closet", "garage", "hallway", "foyer", "nursery",
+      "basement", "attic", "pantry", "sunroom", "patio", "pool", "garden",
+    ],
+  },
+  {
+    key: "styles",
+    label: "Styles",
+    tags: [
+      "modern", "contemporary", "traditional", "transitional", "farmhouse",
+      "rustic", "coastal", "industrial", "mid_century", "scandinavian",
+      "mediterranean", "craftsman", "colonial", "art_deco", "bohemian",
+      "minimalist", "eclectic", "french_country", "spanish", "japanese",
+    ],
+  },
+  {
+    key: "materials",
+    label: "Materials",
+    tags: [
+      "wood", "tile", "stone", "marble", "granite", "quartz", "concrete",
+      "brick", "metal", "glass", "stainless_steel", "brass", "copper",
+      "iron", "ceramic", "porcelain", "hardwood", "laminate", "vinyl",
+      "leather", "fabric", "linen", "wallpaper", "stucco", "shiplap",
+    ],
+  },
+  {
+    key: "types",
+    label: "Types",
+    tags: ["interior", "exterior", "product", "plan", "document", "other"],
+  },
+  {
+    key: "colors",
+    label: "Colors",
+    tags: [
+      "white", "black", "gray", "brown", "beige", "blue", "green", "red",
+      "yellow", "orange", "pink", "purple", "gold", "silver", "navy",
+    ],
+  },
+  {
+    key: "elements",
+    label: "Elements",
+    tags: ["cabinet", "countertop", "sink", "bathtub", "shower", "fireplace", "lighting", "window", "door", "shelving"],
+  },
+];
 
 async function apiUpload(path, formData) {
-  const res = await fetch(path, { method: "POST", body: formData });
+  const actorToken = typeof Shared.getActorToken === "function" ? Shared.getActorToken() : "";
+  const headers = actorToken ? { "X-Actor-Token": actorToken } : {};
+  const res = await fetch(path, { method: "POST", body: formData, headers });
   if (!res.ok) { const t = await res.text(); throw new Error(t || res.statusText); }
   return res.json();
 }
@@ -537,36 +593,50 @@ function parseTagInput(raw) {
   return out;
 }
 
-function _ingestTagFacetSuggestions(limit = 18) {
-  const labels = Array.isArray(state.facets?.labels) ? state.facets.labels : [];
-  return labels
-    .map((entry) => String(entry?.label || "").trim())
-    .filter(Boolean)
-    .slice(0, Math.max(0, limit));
+function _ingestTagDisplayLabel(raw) {
+  return String(raw || "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function renderIngestTagChips(inputId, chipsId) {
   const input = document.getElementById(inputId);
   const wrap = document.getElementById(chipsId);
   if (!input || !wrap) return;
-  const suggestions = _ingestTagFacetSuggestions();
   wrap.innerHTML = "";
-  if (!suggestions.length) return;
+  if (!INGEST_TAG_GROUPS.length) return;
   const selected = new Set(parseTagInput(input.value).map((t) => t.toLowerCase()));
-  for (const label of suggestions) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = selected.has(label.toLowerCase()) ? "ingestTagChip active" : "ingestTagChip";
-    btn.textContent = label;
-    btn.addEventListener("click", () => {
-      const tags = parseTagInput(input.value);
-      const idx = tags.findIndex((t) => t.toLowerCase() === label.toLowerCase());
-      if (idx >= 0) tags.splice(idx, 1);
-      else tags.push(label);
-      input.value = tags.join(", ");
-      renderIngestTagChips(inputId, chipsId);
-    });
-    wrap.appendChild(btn);
+  for (const group of INGEST_TAG_GROUPS) {
+    const section = document.createElement("section");
+    section.className = "ingestTagGroup";
+
+    const heading = document.createElement("div");
+    heading.className = "ingestTagGroupLabel";
+    heading.textContent = group.label;
+    section.appendChild(heading);
+
+    const row = document.createElement("div");
+    row.className = "ingestTagGroupChips";
+    for (const value of group.tags) {
+      const tag = String(value || "").trim();
+      if (!tag) continue;
+      const key = tag.toLowerCase();
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = selected.has(key) ? "ingestTagChip active" : "ingestTagChip";
+      btn.textContent = _ingestTagDisplayLabel(tag);
+      btn.addEventListener("click", () => {
+        const tags = parseTagInput(input.value);
+        const idx = tags.findIndex((t) => t.toLowerCase() === key);
+        if (idx >= 0) tags.splice(idx, 1);
+        else tags.push(tag);
+        input.value = tags.join(", ");
+        renderIngestTagChips(inputId, chipsId);
+      });
+      row.appendChild(btn);
+    }
+    section.appendChild(row);
+    wrap.appendChild(section);
   }
 }
 

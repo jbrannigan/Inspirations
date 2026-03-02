@@ -1430,14 +1430,18 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload.get("options", {}).get("title"), "Kitchen Batch")
         self.assertEqual(payload.get("options", {}).get("tags"), ["kitchen", "lighting"])
+        self.assertEqual(payload.get("options", {}).get("auto_tags"), ["actor:unknown", f"ingested_at:{imported_at}"])
         self.assertEqual(payload.get("ingest_metadata", {}).get("updated_titles"), 1)
-        self.assertEqual(payload.get("ingest_metadata", {}).get("applied_tags"), 2)
+        self.assertEqual(payload.get("ingest_metadata", {}).get("applied_tags"), 4)
 
         with Db(self.db_path) as db:
             ensure_schema(db)
             title = db.query_value("select title from assets where id='scan-meta-1'")
         self.assertEqual(str(title), "Kitchen Batch - doc 2 p1")
-        self.assertEqual(self._labels_for_asset("scan-meta-1"), ["kitchen", "lighting"])
+        self.assertCountEqual(
+            self._labels_for_asset("scan-meta-1"),
+            [f"ingested_at:{imported_at}", "actor:unknown", "kitchen", "lighting"],
+        )
 
     def test_photo_upload_applies_title_and_tags_to_import_batch(self):
         imported_at = "2026-03-02T15:46:00+00:00"
@@ -1487,14 +1491,76 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload.get("options", {}).get("title"), "Mudroom Concept")
         self.assertEqual(payload.get("options", {}).get("tags"), ["mudroom", "storage"])
+        self.assertEqual(payload.get("options", {}).get("auto_tags"), ["actor:unknown", f"ingested_at:{imported_at}"])
         self.assertEqual(payload.get("ingest_metadata", {}).get("updated_titles"), 1)
-        self.assertEqual(payload.get("ingest_metadata", {}).get("applied_tags"), 2)
+        self.assertEqual(payload.get("ingest_metadata", {}).get("applied_tags"), 4)
 
         with Db(self.db_path) as db:
             ensure_schema(db)
             title = db.query_value("select title from assets where id='photo-meta-1'")
         self.assertEqual(str(title), "Mudroom Concept")
-        self.assertEqual(self._labels_for_asset("photo-meta-1"), ["mudroom", "storage"])
+        self.assertCountEqual(
+            self._labels_for_asset("photo-meta-1"),
+            [f"ingested_at:{imported_at}", "actor:unknown", "mudroom", "storage"],
+        )
+
+    def test_scan_upload_auto_actor_tag_uses_authenticated_actor_name(self):
+        imported_at = "2026-03-02T15:46:30+00:00"
+        self._insert_asset(
+            asset_id="scan-meta-actor-1",
+            source="scan",
+            source_ref="scan://bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb#p1",
+            title="Old Batch - doc 3 p1",
+            imported_at=imported_at,
+        )
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-ingest-1", "Jim", "owner-ingest-token-1", "owner"),
+            )
+
+        boundary = "----insp-scan-meta-actor-boundary"
+        pdf_data = b"%PDF-1.4\nmock\n%%EOF\n"
+        body = (
+            (
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="file"; filename="batch.pdf"\r\n'
+                "Content-Type: application/pdf\r\n\r\n"
+            ).encode("utf-8")
+            + pdf_data
+            + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        )
+        fake_import = {
+            "source": "scan",
+            "imported_at": imported_at,
+            "created_assets": 1,
+            "delimiter_pages_skipped": 0,
+            "detected_documents": 1,
+            "errors": [],
+        }
+        fake_thumbs = {"tool": "sips", "attempted": 1, "generated": 1, "errors": []}
+        with (
+            mock.patch("inspirations.server.import_scans_inbox", return_value=fake_import),
+            mock.patch("inspirations.server.generate_thumbnails", return_value=fake_thumbs),
+        ):
+            status, payload = self._request(
+                "/api/import/scans",
+                method="POST",
+                raw_data=body,
+                headers={
+                    "Content-Type": f"multipart/form-data; boundary={boundary}",
+                    "X-Actor-Token": "owner-ingest-token-1",
+                },
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload.get("options", {}).get("auto_tags"), ["actor:Jim", f"ingested_at:{imported_at}"])
+        self.assertEqual(payload.get("ingest_metadata", {}).get("applied_tags"), 2)
+        self.assertCountEqual(
+            self._labels_for_asset("scan-meta-actor-1"),
+            ["actor:Jim", f"ingested_at:{imported_at}"],
+        )
 
     def test_video_upload_applies_title_and_tags_to_import_batch(self):
         imported_at = "2026-03-02T15:47:00+00:00"
@@ -1540,14 +1606,18 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload.get("options", {}).get("title"), "Pantry Walkthrough")
         self.assertEqual(payload.get("options", {}).get("tags"), ["pantry", "storage"])
+        self.assertEqual(payload.get("options", {}).get("auto_tags"), ["actor:unknown", f"ingested_at:{imported_at}"])
         self.assertEqual(payload.get("ingest_metadata", {}).get("updated_titles"), 1)
-        self.assertEqual(payload.get("ingest_metadata", {}).get("applied_tags"), 2)
+        self.assertEqual(payload.get("ingest_metadata", {}).get("applied_tags"), 4)
 
         with Db(self.db_path) as db:
             ensure_schema(db)
             title = db.query_value("select title from assets where id='video-meta-1'")
         self.assertEqual(str(title), "Pantry Walkthrough")
-        self.assertEqual(self._labels_for_asset("video-meta-1"), ["pantry", "storage"])
+        self.assertCountEqual(
+            self._labels_for_asset("video-meta-1"),
+            [f"ingested_at:{imported_at}", "actor:unknown", "pantry", "storage"],
+        )
 
 
 if __name__ == "__main__":

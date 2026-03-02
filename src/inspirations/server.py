@@ -121,9 +121,13 @@ def _json_body(handler: BaseHTTPRequestHandler) -> dict:
 
 
 def _parse_ingest_tags(raw: str) -> list[str]:
+    return _dedupe_ingest_tags(re.split(r"[,\n;]+", str(raw or "")))
+
+
+def _dedupe_ingest_tags(values: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
-    for chunk in re.split(r"[,\n;]+", str(raw or "")):
+    for chunk in values:
         tag = chunk.strip()
         if not tag:
             continue
@@ -133,6 +137,17 @@ def _parse_ingest_tags(raw: str) -> list[str]:
         seen.add(key)
         out.append(tag[:120])
     return out
+
+
+def _ingest_actor_tag(actor: dict | None) -> str:
+    raw_name = str((actor or {}).get("name") or "")
+    cleaned = re.sub(r"\s+", " ", raw_name).strip()
+    return f"actor:{cleaned or 'unknown'}"
+
+
+def _ingest_time_tag(imported_at: str) -> str:
+    stamp = str(imported_at or "").strip() or datetime.now(timezone.utc).isoformat()
+    return f"ingested_at:{stamp}"
 
 
 def _multipart_form(handler: BaseHTTPRequestHandler, *, max_body: int) -> tuple[dict[str, str], dict[str, dict[str, object]]]:
@@ -935,6 +950,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         use_form_parser = use_form_parser_raw in {"1", "true", "on", "yes"}
         title_override = str(fields.get("title") or "").strip()
         ingest_tags = _parse_ingest_tags(str(fields.get("tags") or ""))
+        actor = _resolve_actor(self)
 
         upload = files.get("file") or {}
         filename = str(upload.get("filename") or "").strip()
@@ -978,12 +994,18 @@ class ApiHandler(BaseHTTPRequestHandler):
                 limit=0,
                 tool="auto",
             )
+            imported_at = str(import_report.get("imported_at") or "")
+            auto_tags = [
+                _ingest_actor_tag(actor),
+                _ingest_time_tag(imported_at),
+            ]
             ingest_meta_report = self._with_db(
                 self._apply_ingest_metadata,
                 source="scan",
-                imported_at=str(import_report.get("imported_at") or ""),
+                imported_at=imported_at,
                 title=title_override,
                 tags=ingest_tags,
+                auto_tags=auto_tags,
             )
         except Exception as e:
             return _send(self, 500, {"error": f"scan import failed: {e}"})
@@ -1000,6 +1022,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     "use_form_parser": use_form_parser,
                     "title": title_override,
                     "tags": ingest_tags,
+                    "auto_tags": auto_tags,
                 },
                 "import": import_report,
                 "thumbs": thumbs_report,
@@ -1015,6 +1038,7 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         title_override = str(fields.get("title") or "").strip()
         ingest_tags = _parse_ingest_tags(str(fields.get("tags") or ""))
+        actor = _resolve_actor(self)
 
         upload = files.get("file") or {}
         filename = str(upload.get("filename") or "").strip()
@@ -1056,12 +1080,18 @@ class ApiHandler(BaseHTTPRequestHandler):
                 limit=0,
                 tool="auto",
             )
+            imported_at = str(import_report.get("imported_at") or "")
+            auto_tags = [
+                _ingest_actor_tag(actor),
+                _ingest_time_tag(imported_at),
+            ]
             ingest_meta_report = self._with_db(
                 self._apply_ingest_metadata,
                 source="scan",
-                imported_at=str(import_report.get("imported_at") or ""),
+                imported_at=imported_at,
                 title=title_override,
                 tags=ingest_tags,
+                auto_tags=auto_tags,
             )
         except Exception as e:
             return _send(self, 500, {"error": f"photo import failed: {e}"})
@@ -1078,6 +1108,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 "options": {
                     "title": title_override,
                     "tags": ingest_tags,
+                    "auto_tags": auto_tags,
                 },
                 "ingest_metadata": ingest_meta_report,
             },
@@ -1091,6 +1122,7 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         title_override = str(fields.get("title") or "").strip()
         ingest_tags = _parse_ingest_tags(str(fields.get("tags") or ""))
+        actor = _resolve_actor(self)
 
         upload = files.get("file") or {}
         filename = str(upload.get("filename") or "").strip()
@@ -1124,12 +1156,18 @@ class ApiHandler(BaseHTTPRequestHandler):
                 content_kind="video",
                 source_ref_scheme="clip-video",
             )
+            imported_at = str(import_report.get("imported_at") or "")
+            auto_tags = [
+                _ingest_actor_tag(actor),
+                _ingest_time_tag(imported_at),
+            ]
             ingest_meta_report = self._with_db(
                 self._apply_ingest_metadata,
                 source="scan",
-                imported_at=str(import_report.get("imported_at") or ""),
+                imported_at=imported_at,
                 title=title_override,
                 tags=ingest_tags,
+                auto_tags=auto_tags,
             )
         except Exception as e:
             return _send(self, 500, {"error": f"video import failed: {e}"})
@@ -1145,6 +1183,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 "options": {
                     "title": title_override,
                     "tags": ingest_tags,
+                    "auto_tags": auto_tags,
                 },
                 "ingest_metadata": ingest_meta_report,
             },
@@ -1329,10 +1368,11 @@ class ApiHandler(BaseHTTPRequestHandler):
         imported_at: str,
         title: str = "",
         tags: list[str] | None = None,
+        auto_tags: list[str] | None = None,
     ) -> dict[str, int]:
         src = str(source or "").strip()
         stamp = str(imported_at or "").strip()
-        tags = [t for t in (tags or []) if str(t or "").strip()]
+        tags = _dedupe_ingest_tags([*(tags or []), *(auto_tags or [])])
         if not src or not stamp or (not title and not tags):
             return {"updated_titles": 0, "applied_tags": 0}
 

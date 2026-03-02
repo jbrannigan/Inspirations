@@ -474,3 +474,35 @@ Approved outcomes:
 Sprint docs updated to reflect locked outcomes:
 - `docs/BUGFIX_SPRINT_BASELINE_2026-03-02.md`
 - `.claude/TODO.md`
+
+## Session Update (Mar 2, 2026 — JIM-1 Implemented: Ingest Taxonomy Chips + Auto Tags)
+
+Implemented `JIM-1` across frontend ingest UI and backend ingest metadata flow.
+
+Files changed:
+- `app/app.js`
+- `app/styles.css`
+- `src/inspirations/server.py`
+- `tests/test_server_api.py`
+- `.claude/TODO.md`
+
+Delivered:
+- Replaced flat ingest quick-picks with grouped Explorer-aligned chip sets in all three owner ingest modals (scan/photo/video):
+  - `source`, `rooms`, `styles`, `materials`, `types`, `colors`, `elements`
+- Upload requests now carry `X-Actor-Token` in multipart upload paths, matching JSON API auth behavior.
+- Backend ingest metadata now auto-applies tags on successful ingest batch metadata writes:
+  - `actor:<name|unknown>`
+  - `ingested_at:<iso8601>`
+- Auto + manual ingest tags are case-insensitively deduped before insertion into `asset_labels`.
+- Kept existing title override behavior:
+  - scan split-page doc suffix preservation remains intact.
+
+Test coverage updates:
+- Updated ingest metadata tests to assert auto-tag persistence for scan/photo/video batch flows.
+- Added authenticated actor regression test:
+  - verifies `actor:<resolved-name>` when `X-Actor-Token` is present.
+
+Validation:
+- `python3 tools/run_bugfix_suite.py` → PASS
+  - lint: PASS
+  - full unit discover: PASS (`213` tests)

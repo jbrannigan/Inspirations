@@ -131,6 +131,11 @@ Planned workflow:
    - Execute P1 blockers first, then P2 UX regressions, then P3 polish.
    - Decision-locked implementation tasks:
      - `JIM-1`: ingest chips align to Explorer groups + auto-tags (`actor`, `ingested_at`).
+       - Implemented (Mar 2, 2026):
+         - Add Media scan/photo/video modals now render grouped taxonomy chips for `source`, `rooms`, `styles`, `materials`, `types`, `colors`, `elements`.
+         - Upload requests now include actor token header so ingest endpoints can resolve authenticated actor.
+         - Backend ingest metadata now auto-applies `actor:<name|unknown>` and `ingested_at:<iso8601>` tags with case-insensitive dedupe.
+         - Regression coverage added for unknown actor + authenticated actor auto-tag behavior.
      - `JIM-2`: expose `Clip > Scan/Photo/Video` subtype branches in tree/filter UX.
      - `JIM-3`: preserve scan doc/page suffix behavior on title override (already aligned; keep regression coverage).
      - `JIM-4`: add video poster generation in ingest/display pipeline.
