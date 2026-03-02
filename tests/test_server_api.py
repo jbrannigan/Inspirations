@@ -1307,8 +1307,50 @@ class TestServerApi(unittest.TestCase):
         self.assertTrue(mocked_thumbs.called)
         import_kwargs = mocked_import.call_args.kwargs
         self.assertEqual(import_kwargs.get("limit"), 0)
+        self.assertEqual(import_kwargs.get("source"), "scan")
+        self.assertEqual(import_kwargs.get("content_kind"), "photo")
         thumbs_kwargs = mocked_thumbs.call_args.kwargs
-        self.assertEqual(thumbs_kwargs.get("source"), "photo")
+        self.assertEqual(thumbs_kwargs.get("source"), "scan")
+
+    def test_video_upload_runs_import(self):
+        boundary = "----insp-video-boundary"
+        mp4_data = b"\x00\x00\x00\x18ftypmp42mock"
+        body = (
+            (
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="file"; filename="walkthrough.mp4"\r\n'
+                "Content-Type: video/mp4\r\n\r\n"
+            ).encode("utf-8")
+            + mp4_data
+            + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        )
+        fake_import = {
+            "source": "scan",
+            "created_assets": 1,
+            "errors": [],
+        }
+        with mock.patch("inspirations.server.import_videos_inbox", return_value=fake_import) as mocked_import:
+            status, payload = self._request(
+                "/api/import/videos",
+                method="POST",
+                raw_data=body,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload.get("ok"))
+        self.assertEqual(payload.get("upload_size_bytes"), len(mp4_data))
+        self.assertEqual(payload.get("import", {}).get("created_assets"), 1)
+
+        uploaded_file = Path(payload.get("uploaded_file", ""))
+        self.assertTrue(uploaded_file.exists())
+        self.assertIn("/imports/videos/inbox/uploads/", str(uploaded_file).replace("\\", "/"))
+
+        self.assertTrue(mocked_import.called)
+        import_kwargs = mocked_import.call_args.kwargs
+        self.assertEqual(import_kwargs.get("limit"), 0)
+        self.assertEqual(import_kwargs.get("source"), "scan")
+        self.assertEqual(import_kwargs.get("content_kind"), "video")
 
 
 if __name__ == "__main__":

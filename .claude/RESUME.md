@@ -392,3 +392,38 @@ Implemented:
 
 Scope note:
 - Phone-specific concerns remain deferred; this IA work targets iPad + desktop flows.
+
+## Session Update (Mar 2, 2026 — Sprint 1 Agenda: Add Media + Ingest Metadata)
+
+Files changed:
+- `app/index.html`
+- `app/styles.css`
+- `app/app.js`
+- `src/inspirations/importers/scans.py`
+- `src/inspirations/server.py`
+- `tests/test_scans_import.py`
+- `tests/test_server_api.py`
+- `.claude/TODO.md`
+- `docs/SPRINT1_AGENDA_NEXT.md`
+
+Implemented:
+- Replaced separate owner header actions (`Add Clip`, `Add Photos`) with one `Add Media` action.
+- Added a unified media chooser and wired three upload flows:
+  - Clip PDF upload (`/api/import/scans`)
+  - Photo upload (`/api/import/photos`)
+  - Video upload (`/api/import/videos`)
+- Per latest product direction, all three ingest flows are stored under Clip source (`source='scan'`) while preserving subtype with `content_kind` (`scan` / `photo` / `video`).
+- Added optional ingest metadata on all three flows:
+  - `Title` input
+  - `Tags` input
+  - Clickable quick-pick tag chips sourced from existing label facets (`/api/facets` labels)
+- Backend now applies ingest metadata to newly created assets from each upload batch:
+  - Updates title on newly imported assets (scan doc suffix preserved for PDF split pages).
+  - Inserts user-selected tags into `asset_labels` (`source='owner-upload'`).
+- Added video-safe rendering updates in UI:
+  - Grid cards render video assets with `<video>` element.
+  - Detail modal supports video playback via `#modalVideo`.
+
+Validation:
+- `PYTHONPATH=src python3 -m unittest -q tests.test_scans_import tests.test_server_api` (pass, 47 tests).
+- `python3 -m py_compile src/inspirations/server.py src/inspirations/importers/scans.py` (pass).

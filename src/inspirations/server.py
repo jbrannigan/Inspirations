@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlparse
 from .ai import DEFAULT_GEMINI_EMBEDDING_MODEL, run_similarity_search
 from .chat import process_chat_message
 from .db import Db, ensure_schema
-from .importers.scans import import_photos_inbox, import_scans_inbox
+from .importers.scans import import_photos_inbox, import_scans_inbox, import_videos_inbox
 from .store import (
     add_items_to_collection,
     bulk_set_flag,
@@ -68,6 +68,8 @@ MAX_BODY = 2_000_000
 MAX_UPLOAD_BODY = 350_000_000
 DEFAULT_ASSETS_PAGE_SIZE = 240
 MAX_SCAN_DOC_GROUP_PAGES = 6
+VIDEO_UPLOAD_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".mpeg", ".mpg", ".wmv", ".3gp"}
+SCAN_DOC_TITLE_SUFFIX_RE = re.compile(r"(\s-\sdoc\s+\d+(?:\s+p\d+)?)\s*$", re.IGNORECASE)
 
 # ── API key helpers ──────────────────────────────────────────────────────────────
 
@@ -115,6 +117,21 @@ def _json_body(handler: BaseHTTPRequestHandler) -> dict:
         raise ValueError("Body too large")
     raw = handler.rfile.read(length) if length else b"{}"
     return json.loads(raw.decode("utf-8") or "{}")
+
+
+def _parse_ingest_tags(raw: str) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for chunk in re.split(r"[,\n;]+", str(raw or "")):
+        tag = chunk.strip()
+        if not tag:
+            continue
+        key = tag.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(tag[:120])
+    return out
 
 
 def _multipart_form(handler: BaseHTTPRequestHandler, *, max_body: int) -> tuple[dict[str, str], dict[str, dict[str, object]]]:
@@ -594,6 +611,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             return self._handle_scan_pdf_upload()
         if parsed.path == "/api/import/photos":
             return self._handle_photo_upload()
+        if parsed.path == "/api/import/videos":
+            return self._handle_video_upload()
         try:
             body = _json_body(self)
         except Exception as e:
@@ -913,6 +932,8 @@ class ApiHandler(BaseHTTPRequestHandler):
         split_on_delimiters = split_on_delimiters_raw not in {"0", "false", "off", "no"}
         use_form_parser_raw = str(fields.get("use_form_parser") or "0").strip().lower()
         use_form_parser = use_form_parser_raw in {"1", "true", "on", "yes"}
+        title_override = str(fields.get("title") or "").strip()
+        ingest_tags = _parse_ingest_tags(str(fields.get("tags") or ""))
 
         upload = files.get("file") or {}
         filename = str(upload.get("filename") or "").strip()
@@ -956,6 +977,13 @@ class ApiHandler(BaseHTTPRequestHandler):
                 limit=0,
                 tool="auto",
             )
+            ingest_meta_report = self._with_db(
+                self._apply_ingest_metadata,
+                source="scan",
+                imported_at=str(import_report.get("imported_at") or ""),
+                title=title_override,
+                tags=ingest_tags,
+            )
         except Exception as e:
             return _send(self, 500, {"error": f"scan import failed: {e}"})
 
@@ -969,17 +997,23 @@ class ApiHandler(BaseHTTPRequestHandler):
                 "options": {
                     "split_on_delimiters": split_on_delimiters,
                     "use_form_parser": use_form_parser,
+                    "title": title_override,
+                    "tags": ingest_tags,
                 },
                 "import": import_report,
                 "thumbs": thumbs_report,
+                "ingest_metadata": ingest_meta_report,
             },
         )
 
     def _handle_photo_upload(self) -> None:
         try:
-            _fields, files = _multipart_form(self, max_body=MAX_UPLOAD_BODY)
+            fields, files = _multipart_form(self, max_body=MAX_UPLOAD_BODY)
         except Exception as e:
             return _send(self, 400, {"error": str(e)})
+
+        title_override = str(fields.get("title") or "").strip()
+        ingest_tags = _parse_ingest_tags(str(fields.get("tags") or ""))
 
         upload = files.get("file") or {}
         filename = str(upload.get("filename") or "").strip()
@@ -1009,14 +1043,24 @@ class ApiHandler(BaseHTTPRequestHandler):
                 inbox_dir=batch_dir,
                 store_dir=Path(self.server.store_dir).resolve(),
                 limit=0,
+                source="scan",
+                content_kind="photo",
+                source_ref_scheme="clip-photo",
             )
             thumbs_report = self._with_db(
                 generate_thumbnails,
                 store_dir=Path(self.server.store_dir).resolve(),
-                source="photo",
+                source="scan",
                 size=512,
                 limit=0,
                 tool="auto",
+            )
+            ingest_meta_report = self._with_db(
+                self._apply_ingest_metadata,
+                source="scan",
+                imported_at=str(import_report.get("imported_at") or ""),
+                title=title_override,
+                tags=ingest_tags,
             )
         except Exception as e:
             return _send(self, 500, {"error": f"photo import failed: {e}"})
@@ -1030,6 +1074,78 @@ class ApiHandler(BaseHTTPRequestHandler):
                 "upload_size_bytes": len(data),
                 "import": import_report,
                 "thumbs": thumbs_report,
+                "options": {
+                    "title": title_override,
+                    "tags": ingest_tags,
+                },
+                "ingest_metadata": ingest_meta_report,
+            },
+        )
+
+    def _handle_video_upload(self) -> None:
+        try:
+            fields, files = _multipart_form(self, max_body=MAX_UPLOAD_BODY)
+        except Exception as e:
+            return _send(self, 400, {"error": str(e)})
+
+        title_override = str(fields.get("title") or "").strip()
+        ingest_tags = _parse_ingest_tags(str(fields.get("tags") or ""))
+
+        upload = files.get("file") or {}
+        filename = str(upload.get("filename") or "").strip()
+        data = upload.get("data") or b""
+        if not filename:
+            return _send(self, 400, {"error": "file required"})
+        ext = Path(filename).suffix.lower()
+        if ext not in VIDEO_UPLOAD_EXTS:
+            return _send(self, 400, {"error": "file must be a supported video"})
+        if not isinstance(data, (bytes, bytearray)) or not data:
+            return _send(self, 400, {"error": "uploaded file is empty"})
+
+        cleaned_name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename).name).strip("._")
+        if not cleaned_name:
+            cleaned_name = f"video_upload{ext or '.mp4'}"
+
+        uploads_root = self._imports_root() / "videos" / "inbox" / "uploads"
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+        batch_dir = uploads_root / f"{stamp}-{secrets.token_hex(4)}"
+        batch_dir.mkdir(parents=True, exist_ok=True)
+        uploaded_path = batch_dir / cleaned_name
+        uploaded_path.write_bytes(bytes(data))
+
+        try:
+            import_report = self._with_db(
+                import_videos_inbox,
+                inbox_dir=batch_dir,
+                store_dir=Path(self.server.store_dir).resolve(),
+                limit=0,
+                source="scan",
+                content_kind="video",
+                source_ref_scheme="clip-video",
+            )
+            ingest_meta_report = self._with_db(
+                self._apply_ingest_metadata,
+                source="scan",
+                imported_at=str(import_report.get("imported_at") or ""),
+                title=title_override,
+                tags=ingest_tags,
+            )
+        except Exception as e:
+            return _send(self, 500, {"error": f"video import failed: {e}"})
+
+        return _send(
+            self,
+            200,
+            {
+                "ok": True,
+                "uploaded_file": str(uploaded_path),
+                "upload_size_bytes": len(data),
+                "import": import_report,
+                "options": {
+                    "title": title_override,
+                    "tags": ingest_tags,
+                },
+                "ingest_metadata": ingest_meta_report,
             },
         )
 
@@ -1203,6 +1319,76 @@ class ApiHandler(BaseHTTPRequestHandler):
         with Db(self.server.db_path) as db:
             ensure_schema(db)
             return fn(db, **kwargs)
+
+    def _apply_ingest_metadata(
+        self,
+        db: Db,
+        *,
+        source: str,
+        imported_at: str,
+        title: str = "",
+        tags: list[str] | None = None,
+    ) -> dict[str, int]:
+        src = str(source or "").strip()
+        stamp = str(imported_at or "").strip()
+        tags = [t for t in (tags or []) if str(t or "").strip()]
+        if not src or not stamp or (not title and not tags):
+            return {"updated_titles": 0, "applied_tags": 0}
+
+        rows = db.query(
+            "select id, source_ref, title from assets where source=? and imported_at=?",
+            (src, stamp),
+        )
+        if not rows:
+            return {"updated_titles": 0, "applied_tags": 0}
+
+        updated_titles = 0
+        if title:
+            updates: list[tuple[str, str]] = []
+            for row in rows:
+                current_title = str(row["title"] or "").strip()
+                source_ref = str(row["source_ref"] or "").strip()
+                next_title = title
+                m = SCAN_DOC_TITLE_SUFFIX_RE.search(current_title)
+                if source_ref.startswith("scan://") and "#p" in source_ref and m:
+                    next_title = f"{title}{m.group(1)}"
+                if next_title != current_title:
+                    updates.append((next_title, str(row["id"])))
+            if updates:
+                db.executemany("update assets set title=? where id=?", updates)
+                updated_titles = len(updates)
+
+        applied_tags = 0
+        if tags:
+            now = datetime.now(timezone.utc).isoformat()
+            label_rows: list[tuple[str, str, str, float, str, str | None, str | None, str]] = []
+            for row in rows:
+                asset_id = str(row["id"])
+                for tag in tags:
+                    label_rows.append(
+                        (
+                            str(uuid.uuid4()),
+                            asset_id,
+                            tag,
+                            1.0,
+                            "owner-upload",
+                            None,
+                            None,
+                            now,
+                        )
+                    )
+            if label_rows:
+                db.executemany(
+                    """
+                    insert or ignore into asset_labels
+                      (id, asset_id, label, confidence, source, model, run_id, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    label_rows,
+                )
+                applied_tags = len(label_rows)
+
+        return {"updated_titles": updated_titles, "applied_tags": applied_tags}
 
     def _resolve_context_link(
         self,

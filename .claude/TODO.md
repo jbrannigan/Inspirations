@@ -66,10 +66,15 @@ removes duplicate entries (Dave multiline/follow-up appeared twice).
    - Added regression coverage in `tests/test_server_api.py` for both generic and catalog include-hidden endpoints.
 5. **[ ] Harmonize Inspirations IA with new Home websites**
    - Align naming, flow, and shared IA conventions across properties.
-6. **[ ] Upgrade `Add Scan` / `Add Clip` to unified `Add Media` intake**
+6. **[x] Upgrade `Add Scan` / `Add Clip` to unified `Add Media` intake**
    - Single owner entry point for media ingestion (`Add Media`).
    - Include photos and video upload/import paths in the same flow (not scan-only).
    - Keep current scan ingest capability while expanding to multi-media support.
+   - Implemented (Mar 2, 2026):
+     - Replaced separate header actions with one owner-facing `Add Media` launcher.
+     - Added upload paths for clip PDF, photo, and video in one flow.
+     - Per user direction, all three ingest paths now land in the `Clip` (`source='scan'`) bucket while preserving media subtype (`content_kind` = `scan` / `photo` / `video`).
+     - Added optional ingest metadata fields (`Title`, `Tags`) with quick-pick chips from existing system label facets.
    - Active scope/acceptance doc: `docs/SPRINT1_AGENDA_NEXT.md`
 
 #### Sprint 2 — P1 Dave conversation upgrade

@@ -28,3 +28,11 @@ Keep momentum on planned Sprint 1 scope, then execute a dedicated stabilization 
 2. Single owner-facing `Add Media` entry is implemented and usable.
 3. Existing clip/photo import paths remain functional.
 4. PR notes include clear “agenda complete” handoff into bug-fix sprint.
+
+## Status Update (Mar 2, 2026)
+
+- `Add Media` agenda item is implemented:
+  - One owner header entry opens clip/photo/video import choices.
+  - Clip/photo/video uploads are supported.
+  - Ingest prompts now include optional `Title` + `Tags` with clickable system label chips.
+  - Per current product direction, all three ingest paths are stored under the Clip source bucket.

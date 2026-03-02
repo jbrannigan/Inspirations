@@ -16,6 +16,7 @@ from ..db import Db
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".heif", ".tif", ".tiff"}
+VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".mpeg", ".mpg", ".wmv", ".3gp"}
 _WS_BYTES = b" \t\r\n"
 _PAGE_NUM_RE = re.compile(r"-(\d+)\.[^.]+$")
 
@@ -412,6 +413,7 @@ def import_scans_inbox(
     return {
         "source": "scan",
         "inbox": str(inbox),
+        "imported_at": imported_at,
         "parsed_files": seen_files,
         "created_assets": created,
         "skipped_files": skipped,
@@ -432,6 +434,9 @@ def import_photos_inbox(
     store_dir: Path,
     *,
     limit: int = 0,
+    source: str = "photo",
+    content_kind: str = "photo",
+    source_ref_scheme: str = "photo",
 ) -> dict[str, Any]:
     inbox = inbox_dir.expanduser().resolve()
     store = store_dir.expanduser().resolve()
@@ -446,7 +451,7 @@ def import_photos_inbox(
     errors: list[dict[str, str]] = []
     imported_at = _now_iso()
 
-    existing_refs = {str(r["source_ref"]) for r in db.query("select source_ref from assets where source='photo'")}
+    existing_refs = {str(r["source_ref"]) for r in db.query("select source_ref from assets where source=?", (source,))}
     pending_refs: set[str] = set()
     rows: list[tuple[Any, ...]] = []
     for path in sorted(inbox.rglob("*")):
@@ -462,7 +467,7 @@ def import_photos_inbox(
             continue
         try:
             sha = _sha256_file(path)
-            source_ref = f"photo://{sha}"
+            source_ref = f"{source_ref_scheme}://{sha}"
             if source_ref in existing_refs or source_ref in pending_refs:
                 duplicates_skipped += 1
                 skipped += 1
@@ -476,7 +481,7 @@ def import_photos_inbox(
             rows.append(
                 (
                     str(uuid.uuid4()),
-                    "photo",
+                    source,
                     source_ref,
                     path.stem,
                     None,
@@ -487,7 +492,7 @@ def import_photos_inbox(
                     str(out_path),
                     sha,
                     "image",
-                    "photo",
+                    content_kind,
                 )
             )
         except Exception as e:
@@ -506,15 +511,120 @@ def import_photos_inbox(
     )
     created = int(
         db.query_value(
-            "select count(*) from assets where source='photo' and imported_at=?",
-            (imported_at,),
+            "select count(*) from assets where source=? and imported_at=?",
+            (source, imported_at),
         )
         or 0
     )
 
     return {
-        "source": "photo",
+        "source": source,
         "inbox": str(inbox),
+        "imported_at": imported_at,
+        "parsed_files": seen_files,
+        "created_assets": created,
+        "skipped_files": skipped,
+        "duplicates_skipped": duplicates_skipped,
+        "unsupported_files": unsupported_files,
+        "errors": errors[:25],
+        "note": "Errors are truncated to 25 in output.",
+    }
+
+
+def import_videos_inbox(
+    db: Db,
+    inbox_dir: Path,
+    store_dir: Path,
+    *,
+    limit: int = 0,
+    source: str = "video",
+    content_kind: str = "video",
+    source_ref_scheme: str = "video",
+) -> dict[str, Any]:
+    inbox = inbox_dir.expanduser().resolve()
+    store = store_dir.expanduser().resolve()
+    if not inbox.exists():
+        raise FileNotFoundError(f"Inbox not found: {inbox}")
+    store.mkdir(parents=True, exist_ok=True)
+
+    seen_files = 0
+    skipped = 0
+    duplicates_skipped = 0
+    unsupported_files = 0
+    errors: list[dict[str, str]] = []
+    imported_at = _now_iso()
+
+    existing_refs = {str(r["source_ref"]) for r in db.query("select source_ref from assets where source=?", (source,))}
+    pending_refs: set[str] = set()
+    rows: list[tuple[Any, ...]] = []
+    for path in sorted(inbox.rglob("*")):
+        if limit and seen_files >= limit:
+            break
+        if not path.is_file():
+            continue
+        seen_files += 1
+        suffix = path.suffix.lower()
+        if suffix not in VIDEO_EXTS:
+            unsupported_files += 1
+            skipped += 1
+            continue
+        try:
+            sha = _sha256_file(path)
+            source_ref = f"{source_ref_scheme}://{sha}"
+            if source_ref in existing_refs or source_ref in pending_refs:
+                duplicates_skipped += 1
+                skipped += 1
+                continue
+            dest = store / "originals" / "video"
+            dest.mkdir(parents=True, exist_ok=True)
+            out_path = dest / f"{sha}{suffix}"
+            if not out_path.exists():
+                shutil.copy2(path, out_path)
+            pending_refs.add(source_ref)
+            rows.append(
+                (
+                    str(uuid.uuid4()),
+                    source,
+                    source_ref,
+                    path.stem,
+                    None,
+                    None,
+                    None,
+                    imported_at,
+                    None,
+                    str(out_path),
+                    sha,
+                    "video",
+                    content_kind,
+                    str(out_path),
+                )
+            )
+        except Exception as e:
+            errors.append({"file": str(path), "error": str(e)})
+
+    db.executemany(
+        """
+        insert or ignore into assets
+          (
+            id, source, source_ref, title, description, board, created_at, imported_at, image_url,
+            stored_path, sha256, media_status, content_kind, stored_video_path
+          )
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """,
+        rows,
+    )
+    created = int(
+        db.query_value(
+            "select count(*) from assets where source=? and imported_at=?",
+            (source, imported_at),
+        )
+        or 0
+    )
+
+    return {
+        "source": source,
+        "inbox": str(inbox),
+        "imported_at": imported_at,
         "parsed_files": seen_files,
         "created_assets": created,
         "skipped_files": skipped,

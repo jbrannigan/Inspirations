@@ -97,8 +97,7 @@
             </button>
           </div>
           <button id="reviewBtn" class="review-launch-btn" type="button">Review</button>
-          <button id="addScanPdf" class="header-btn" type="button">Add Clip</button>
-          <button id="addPhotos" class="header-btn" type="button">Add Photos</button>
+          <button id="addMedia" class="header-btn" type="button">Add Media</button>
           <a href="/app/admin.html" class="header-btn adminLink">Admin</a>
         </div>
       <!-- Canvas review action bar (inside header so it sticks with topbar) -->
@@ -285,6 +284,7 @@
         <div class="modalBody">
           <div class="imageStage" id="imageStage">
             <img id="modalImage" alt="" />
+            <video id="modalVideo" controls playsinline preload="metadata" hidden></video>
             <div id="floatingNote" class="floatingNote hidden">
               <textarea id="floatingText" placeholder="Type note…"></textarea>
             </div>
@@ -314,6 +314,33 @@
       </div>
     </div>
 
+    <!-- Add media modal -->
+    <div id="mediaImportModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="mediaImportTitle">
+      <div class="modalContent scanImportContent">
+        <div class="modalHeader">
+          <div>
+            <div id="mediaImportTitle" class="modalTitle">Add Media</div>
+            <div class="muted">Choose what you want to upload.</div>
+          </div>
+          <button id="closeMediaImport" type="button">Close</button>
+        </div>
+        <div class="scanImportBody mediaTypeGrid">
+          <button id="openClipImport" class="mediaTypeBtn" type="button">
+            <span class="mediaTypeTitle">Clip PDF</span>
+            <span class="mediaTypeHint">Upload a clip PDF and split pages into items.</span>
+          </button>
+          <button id="openPhotoImport" class="mediaTypeBtn" type="button">
+            <span class="mediaTypeTitle">Photo</span>
+            <span class="mediaTypeHint">Upload an image file.</span>
+          </button>
+          <button id="openVideoImport" class="mediaTypeBtn" type="button">
+            <span class="mediaTypeTitle">Video</span>
+            <span class="mediaTypeHint">Upload one video file.</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Scan import modal -->
     <div id="scanImportModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="scanImportTitle">
       <div class="modalContent scanImportContent">
@@ -330,6 +357,15 @@
             <span class="fileDropHint">Single-file import (PDF only).</span>
             <input id="scanPdfInput" type="file" accept=".pdf,application/pdf" />
           </label>
+          <label class="ingestMetaField">
+            <span class="ingestMetaLabel">Title (optional)</span>
+            <input id="scanImportTitleInput" type="text" placeholder="Example: Kitchen ideas" />
+          </label>
+          <label class="ingestMetaField">
+            <span class="ingestMetaLabel">Tags (optional)</span>
+            <input id="scanImportTagsInput" type="text" placeholder="kitchen, wood, lighting" />
+          </label>
+          <div id="scanImportTagChips" class="ingestTagChips"></div>
           <label class="scanOptionRow">
             <input id="scanDetectDelimiters" type="checkbox" checked />
             <span>Split into separate clip documents when blank separator pages are detected</span>
@@ -341,6 +377,39 @@
           <div class="scanImportActions">
             <button id="cancelScanImport" type="button">Cancel</button>
             <button id="runScanImport" type="button" class="primary-btn" disabled>Import</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Video import modal -->
+    <div id="videoImportModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="videoImportTitle">
+      <div class="modalContent scanImportContent">
+        <div class="modalHeader">
+          <div>
+            <div id="videoImportTitle" class="modalTitle">Import Video</div>
+            <div class="muted">Upload one video to add it to your inspirations library.</div>
+          </div>
+          <button id="closeVideoImport" type="button">Close</button>
+        </div>
+        <div class="scanImportBody">
+          <label id="videoDropZone" class="fileDropZone" for="videoInput">
+            <span class="fileDropTitle">Drop a video here, or click to choose a file</span>
+            <span class="fileDropHint">Single-file import (mp4, mov, webm, m4v, mkv, avi).</span>
+            <input id="videoInput" type="file" accept="video/*,.mp4,.mov,.m4v,.webm,.mkv,.avi,.mpeg,.mpg,.wmv,.3gp" />
+          </label>
+          <label class="ingestMetaField">
+            <span class="ingestMetaLabel">Title (optional)</span>
+            <input id="videoImportTitleInput" type="text" placeholder="Example: Pantry walkthrough" />
+          </label>
+          <label class="ingestMetaField">
+            <span class="ingestMetaLabel">Tags (optional)</span>
+            <input id="videoImportTagsInput" type="text" placeholder="pantry, walkthrough, storage" />
+          </label>
+          <div id="videoImportTagChips" class="ingestTagChips"></div>
+          <div class="scanImportActions">
+            <button id="cancelVideoImport" type="button">Cancel</button>
+            <button id="runVideoImport" type="button" class="primary-btn" disabled>Import</button>
           </div>
         </div>
       </div>
@@ -362,6 +431,15 @@
             <span class="fileDropHint">Single-file import (image formats).</span>
             <input id="photoInput" type="file" accept="image/*,.jpg,.jpeg,.png,.webp,.gif,.bmp,.heic,.heif,.tif,.tiff" />
           </label>
+          <label class="ingestMetaField">
+            <span class="ingestMetaLabel">Title (optional)</span>
+            <input id="photoImportTitleInput" type="text" placeholder="Example: Mudroom storage wall" />
+          </label>
+          <label class="ingestMetaField">
+            <span class="ingestMetaLabel">Tags (optional)</span>
+            <input id="photoImportTagsInput" type="text" placeholder="storage, mudroom, cabinetry" />
+          </label>
+          <div id="photoImportTagChips" class="ingestTagChips"></div>
           <div class="scanImportActions">
             <button id="cancelPhotoImport" type="button">Cancel</button>
             <button id="runPhotoImport" type="button" class="primary-btn" disabled>Import</button>
@@ -375,6 +453,6 @@
     <script src="/app/shared.js?v=1"></script>
     <script src="/app/explorer.js?v=1"></script>
     <script src="/app/attractor-explorer.js?v=1"></script>
-    <script src="/app/app.js?v=16"></script>
+    <script src="/app/app.js?v=17"></script>
   </body>
 </html>
