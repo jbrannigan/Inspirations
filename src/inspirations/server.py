@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import gzip
 import mimetypes
 import os
 import re
@@ -10,10 +11,10 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.parser import BytesParser
 from email.policy import default as email_policy_default
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -51,6 +52,7 @@ from .store import (
     create_collection_from_tray,
     remove_item_from_collection,
     remove_items_from_collection,
+    rollback_triage_since,
     set_collection_order,
     set_triage_status,
     triage_stats,
@@ -65,6 +67,7 @@ from .thumbnails import generate_thumbnails
 MAX_BODY = 2_000_000
 MAX_UPLOAD_BODY = 350_000_000
 DEFAULT_ASSETS_PAGE_SIZE = 240
+MAX_SCAN_DOC_GROUP_PAGES = 6
 
 # ── API key helpers ──────────────────────────────────────────────────────────────
 
@@ -149,14 +152,21 @@ def _multipart_form(handler: BaseHTTPRequestHandler, *, max_body: int) -> tuple[
 
 
 def _send(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
-    data = json.dumps(payload).encode("utf-8")
+    raw = json.dumps(payload).encode("utf-8")
+    wants_gzip = "gzip" in (handler.headers.get("Accept-Encoding") or "").lower()
+    use_gzip = wants_gzip and len(raw) >= 1024
+    data = gzip.compress(raw, compresslevel=6) if use_gzip else raw
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
     # API responses should always be fresh to avoid stale UI state.
     handler.send_header("Cache-Control", "no-store")
+    if use_gzip:
+        handler.send_header("Content-Encoding", "gzip")
+        handler.send_header("Vary", "Accept-Encoding")
     handler.send_header("Content-Length", str(len(data)))
     handler.end_headers()
-    handler.wfile.write(data)
+    if handler.command != "HEAD":
+        handler.wfile.write(data)
 
 
 def _resolve_actor(handler: BaseHTTPRequestHandler) -> dict | None:
@@ -175,26 +185,59 @@ def _resolve_actor(handler: BaseHTTPRequestHandler) -> dict | None:
 
 class ApiHandler(BaseHTTPRequestHandler):
     server_version = "Inspirations/0.1"
+    protocol_version = "HTTP/1.1"
 
-    def do_GET(self) -> None:
+    def do_HEAD(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path in ("/", "/index.html"):
-            return self._serve_file("index.html", "text/html")
+            return self._serve_file("index.html", "text/html", cache_control="no-cache")
         if parsed.path.startswith("/app/"):
             rel = parsed.path[len("/app/") :]
-            return self._serve_file(rel, _guess_mime(parsed.path))
+            cache_control = self._app_cache_control(rel=rel, query=parsed.query)
+            return self._serve_file(rel, _guess_mime(parsed.path), cache_control=cache_control)
         if parsed.path.startswith("/store/"):
             rel = parsed.path[len("/store/") :]
-            return self._serve_store_file(rel, _guess_mime(parsed.path))
+            return self._serve_store_file(rel, _guess_mime(parsed.path), cache_control="public, max-age=3600")
         if parsed.path == "/tools/cluster_explorer.html":
             tool = self._project_root() / "tools" / "cluster_explorer.html"
-            return self._serve_path(tool, "text/html")
+            return self._serve_path(tool, "text/html", cache_control="no-cache")
         m = re.match(r"^/media/([^/]+)$", parsed.path)
         if m:
             asset_id = m.group(1)
             q = parse_qs(parsed.query)
             kind = q.get("kind", ["thumb"])[0]
             return self._serve_media(asset_id, kind)
+        if parsed.path.startswith("/api/"):
+            # Reuse GET routing for API HEAD responses; _send omits body for HEAD.
+            return self.do_GET()
+        return self.send_error(404)
+
+    def do_GET(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path in ("/", "/index.html"):
+            return self._serve_file("index.html", "text/html", cache_control="no-cache")
+        if parsed.path.startswith("/app/"):
+            rel = parsed.path[len("/app/") :]
+            cache_control = self._app_cache_control(rel=rel, query=parsed.query)
+            return self._serve_file(rel, _guess_mime(parsed.path), cache_control=cache_control)
+        if parsed.path.startswith("/store/"):
+            rel = parsed.path[len("/store/") :]
+            return self._serve_store_file(rel, _guess_mime(parsed.path), cache_control="public, max-age=3600")
+        if parsed.path == "/tools/cluster_explorer.html":
+            tool = self._project_root() / "tools" / "cluster_explorer.html"
+            return self._serve_path(tool, "text/html", cache_control="no-cache")
+        m = re.match(r"^/media/([^/]+)$", parsed.path)
+        if m:
+            asset_id = m.group(1)
+            q = parse_qs(parsed.query)
+            kind = q.get("kind", ["thumb"])[0]
+            return self._serve_media(asset_id, kind)
+        if parsed.path == "/api/scan/doc-pdf":
+            q = parse_qs(parsed.query)
+            asset_id = (q.get("asset_id", [""])[0] or "").strip()
+            if not asset_id:
+                return _send(self, 400, {"error": "asset_id required"})
+            return self._serve_scan_doc_pdf(asset_id)
 
         if parsed.path == "/api/assets":
             q = parse_qs(parsed.query)
@@ -232,6 +275,21 @@ class ApiHandler(BaseHTTPRequestHandler):
             if has_more:
                 assets = assets[:page_limit]
             return _send(self, 200, {"assets": assets, "has_more": has_more, "total": total_count})
+
+        m = re.match(r"^/api/assets/([^/]+)$", parsed.path)
+        if m:
+            q = parse_qs(parsed.query)
+            include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
+            actor = _resolve_actor(self)
+            include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
+            asset = self._with_db(
+                self._get_asset_for_modal,
+                asset_id=m.group(1),
+                include_hidden=include_hidden,
+            )
+            if not asset:
+                return self.send_error(404)
+            return _send(self, 200, {"asset": asset})
 
         if parsed.path == "/api/asset-ids":
             q = parse_qs(parsed.query)
@@ -474,6 +532,23 @@ class ApiHandler(BaseHTTPRequestHandler):
             anns = self._with_db(list_annotations, asset_id=asset_id)
             return _send(self, 200, {"annotations": anns})
 
+        if parsed.path == "/api/context/resolve":
+            actor = _resolve_actor(self)
+            if not actor:
+                return _send(self, 401, {"error": "authentication required"})
+            q = parse_qs(parsed.query)
+            collection_id = (q.get("collection_id", [""])[0] or "").strip()
+            item_id = (q.get("item_id", [""])[0] or "").strip()
+            if not collection_id or not item_id:
+                return _send(self, 400, {"error": "collection_id and item_id required"})
+            report = self._with_db(
+                self._resolve_context_link,
+                collection_id=collection_id,
+                item_id=item_id,
+                actor_role=str(actor.get("role") or ""),
+            )
+            return _send(self, 200, report)
+
         if parsed.path == "/api/me":
             actor = _resolve_actor(self)
             return _send(self, 200, {"actor": actor})
@@ -631,6 +706,33 @@ class ApiHandler(BaseHTTPRequestHandler):
                 reason=reason or "bulk triage (UI)", actor=actor_name or "ui",
             )
             return _send(self, 200, {"updated": count})
+
+        if parsed.path == "/api/triage/rollback":
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner role required"})
+            since_iso = str(body.get("since_iso") or "").strip()
+            days_ago_raw = body.get("days_ago")
+            if not since_iso:
+                if days_ago_raw is None:
+                    return _send(self, 400, {"error": "since_iso or days_ago required"})
+                try:
+                    days_ago = int(days_ago_raw)
+                except Exception:
+                    return _send(self, 400, {"error": "days_ago must be integer"})
+                if days_ago < 0 or days_ago > 3650:
+                    return _send(self, 400, {"error": "days_ago must be between 0 and 3650"})
+                since_iso = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+
+            actor_name = str(actor.get("name") or "").strip() or "ui"
+            report = self._with_db(
+                rollback_triage_since,
+                since_iso=since_iso,
+                reason=body.get("reason", "") or f"owner rollback since {since_iso}",
+                actor=actor_name,
+            )
+            report["since_iso"] = since_iso
+            return _send(self, 200, report)
 
         if parsed.path == "/api/assets/flag/bulk":
             ids = body.get("ids") or []
@@ -934,12 +1036,23 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         m = re.match(r"^/api/annotations/([^/]+)$", parsed.path)
         if m:
+            actor = _resolve_actor(self)
+            if not actor:
+                return _send(self, 401, {"error": "authentication required"})
+            annotation_id = m.group(1)
+            ann = self._with_db(self._annotation_record, annotation_id=annotation_id)
+            if not ann:
+                return _send(self, 404, {"error": "annotation not found"})
             resolved = body.get("resolved")
             if resolved is not None:
+                if actor.get("role") != "owner":
+                    return _send(self, 403, {"error": "owner access required to resolve questions"})
                 resolved = int(resolved)
+            if not self._can_manage_annotation(actor=actor, annotation=ann):
+                return _send(self, 403, {"error": "not allowed to edit this annotation"})
             self._with_db(
                 update_annotation,
-                annotation_id=m.group(1),
+                annotation_id=annotation_id,
                 x=body.get("x"),
                 y=body.get("y"),
                 text=body.get("text"),
@@ -972,7 +1085,16 @@ class ApiHandler(BaseHTTPRequestHandler):
             return _send(self, 200, {"ok": True})
         m = re.match(r"^/api/annotations/([^/]+)$", parsed.path)
         if m:
-            self._with_db(delete_annotation, annotation_id=m.group(1))
+            actor = _resolve_actor(self)
+            if not actor:
+                return _send(self, 401, {"error": "authentication required"})
+            annotation_id = m.group(1)
+            ann = self._with_db(self._annotation_record, annotation_id=annotation_id)
+            if not ann:
+                return _send(self, 404, {"error": "annotation not found"})
+            if not self._can_manage_annotation(actor=actor, annotation=ann):
+                return _send(self, 403, {"error": "not allowed to delete this annotation"})
+            self._with_db(delete_annotation, annotation_id=annotation_id)
             return _send(self, 200, {"ok": True})
         m = re.match(r"^/api/actors/([^/]+)$", parsed.path)
         if m:
@@ -1069,6 +1191,101 @@ class ApiHandler(BaseHTTPRequestHandler):
         with Db(self.server.db_path) as db:
             ensure_schema(db)
             return fn(db, **kwargs)
+
+    def _resolve_context_link(
+        self,
+        db: Db,
+        *,
+        collection_id: str,
+        item_id: str,
+        actor_role: str,
+    ) -> dict:
+        collection_rows = db.query(
+            "select id, name from collections where id = ? limit 1",
+            (collection_id,),
+        )
+        if not collection_rows:
+            return {
+                "ok": True,
+                "found": False,
+                "collection_id": collection_id,
+                "item_id": item_id,
+                "reason": "collection_not_found",
+            }
+
+        collection_name = str(collection_rows[0]["name"] or "")
+        in_collection = db.query_value(
+            "select 1 from collection_items where collection_id = ? and asset_id = ? limit 1",
+            (collection_id, item_id),
+        )
+        if not in_collection:
+            return {
+                "ok": True,
+                "found": False,
+                "collection_id": collection_id,
+                "collection_name": collection_name,
+                "item_id": item_id,
+                "reason": "item_not_in_collection",
+            }
+
+        asset_rows = db.query(
+            "select id, coalesce(triage_status, '') as triage_status from assets where id = ? limit 1",
+            (item_id,),
+        )
+        if not asset_rows:
+            return {
+                "ok": True,
+                "found": False,
+                "collection_id": collection_id,
+                "collection_name": collection_name,
+                "item_id": item_id,
+                "reason": "item_missing",
+            }
+
+        triage_status = str(asset_rows[0]["triage_status"] or "")
+        is_hidden = triage_status == "hidden"
+        if is_hidden and str(actor_role or "").strip().lower() != "owner":
+            return {
+                "ok": True,
+                "found": False,
+                "collection_id": collection_id,
+                "collection_name": collection_name,
+                "item_id": item_id,
+                "reason": "item_hidden_for_role",
+            }
+
+        return {
+            "ok": True,
+            "found": True,
+            "collection_id": collection_id,
+            "collection_name": collection_name,
+            "item_id": item_id,
+            "item_hidden": bool(is_hidden),
+        }
+
+    def _annotation_record(self, db: Db, *, annotation_id: str) -> dict | None:
+        rows = db.query(
+            """
+            select id, asset_id, actor_id, actor_name, annotation_type, resolved
+            from annotations
+            where id = ?
+            limit 1
+            """,
+            (annotation_id,),
+        )
+        return dict(rows[0]) if rows else None
+
+    def _can_manage_annotation(self, *, actor: dict | None, annotation: dict | None) -> bool:
+        if not actor or not annotation:
+            return False
+        role = str(actor.get("role") or "").strip().lower()
+        if role == "owner":
+            return True
+        actor_id = str(actor.get("id") or "").strip()
+        ann_actor_id = str(annotation.get("actor_id") or "").strip()
+        if not actor_id or not ann_actor_id:
+            return False
+        return actor_id == ann_actor_id
 
     def _catalog_short_ids_for_files(self, catalog_dir: Path, file_params: list[str]) -> tuple[list[str], int | None, str | None]:
         """Resolve catalog files safely and return unique 8-char asset prefixes."""
@@ -1289,34 +1506,64 @@ class ApiHandler(BaseHTTPRequestHandler):
     def _project_root(self) -> Path:
         return Path(self.server.app_dir).resolve().parent
 
-    def _serve_path(self, target: Path, mime: str) -> None:
+    def _app_cache_control(self, *, rel: str, query: str) -> str:
+        rel_l = rel.lower()
+        if rel_l.endswith(".html"):
+            return "no-cache"
+        if rel_l.endswith((".js", ".mjs", ".css", ".svg", ".woff", ".woff2", ".ttf", ".otf")):
+            q = parse_qs(query)
+            if "v" in q:
+                return "public, max-age=31536000, immutable"
+            return "public, max-age=300"
+        return "public, max-age=3600"
+
+    def _can_gzip_mime(self, mime: str) -> bool:
+        m = (mime or "").split(";")[0].strip().lower()
+        return m.startswith("text/") or m in {
+            "application/javascript",
+            "application/json",
+            "application/xml",
+            "application/xhtml+xml",
+            "image/svg+xml",
+        }
+
+    def _serve_path(self, target: Path, mime: str, *, cache_control: str = "no-store") -> None:
         if not target.exists() or not target.is_file():
             return self.send_error(404)
-        data = target.read_bytes()
+        raw = target.read_bytes()
+        data = raw
+        wants_gzip = "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
+        use_gzip = wants_gzip and len(raw) >= 1024 and self._can_gzip_mime(mime)
+        if use_gzip:
+            data = gzip.compress(raw, compresslevel=6)
         self.send_response(200)
         self.send_header("Content-Type", mime)
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache_control)
+        if use_gzip:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
-        self.wfile.write(data)
+        if self.command != "HEAD":
+            self.wfile.write(data)
 
-    def _serve_file(self, rel: str, mime: str) -> None:
+    def _serve_file(self, rel: str, mime: str, *, cache_control: str = "no-store") -> None:
         base = Path(self.server.app_dir).resolve()
         target = (base / rel).resolve()
         try:
             target.relative_to(base)
         except ValueError:
             return self.send_error(403)
-        return self._serve_path(target, mime)
+        return self._serve_path(target, mime, cache_control=cache_control)
 
-    def _serve_store_file(self, rel: str, mime: str) -> None:
+    def _serve_store_file(self, rel: str, mime: str, *, cache_control: str = "no-store") -> None:
         base = Path(self.server.store_dir).resolve()
         target = (base / rel).resolve()
         try:
             target.relative_to(base)
         except ValueError:
             return self.send_error(403)
-        return self._serve_path(target, mime)
+        return self._serve_path(target, mime, cache_control=cache_control)
 
     def _export_cluster_review_payload(
         self,
@@ -1381,11 +1628,14 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return self.send_error(404)
             r = row[0]
             if kind == "pdf" and (r["source"] or "") == "scan":
-                m = re.match(r"scan://([a-f0-9]{64})", (r["source_ref"] or "").strip(), re.IGNORECASE)
-                if not m:
-                    return self.send_error(404)
-                sha = m.group(1).lower()
-                path = str(Path(self.server.store_dir) / "originals" / "scan" / f"{sha}.pdf")
+                # Prefer doc-scoped PDF (single/multi-page clip); fallback to source scan PDF.
+                try:
+                    path = str(self._ensure_scan_doc_pdf_path(db, asset_id))
+                except Exception:
+                    scan_pdf_path = self._scan_pdf_path_from_source_ref(r["source_ref"])
+                    if not (scan_pdf_path and scan_pdf_path.exists() and scan_pdf_path.is_file()):
+                        return self.send_error(404)
+                    path = str(scan_pdf_path)
             elif kind == "thumb":
                 path = r["thumb_path"]
             else:
@@ -1403,11 +1653,208 @@ class ApiHandler(BaseHTTPRequestHandler):
             data = target.read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", _guess_mime(str(target)))
+            # Media paths are content-addressed/stable per asset ID + kind.
+            self.send_header("Cache-Control", "public, max-age=604800")
             self.send_header("Content-Length", str(len(data)))
             if str(target).lower().endswith(".pdf"):
                 self.send_header("Content-Disposition", "inline")
             self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(data)
+
+    def _get_asset_for_modal(self, db: Db, *, asset_id: str, include_hidden: bool = False) -> dict | None:
+        rows = db.query(
+            """
+            select a.id, a.source, a.source_ref, a.title, a.description, a.board,
+                   a.created_at, a.imported_at, a.image_url, a.stored_path, a.thumb_path,
+                   a.triage_status, a.needs_annotation, a.source_url, a.seo_alt_text,
+                   a.post_text, a.hashtags, a.engagement_json, a.dominant_color,
+                   a.ai_summary, a.image_width, a.image_height, a.content_kind,
+                   a.creator_name, a.source_domain, a.source_name, a.notes,
+                   a.flagged, a.flagged_by, a.flagged_note,
+                   a.tagged, a.tagged_by, a.tagged_note
+            from assets a
+            where a.id = ?
+            limit 1
+            """,
+            (asset_id,),
+        )
+        if not rows:
+            return None
+        asset = dict(rows[0])
+        if include_hidden:
+            return asset
+        if str(asset.get("triage_status") or "").strip().lower() == "hidden":
+            return None
+        hidden_collection_id = db.query_value(
+            "select id from collections where lower(name)='hidden' limit 1"
+        )
+        if hidden_collection_id:
+            in_hidden = db.query_value(
+                "select 1 from collection_items where collection_id=? and asset_id=? limit 1",
+                (str(hidden_collection_id), asset_id),
+            )
+            if in_hidden:
+                return None
+        return asset
+
+    def _scan_pdf_path_from_source_ref(self, source_ref: str | None) -> Path | None:
+        m = re.match(r"^scan://([a-f0-9]{64})(?:#p\d+)?$", (source_ref or "").strip(), re.IGNORECASE)
+        if not m:
+            return None
+        sha = m.group(1).lower()
+        return Path(self.server.store_dir) / "originals" / "scan" / f"{sha}.pdf"
+
+    def _scan_ref_parts(self, source_ref: str | None) -> tuple[str, int | None] | None:
+        m = re.match(r"^scan://([a-f0-9]{64})(?:#p(\d+))?$", (source_ref or "").strip(), re.IGNORECASE)
+        if not m:
+            return None
+        sha = m.group(1).lower()
+        page = int(m.group(2)) if m.group(2) else None
+        return (sha, page)
+
+    def _scan_doc_parts(self, title: str | None) -> tuple[int | None, int | None]:
+        m = re.search(r"\bdoc\s+(\d+)(?:\s+p(\d+))?\b", (title or "").strip(), re.IGNORECASE)
+        if not m:
+            return (None, None)
+        doc_idx = int(m.group(1)) if m.group(1) else None
+        doc_page = int(m.group(2)) if m.group(2) else None
+        return (doc_idx, doc_page)
+
+    def _serve_scan_doc_pdf(self, asset_id: str) -> None:
+        with Db(self.server.db_path) as db:
+            ensure_schema(db)
+            row = db.query("select source_ref from assets where id=?", (asset_id,))
+            if not row:
+                return self.send_error(404)
+            try:
+                path = self._ensure_scan_doc_pdf_path(db, asset_id)
+            except Exception:
+                source_pdf_path = self._scan_pdf_path_from_source_ref(row[0]["source_ref"])
+                if not (source_pdf_path and source_pdf_path.exists() and source_pdf_path.is_file()):
+                    return self.send_error(404)
+                path = source_pdf_path
+        target = path.resolve()
+        base = Path(self.server.store_dir).resolve()
+        try:
+            target.relative_to(base)
+        except ValueError:
+            return self.send_error(403)
+        if not target.exists() or not target.is_file():
+            return self.send_error(404)
+        data = target.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Cache-Control", "public, max-age=604800")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", "inline")
+        self.end_headers()
+        if self.command != "HEAD":
             self.wfile.write(data)
+
+    def _ensure_scan_doc_pdf_path(self, db: Db, asset_id: str) -> Path:
+        row = db.query(
+            "select id, source, source_ref, title from assets where id=?",
+            (asset_id,),
+        )
+        if not row:
+            raise FileNotFoundError("asset not found")
+        selected = row[0]
+        if str(selected["source"] or "").strip().lower() != "scan":
+            raise FileNotFoundError("asset is not scan source")
+
+        ref_parts = self._scan_ref_parts(selected["source_ref"])
+        if not ref_parts:
+            raise FileNotFoundError("scan source_ref missing or invalid")
+        sha, selected_ref_page = ref_parts
+        selected_doc_idx, _ = self._scan_doc_parts(selected["title"])
+
+        candidates = db.query(
+            "select id, source_ref, title, stored_path from assets where source='scan' and source_ref like ?",
+            (f"scan://{sha}%",),
+        )
+        if not candidates:
+            raise FileNotFoundError("scan document members not found")
+
+        members: list[dict] = []
+        for c in candidates:
+            doc_idx, doc_page = self._scan_doc_parts(c["title"])
+            ref = self._scan_ref_parts(c["source_ref"])
+            ref_page = ref[1] if ref else None
+            c_dict = dict(c)
+            c_dict["_doc_idx"] = doc_idx
+            c_dict["_doc_page"] = int(doc_page or ref_page or 1)
+            if selected_doc_idx is None or doc_idx == selected_doc_idx:
+                members.append(c_dict)
+        if not members:
+            raise FileNotFoundError("scan document has no matching pages")
+        members.sort(key=lambda r: (int(r.get("_doc_page") or 1), str(r.get("id") or "")))
+        if len(members) > MAX_SCAN_DOC_GROUP_PAGES:
+            # Large inferred groups are often ambiguous; keep item-level PDF behavior.
+            selected_members = [m for m in members if str(m.get("id") or "") == asset_id]
+            members = selected_members if selected_members else [members[0]]
+
+        store_base = Path(self.server.store_dir).resolve()
+        page_paths: list[Path] = []
+        for member in members:
+            stored_path = str(member.get("stored_path") or "").strip()
+            if not stored_path:
+                continue
+            p = Path(stored_path).resolve()
+            try:
+                p.relative_to(store_base)
+            except ValueError:
+                continue
+            if p.exists() and p.is_file():
+                page_paths.append(p)
+
+        if not page_paths:
+            raise FileNotFoundError("no scan page images found")
+
+        if len(members) == 1:
+            out_path = store_base / "originals" / "scan_docs" / sha / f"asset-{members[0]['id']}.pdf"
+        elif selected_doc_idx is not None:
+            out_path = store_base / "originals" / "scan_docs" / sha / f"doc-{selected_doc_idx:04d}.pdf"
+        else:
+            # Fallback for scans without doc markers in title.
+            page_key = int(selected_ref_page or 1)
+            out_path = store_base / "originals" / "scan_docs" / sha / f"page-{page_key:04d}.pdf"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        src_mtime = max(p.stat().st_mtime for p in page_paths)
+        need_build = True
+        if out_path.exists():
+            try:
+                need_build = out_path.stat().st_mtime < src_mtime
+            except Exception:
+                need_build = True
+        if need_build:
+            self._build_pdf_from_images(page_paths, out_path)
+        return out_path
+
+    def _build_pdf_from_images(self, image_paths: list[Path], out_path: Path) -> None:
+        # Optional dependency: Pillow. Fallbacks are handled by caller.
+        from PIL import Image  # type: ignore
+
+        images = []
+        try:
+            for p in image_paths:
+                im = Image.open(p)
+                if im.mode != "RGB":
+                    im = im.convert("RGB")
+                images.append(im)
+            if not images:
+                raise ValueError("no images to build PDF")
+            first, *rest = images
+            tmp_path = out_path.with_suffix(".tmp.pdf")
+            first.save(tmp_path, format="PDF", save_all=True, append_images=rest, resolution=150.0)
+            tmp_path.replace(out_path)
+        finally:
+            for im in images:
+                try:
+                    im.close()
+                except Exception:
+                    pass
 
 
 def _notify_question(actor: dict | None, text: str) -> None:
@@ -1462,8 +1909,14 @@ def _guess_mime(path: str) -> str:
     return "application/octet-stream"
 
 
+class InspirationsHTTPServer(ThreadingHTTPServer):
+    # Prevent slow/stuck clients from blocking shutdown/reload.
+    daemon_threads = True
+    allow_reuse_address = True
+
+
 def run_server(*, host: str, port: int, db_path: Path, app_dir: Path, store_dir: Path) -> None:
-    server = HTTPServer((host, port), ApiHandler)
+    server = InspirationsHTTPServer((host, port), ApiHandler)
     server.db_path = db_path
     server.app_dir = app_dir
     server.store_dir = store_dir

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inspirations!</title>
-    <link rel="stylesheet" href="/app/styles.css" />
+    <link rel="stylesheet" href="/app/styles.css?v=5" />
     <script type="importmap">
       {
         "imports": {
@@ -80,23 +80,34 @@
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="0.5" y="0.5" width="5" height="5" rx="1" stroke="currentColor"/><rect x="8.5" y="0.5" width="5" height="5" rx="1" stroke="currentColor"/><rect x="0.5" y="8.5" width="5" height="5" rx="1" stroke="currentColor"/><rect x="8.5" y="8.5" width="5" height="5" rx="1" stroke="currentColor"/></svg>
             </button>
             <button id="viewExplorer" class="view-toggle" title="Explorer view (semantic map)" type="button">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="3" cy="3" r="1.5" stroke="currentColor"/><circle cx="11" cy="4" r="1.5" stroke="currentColor"/><circle cx="5" cy="11" r="1.5" stroke="currentColor"/><circle cx="11" cy="11" r="1.5" stroke="currentColor"/><line x1="4.2" y1="3.5" x2="9.5" y2="4" stroke="currentColor" opacity="0.4"/><line x1="3.5" y1="4.5" x2="4.5" y2="9.5" stroke="currentColor" opacity="0.4"/><line x1="6.5" y1="11" x2="9.5" y2="11" stroke="currentColor" opacity="0.4"/><line x1="11" y1="5.5" x2="11" y2="9.5" stroke="currentColor" opacity="0.4"/></svg>
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                <path d="M1.1 4.6L7 1.2L12.9 4.6L7 8L1.1 4.6Z" stroke="currentColor" stroke-width="0.95" stroke-linejoin="round"/>
+                <path d="M1.1 4.6V10.2L7 13.2V8L1.1 4.6Z" stroke="currentColor" stroke-width="0.95" stroke-linejoin="round"/>
+                <path d="M12.9 4.6V10.2L7 13.2V8L12.9 4.6Z" stroke="currentColor" stroke-width="0.95" stroke-linejoin="round"/>
+                <circle cx="4.3" cy="6.4" r="0.78" fill="currentColor" opacity="0.62"/>
+                <circle cx="7.1" cy="5.3" r="0.78" fill="currentColor" opacity="0.62"/>
+                <circle cx="9.8" cy="6.5" r="0.78" fill="currentColor" opacity="0.62"/>
+                <circle cx="7.1" cy="9.7" r="0.78" fill="currentColor" opacity="0.62"/>
+              </svg>
             </button>
           </div>
-          <button id="toggleSidebarBtn" class="header-btn" type="button" aria-pressed="false" title="Hide side panel">Hide Panel</button>
           <button id="reviewBtn" class="review-launch-btn" type="button">Review</button>
-          <button id="addScanPdf" class="header-btn" type="button">Add Scan</button>
+          <button id="addScanPdf" class="header-btn" type="button">Add Clip</button>
           <button id="addPhotos" class="header-btn" type="button">Add Photos</button>
           <a href="/app/admin.html" class="header-btn adminLink">Admin</a>
         </div>
       <!-- Canvas review action bar (inside header so it sticks with topbar) -->
       <div id="canvasActionBar" class="canvas-action-bar" hidden>
         <div class="canvas-action-bar-inner">
+          <span id="reviewScopeChip" class="canvas-scope-chip">Scope: Entire library</span>
           <span id="canvasSelectionCount" class="canvas-selection-count">0 selected</span>
+          <span id="reviewSelectionToolChip" class="canvas-selection-tool-chip" hidden>Selection: Click</span>
           <div class="canvas-action-buttons">
             <button id="canvasKeep" class="canvas-action-btn canvas-action-keep" type="button" disabled>★ Keep</button>
-            <button id="canvasHide" class="canvas-action-btn canvas-action-hide" type="button" disabled>✗ Hide</button>
+            <button id="canvasHideLocal" class="canvas-action-btn canvas-action-hide-local" type="button" disabled>↘ Hide in this collection</button>
+            <button id="canvasHideGlobal" class="canvas-action-btn canvas-action-hide-global" type="button" disabled>✗ Hide globally</button>
             <button id="canvasFlag" class="canvas-action-btn canvas-action-flag" type="button" disabled>🚩 Flag</button>
+            <button id="canvasTag" class="canvas-action-btn canvas-action-tag" type="button" disabled>🏷️ Tag</button>
             <button id="canvasClear" class="canvas-action-btn" type="button">Clear</button>
           </div>
           <div class="canvas-mode-toggle">
@@ -115,8 +126,10 @@
     </div>
 
     <div class="layout">
+      <button id="sidebarExpandHandle" class="sidebar-handle sidebar-expand-handle" type="button" title="Show side panel" aria-label="Show side panel" hidden>&#9656;</button>
       <!-- Left sidebar -->
       <aside class="sidebar">
+        <button id="sidebarCollapseHandle" class="sidebar-handle sidebar-collapse-handle" type="button" title="Hide side panel" aria-label="Hide side panel">&#9666;</button>
         <div class="sidebar-section">
           <h3 class="sidebar-heading">Status</h3>
           <div id="statusChips" class="chip-group">
@@ -149,6 +162,7 @@
           <span id="stats" class="stats-count">Loading…</span>
           <span id="canvasNarrative" class="stats-narrative"></span>
         </div>
+        <div id="contextLinkBanner" class="context-link-banner" hidden role="status" aria-live="polite"></div>
 
         <!-- Browse view -->
         <div id="browseView">
@@ -161,6 +175,12 @@
         <!-- Explorer view (3D semantic map) -->
         <div id="explorerView" class="explorer-view" hidden>
           <div id="explorerContainer" class="explorer-container"></div>
+          <div id="explorerBusyOverlay" class="explorer-busy-overlay" hidden aria-live="polite" aria-atomic="true">
+            <div class="explorer-busy-card" role="status">
+              <span class="explorer-busy-spinner" aria-hidden="true"></span>
+              <span id="explorerBusyText">Building your map…</span>
+            </div>
+          </div>
         </div>
 
         <!-- Review view (card-by-card triage) -->
@@ -225,21 +245,36 @@
     <!-- Detail modal -->
     <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
       <div class="modalContent">
-        <div class="modalHeader">
-          <div class="modal-title-block">
-            <span id="modalBadge" class="content-kind-badge" hidden></span>
-            <span id="modalKeeperStar" class="modal-keeper-star" hidden>★</span>
-            <div id="modalTitle" class="modalTitle"></div>
-            <div id="modalMeta" class="muted"></div>
-            <div id="modalCreator" class="muted" hidden></div>
-          </div>
-          <div class="modal-header-actions">
-            <button id="modalFlagBtn" class="modal-triage-btn modal-flag-btn" type="button" title="Flag for review — wrong thumbnail or needs attention">🚩 Flag</button>
-            <button id="modalKeepBtn" class="modal-triage-btn modal-keep-btn" type="button">✓ Keep</button>
-            <button id="modalHideBtn" class="modal-triage-btn modal-hide-btn" type="button">✗ Hide</button>
-            <button id="viewSourceBtn" class="header-btn" type="button">View Source</button>
-            <button id="printAssetBtn" class="header-btn" type="button">Print</button>
-          </div>
+          <div class="modalHeader">
+            <div class="modal-title-block">
+              <span id="modalBadge" class="content-kind-badge" hidden></span>
+              <span id="modalKeeperStar" class="modal-keeper-star" hidden>★</span>
+              <div id="modalTitle" class="modalTitle"></div>
+              <span id="modalTitleQuality" class="title-quality-badge modal-title-quality" hidden></span>
+              <div id="modalMeta" class="muted"></div>
+              <div id="modalAssetIdRow" class="modal-asset-id-row">
+                <button id="copyAssetIdBtn" class="iconBtn" type="button" title="Copy item ID">Copy ID</button>
+              </div>
+              <div id="modalCreator" class="muted" hidden></div>
+            </div>
+            <div class="modal-header-actions">
+              <div id="modalReviewGroup" class="modal-action-group modal-review-group">
+                <span class="modal-action-group-label modal-review-label">Review</span>
+                <span id="modalReviewScope" class="modal-review-scope-chip">Scope: Entire library</span>
+                <button id="modalFlagBtn" class="modal-triage-btn modal-flag-btn" type="button" title="Flag for review — wrong thumbnail or needs attention">🚩 Flag</button>
+                <button id="modalTagBtn" class="modal-triage-btn" type="button" title="Tag for diagnosis">🏷️ Tag</button>
+                <button id="modalKeepBtn" class="modal-triage-btn modal-keep-btn" type="button">✓ Keep</button>
+                <button id="modalHideLocalBtn" class="modal-triage-btn modal-hide-local-btn" type="button" title="Remove from active collection scope">↘ Hide in this collection</button>
+                <button id="modalHideGlobalBtn" class="modal-triage-btn modal-hide-btn" type="button">✗ Hide globally</button>
+              </div>
+              <div id="modalShareGroup" class="modal-action-group modal-share-group">
+                <span class="modal-action-group-label">Share</span>
+                <button id="modalShareLinkBtn" class="header-btn modal-utility-btn" type="button">Copy Link</button>
+                <button id="modalShareEmailBtn" class="header-btn modal-utility-btn" type="button">Email</button>
+                <button id="modalShareMessageBtn" class="header-btn modal-utility-btn" type="button">Message</button>
+              </div>
+              <button id="printAssetBtn" class="header-btn modal-utility-btn" type="button">Print</button>
+            </div>
           <button id="closeModal" class="modalCloseX" type="button" aria-label="Close">&times;</button>
         </div>
         <div class="modalBody">
@@ -279,20 +314,20 @@
       <div class="modalContent scanImportContent">
         <div class="modalHeader">
           <div>
-            <div id="scanImportTitle" class="modalTitle">Import Scan PDF</div>
+            <div id="scanImportTitle" class="modalTitle">Import Clip PDF</div>
             <div class="muted">Upload one PDF and choose extraction options.</div>
           </div>
           <button id="closeScanImport" type="button">Close</button>
         </div>
         <div class="scanImportBody">
           <label id="scanDropZone" class="fileDropZone" for="scanPdfInput">
-            <span class="fileDropTitle">Drop a scan PDF here, or click to choose a file</span>
+            <span class="fileDropTitle">Drop a clip PDF here, or click to choose a file</span>
             <span class="fileDropHint">Single-file import (PDF only).</span>
             <input id="scanPdfInput" type="file" accept=".pdf,application/pdf" />
           </label>
           <label class="scanOptionRow">
             <input id="scanDetectDelimiters" type="checkbox" checked />
-            <span>Split into separate scan documents when blank separator pages are detected</span>
+            <span>Split into separate clip documents when blank separator pages are detected</span>
           </label>
           <label class="scanOptionRow">
             <input id="scanUseFormParser" type="checkbox" />
@@ -332,10 +367,9 @@
 
     <div id="toastContainer" class="toast-container" aria-live="polite"></div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
-    <script src="/app/shared.js"></script>
-    <script src="/app/explorer.js"></script>
-    <script src="/app/attractor-explorer.js"></script>
-    <script src="/app/attractor-explorer-3d.js?v=28" type="module"></script>
-    <script src="/app/app.js?v=2"></script>
+    <script src="/app/shared.js?v=1"></script>
+    <script src="/app/explorer.js?v=1"></script>
+    <script src="/app/attractor-explorer.js?v=1"></script>
+    <script src="/app/app.js?v=14"></script>
   </body>
 </html>

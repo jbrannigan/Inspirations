@@ -1,5 +1,5 @@
 # Inspirations — Context Preservation Document
-## Last updated: 2026-02-24
+## Last updated: 2026-03-01
 
 ---
 
@@ -7,7 +7,7 @@
 
 ```bash
 cd /Users/minime/Projects/Inspirations
-PYTHONPATH=src python -m inspirations serve --port 8001 --dev
+PYTHONPATH=src python3 -m inspirations serve --port 8001 --reload
 ```
 
 ### Magic Links (current actors — verified 2026-02-23)

@@ -10,6 +10,7 @@ import json
 import math
 import re
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from .db import Db
 
@@ -543,6 +544,54 @@ def _normalize_coords_3d(
     return [((x - cx) * scale, (y - cy) * scale, (z - cz) * scale) for x, y, z in coords]
 
 
+_FB_SAVED_LINK_TITLE_RE = re.compile(r"^\s*[^.]+ saved a link from (.+?)'s post\.?\s*$", re.IGNORECASE)
+
+
+def _title_case_words(text: str) -> str:
+    words = [w for w in re.split(r"\s+", (text or "").strip()) if w]
+    out: list[str] = []
+    for w in words:
+        if len(w) <= 2:
+            out.append(w.upper())
+        else:
+            out.append(w[:1].upper() + w[1:].lower())
+    return " ".join(out)
+
+
+def _fallback_title_from_source_ref(title: str, source_ref: str) -> str:
+    t = (title or "").strip()
+    m = _FB_SAVED_LINK_TITLE_RE.match(t)
+    if not m:
+        return ""
+    source_name = (m.group(1) or "").strip()
+    ref = (source_ref or "").strip()
+    if not ref:
+        return f"{source_name} link" if source_name else ""
+    try:
+        parsed = urlparse(ref)
+        host = (parsed.hostname or "").replace("www.", "")
+        path = unquote(parsed.path or "")
+        parts = [p for p in path.split("/") if p]
+        slug = parts[-1] if parts else ""
+        slug = re.sub(r"\.[a-z0-9]{2,5}$", "", slug, flags=re.IGNORECASE)
+        slug = re.sub(r"[-_+]+", " ", slug)
+        slug = re.sub(r"[^a-z0-9 ]+", " ", slug, flags=re.IGNORECASE)
+        slug = re.sub(r"\s+", " ", slug).strip()
+        if slug and not slug.isdigit():
+            pretty = _title_case_words(slug)
+            if source_name:
+                return f"{source_name}: {pretty}"
+            return pretty
+        if source_name:
+            return f"{source_name} link"
+        if host:
+            return _title_case_words(host.replace(".", " "))
+    except Exception:
+        if source_name:
+            return f"{source_name} link"
+    return ""
+
+
 # ─── Main entry point ────────────────────────────────────────────────────────
 
 def build_feature_vectors(
@@ -567,7 +616,7 @@ def build_feature_vectors(
             params.append(hidden_col_id)
         where_sql = " where " + " and ".join(hide_clauses)
     assets = db.query(
-        "select a.id, a.source, a.board, a.title, a.seo_alt_text, a.thumb_path, a.ai_summary "
+        "select a.id, a.source, a.board, a.title, a.seo_alt_text, a.thumb_path, a.ai_summary, a.source_ref "
         f"from assets a{where_sql} order by a.id",
         tuple(params),
     )
@@ -627,7 +676,10 @@ def build_feature_vectors(
         # Title / SEO alt text (lowest priority)
         title = asset["title"] or ""
         seo = asset["seo_alt_text"] or ""
-        text = f"{title} {seo}".strip()
+        source_ref = asset["source_ref"] or ""
+        title_fallback = _fallback_title_from_source_ref(title, source_ref)
+        text_title = title_fallback or title
+        text = f"{text_title} {seo}".strip()
         if text and not ai_by_asset.get(aid):
             # Only use text extraction for assets without AI analysis
             _apply_text(vec, text, weight=0.3)
@@ -635,7 +687,7 @@ def build_feature_vectors(
         vectors.append(vec)
 
         thumb = f"/media/{aid}?kind=thumb" if asset["thumb_path"] else ""
-        display_title = title or asset["ai_summary"] or board or ""
+        display_title = title_fallback or title or asset["ai_summary"] or board or ""
         if len(display_title) > 80:
             display_title = display_title[:77] + "..."
 

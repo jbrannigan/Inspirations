@@ -4,6 +4,7 @@ import hashlib
 import html as html_lib
 import os
 import re
+import uuid
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,7 @@ from urllib.parse import urlparse, urljoin, parse_qs
 
 from .db import Db
 from .security import is_safe_public_url
+from .thumbnails import generate_thumbnails
 
 
 @dataclass(frozen=True)
@@ -306,4 +308,199 @@ def download_and_attach_originals(
         "downloaded": len(downloaded),
         "errors": errors[:25],
         "note": "Errors are truncated to 25 in output.",
+    }
+
+
+def _stable_image_path_for_sha(downloaded_path: Path, sha256: str) -> Path:
+    ext = downloaded_path.suffix.lower() or ".jpg"
+    stable_path = downloaded_path.with_name(f"{sha256}{ext}")
+    if stable_path == downloaded_path:
+        return stable_path
+    if stable_path.exists():
+        try:
+            downloaded_path.unlink()
+        except FileNotFoundError:
+            pass
+        return stable_path
+    os.replace(downloaded_path, stable_path)
+    return stable_path
+
+
+def _remove_unreferenced_file(db: Db, path_str: str) -> bool:
+    path = Path((path_str or "").strip())
+    if not path_str or not path.exists():
+        return False
+    ref_count = db.query_value("select count(*) from assets where stored_path=?", (path_str,))
+    if int(ref_count or 0) != 0:
+        return False
+    try:
+        path.unlink()
+        return True
+    except Exception:
+        return False
+
+
+def backfill_previews_from_source_ref(
+    db: Db,
+    store_dir: Path,
+    *,
+    source: str = "facebook",
+    media_status: str = "placeholder",
+    include_hidden: bool = False,
+    limit: int = 0,
+    force: bool = False,
+    dry_run: bool = False,
+    regenerate_thumbs: bool = True,
+) -> dict[str, Any]:
+    """
+    Resolve source_ref URLs to preview images and attach downloaded originals.
+    """
+    source = (source or "").strip()
+    if not source:
+        raise ValueError("source is required")
+    status_filter = (media_status or "").strip()
+
+    clauses = [
+        "source = ?",
+        "coalesce(source_ref, '') != ''",
+    ]
+    params: list[Any] = [source]
+    if status_filter:
+        clauses.append("coalesce(media_status, '') = ?")
+        params.append(status_filter)
+    if not include_hidden:
+        clauses.append("coalesce(triage_status, '') != 'hidden'")
+    where_sql = " and ".join(clauses)
+    rows = db.query(
+        f"""
+        select id, source_ref, image_url, stored_path, thumb_path, sha256, media_status
+        from assets
+        where {where_sql}
+        order by imported_at asc, id asc
+        """,
+        tuple(params),
+    )
+
+    total_candidates = len(rows)
+    attempted = 0
+    resolved = 0
+    downloaded = 0
+    updated = 0
+    would_update = 0
+    unchanged = 0
+    skipped_unsafe = 0
+    skipped_invalid_ref = 0
+    cleaned_orphans = 0
+    errors: list[dict[str, str]] = []
+    updated_ids: list[str] = []
+
+    dest_dir = store_dir / "originals" / source
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    for row in rows:
+        if limit and attempted >= limit:
+            break
+        attempted += 1
+
+        asset_id = str(row["id"] or "").strip()
+        source_ref = str(row["source_ref"] or "").strip()
+        if not asset_id or not source_ref:
+            skipped_invalid_ref += 1
+            continue
+        if not is_safe_public_url(source_ref, allow_http=False):
+            skipped_unsafe += 1
+            continue
+
+        try:
+            resolved_url = resolve_image_url(source_ref)
+        except Exception as e:
+            errors.append({"id": asset_id, "url": source_ref, "error": f"resolve failed: {e}"})
+            continue
+
+        if not resolved_url:
+            errors.append({"id": asset_id, "url": source_ref, "error": "No image preview found for URL"})
+            continue
+        resolved += 1
+
+        current_url = str(row["image_url"] or "").strip()
+        current_path = str(row["stored_path"] or "").strip()
+        current_sha = str(row["sha256"] or "").strip()
+        current_status = str(row["media_status"] or "").strip()
+        has_thumb = bool(str(row["thumb_path"] or "").strip())
+        needs_update = force or (
+            resolved_url != current_url
+            or not current_path
+            or current_status != "image"
+            or has_thumb
+        )
+
+        if dry_run:
+            if needs_update:
+                would_update += 1
+            else:
+                unchanged += 1
+            continue
+        if not needs_update:
+            unchanged += 1
+            continue
+
+        try:
+            tmp_path, new_sha, _nbytes = download_url_to_store(
+                url=resolved_url,
+                dest_dir=dest_dir,
+                filename_stem=asset_id or str(uuid.uuid4()),
+            )
+            downloaded += 1
+            stable_path = _stable_image_path_for_sha(tmp_path, new_sha)
+            stable_str = str(stable_path)
+            changed = (
+                stable_str != current_path
+                or new_sha != current_sha
+                or resolved_url != current_url
+                or current_status != "image"
+                or has_thumb
+            )
+            if not changed:
+                unchanged += 1
+                continue
+            db.exec(
+                """
+                update assets
+                set image_url=?, stored_path=?, sha256=?, thumb_path=null, media_status='image'
+                where id=?
+                """,
+                (resolved_url, stable_str, new_sha, asset_id),
+            )
+            updated += 1
+            updated_ids.append(asset_id)
+            if current_path and current_path != stable_str:
+                if _remove_unreferenced_file(db, current_path):
+                    cleaned_orphans += 1
+        except Exception as e:
+            errors.append({"id": asset_id, "url": resolved_url, "error": str(e)})
+
+    thumbs_report: dict[str, Any] = {}
+    if not dry_run and regenerate_thumbs and updated_ids:
+        thumbs_report = generate_thumbnails(db, store_dir=store_dir, source=source, limit=0)
+
+    return {
+        "source": source,
+        "media_status_filter": status_filter or None,
+        "include_hidden": include_hidden,
+        "dry_run": dry_run,
+        "force": force,
+        "limit": limit,
+        "candidates": total_candidates,
+        "attempted": attempted,
+        "resolved": resolved,
+        "downloaded": downloaded,
+        "updated": updated,
+        "would_update": would_update,
+        "unchanged": unchanged,
+        "skipped_unsafe": skipped_unsafe,
+        "skipped_invalid_ref": skipped_invalid_ref,
+        "cleaned_orphan_files": cleaned_orphans,
+        "updated_ids": updated_ids[:100],
+        "errors": errors[:25],
+        "thumbnails": thumbs_report,
     }

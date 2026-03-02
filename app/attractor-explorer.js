@@ -73,7 +73,16 @@
     facebook: "#4267b2",
     houzz: "#4dbc63",
     scan: "#8b6914",
+    photo: "#5b6f8c",
   };
+
+  function _normalizeSourceKey(source) {
+    const key = String(source || "").trim().toLowerCase();
+    if (key === "clip" || key === "clips" || key === "magazine clip" || key === "magazine clips") {
+      return "scan";
+    }
+    return key;
+  }
 
   const CLUSTER_PALETTE = [
     "#b8860b", "#8b6914", "#6b8e23", "#7b68ee", "#cd853f",
@@ -201,10 +210,10 @@
         _restY: sy,
         thumb_url: a.t,
         title: a.title || "",
-        source: a.src || "",
+        source: _normalizeSourceKey(a.src || ""),
         _img: null,
         _imgQueued: false,
-        _color: SOURCE_COLORS[a.src] || "#999",
+        _color: SOURCE_COLORS[_normalizeSourceKey(a.src)] || "#999",
       };
     });
 
@@ -645,8 +654,6 @@
 
   // ─── Control panel ───────────────────────────────────────────────────────
 
-  let _on3DToggleCb = null;
-
   function _buildControls() {
     if (!_controlsEl) return;
     _controlsEl.innerHTML = "";
@@ -659,7 +666,6 @@
       <label>Strength <input type="range" id="_attrStr" min="0.05" max="0.8" step="0.05" value="${_attractStrength}"></label>
       <label>Spread <input type="range" id="_attrRep" min="1" max="20" step="1" value="${Math.abs(_repulsion)}"></label>
       <label>Size <input type="range" id="_attrSize" min="6" max="40" step="1" value="${_nodeSize}"></label>
-      <label class="physics-toggle">3D <input type="checkbox" id="_attr3DToggle"></label>
       <label class="physics-toggle">Focus <input type="checkbox" id="_attrFocus" ${_focusedMode ? "checked" : ""}></label>
       <label class="physics-toggle">Live <input type="checkbox" id="_attrLive" ${_liveMode ? "checked" : ""}></label>
       <label class="physics-toggle">Thumbs <input type="checkbox" id="_attrThumbs" ${_showThumbs ? "checked" : ""}></label>
@@ -812,13 +818,6 @@
       thumbsToggle.addEventListener("change", (e) => {
         _showThumbs = e.target.checked;
         _scheduleRender();
-      });
-
-    // 3D toggle — fires callback to switch explorer mode
-    const toggle3D = _controlsEl.querySelector("#_attr3DToggle");
-    if (toggle3D)
-      toggle3D.addEventListener("change", (e) => {
-        if (_on3DToggleCb) _on3DToggleCb(e.target.checked);
       });
   }
 
@@ -1042,7 +1041,6 @@
     highlight,
     onSelect,
     onClickNode,
-    on3DToggle(cb) { _on3DToggleCb = cb; },
     pause,
     resume,
     destroy,

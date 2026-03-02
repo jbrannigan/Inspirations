@@ -48,6 +48,15 @@
       const parsed = JSON.parse(msg);
       if (parsed && typeof parsed.error === "string" && parsed.error.trim()) return parsed.error.trim();
     } catch {}
+    if (/^\s*<!doctype html>/i.test(msg) || /^\s*<html/i.test(msg)) {
+      const codeMatch = msg.match(/Error code:\s*([0-9]{3})/i);
+      const messageMatch = msg.match(/Message:\s*([^<\n\r]+)/i);
+      const code = codeMatch ? codeMatch[1] : "";
+      const detail = messageMatch ? messageMatch[1].trim().replace(/\.$/, "") : "";
+      if (code && detail) return `${code}: ${detail}`;
+      if (code) return `Request failed (${code})`;
+      return "Request failed";
+    }
     return msg;
   }
 

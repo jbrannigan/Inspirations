@@ -29,6 +29,16 @@ from .catalog import generate_catalog
 from .export import export_html_gallery, export_static_share_portal
 from .server import run_server
 from .store import create_collection, add_items_to_collection
+from .storage import backfill_previews_from_source_ref
+from .title_audit import (
+    apply_title_audit_batch,
+    edit_title_audit_candidate,
+    mark_title_audit_candidates,
+    review_title_audit_batch,
+    run_title_audit,
+    stage_title_audit_batch,
+    undo_title_audit_batch,
+)
 
 
 def _p(p: str) -> Path:
@@ -317,6 +327,26 @@ def cmd_thumbs(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_backfill_previews(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    store_dir = _p(args.store)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = backfill_previews_from_source_ref(
+            db,
+            store_dir=store_dir,
+            source=args.source,
+            media_status=args.media_status,
+            include_hidden=args.include_hidden,
+            limit=args.limit,
+            force=args.force,
+            dry_run=args.dry_run,
+            regenerate_thumbs=args.regenerate_thumbs,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
 def cmd_ai_tag(args: argparse.Namespace) -> int:
     db_path = _p(args.db)
     with Db(db_path) as db:
@@ -399,6 +429,120 @@ def cmd_ai_similar(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ai_title_audit(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    table_out = _p(args.table_out) if args.table_out else None
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = run_title_audit(
+            db,
+            source=args.source,
+            include_hidden=bool(args.include_hidden),
+            limit=int(args.limit or 0),
+            table_out=table_out,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_ai_title_audit_stage(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    table_out = _p(args.table_out) if args.table_out else None
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = stage_title_audit_batch(
+            db,
+            source=args.source,
+            include_hidden=bool(args.include_hidden),
+            limit=int(args.limit or 0),
+            actor=args.actor,
+            notes=args.notes,
+            table_out=table_out,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_ai_title_audit_review(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    table_out = _p(args.table_out) if args.table_out else None
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = review_title_audit_batch(
+            db,
+            batch_id=args.batch_id,
+            status=args.status,
+            limit=int(args.limit or 0),
+            offset=int(args.offset or 0),
+            table_out=table_out,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_ai_title_audit_mark(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    asset_ids = _csv_unique(list(args.asset_id or []))
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = mark_title_audit_candidates(
+            db,
+            batch_id=args.batch_id,
+            status=args.status,
+            asset_ids=asset_ids,
+            mark_all=bool(args.all),
+            where_status=args.where_status,
+            note=args.note,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_ai_title_audit_edit(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = edit_title_audit_candidate(
+            db,
+            batch_id=args.batch_id,
+            asset_id=args.asset_id,
+            new_title=args.new_title,
+            note=args.note,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_ai_title_audit_apply(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = apply_title_audit_batch(
+            db,
+            batch_id=args.batch_id,
+            dry_run=bool(args.dry_run),
+            force=bool(args.force),
+            limit=int(args.limit or 0),
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_ai_title_audit_undo(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = undo_title_audit_batch(
+            db,
+            batch_id=args.batch_id,
+            dry_run=bool(args.dry_run),
+            force=bool(args.force),
+            limit=int(args.limit or 0),
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
 def cmd_ai_reels(args: argparse.Namespace) -> int:
     """Download, analyze, and apply recommendations for Facebook reels."""
     db_path = _p(args.db)
@@ -462,7 +606,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
     db_path = _p(args.db)
     app_dir = _p(args.app)
     store_dir = _p(args.store)
-    if args.reload:
+    reload_mode = bool(args.reload or getattr(args, "dev", False))
+    if reload_mode:
         from .devserver import run_with_reload
 
         run_with_reload(host=args.host, port=args.port, db_path=db_path, app_dir=app_dir, store_dir=store_dir)
@@ -587,6 +732,32 @@ def build_parser() -> argparse.ArgumentParser:
     thumbs.add_argument("--tool", default="auto", help="Tool: auto | sips | magick")
     thumbs.set_defaults(func=cmd_thumbs)
 
+    backfill = sub.add_parser(
+        "backfill-previews",
+        help="Resolve source_ref URLs to real images and regenerate thumbnails",
+    )
+    backfill.add_argument("--source", default="facebook", help="Asset source to process (default facebook)")
+    backfill.add_argument(
+        "--media-status",
+        default="placeholder",
+        help="Only process this media_status (default placeholder, pass empty for all)",
+    )
+    backfill.add_argument("--include-hidden", action="store_true", help="Include hidden assets")
+    backfill.add_argument("--limit", type=int, default=0, help="Limit assets (0 = no limit)")
+    backfill.add_argument(
+        "--force",
+        action="store_true",
+        help="Redownload even when resolved URL matches current image_url",
+    )
+    backfill.add_argument("--dry-run", action="store_true", help="Resolve only; do not write files or DB")
+    backfill.add_argument(
+        "--regenerate-thumbs",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Regenerate thumbnails for updated items (default true)",
+    )
+    backfill.set_defaults(func=cmd_backfill_previews)
+
     ai = sub.add_parser("ai", help="AI utilities")
     ai_sub = ai.add_subparsers(dest="ai_cmd")
     tag = ai_sub.add_parser("tag", help="Run AI tagging")
@@ -660,6 +831,92 @@ def build_parser() -> argparse.ArgumentParser:
     similar.add_argument("--api-key", default="", help="Gemini API key (or set GEMINI_API_KEY)")
     similar.set_defaults(func=cmd_ai_similar)
 
+    title_audit = ai_sub.add_parser("title-audit", help="Generate candidate title replacements (dry-run)")
+    title_audit.add_argument("--source", default="", help="Optional source filter")
+    title_audit.add_argument(
+        "--include-hidden",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Include hidden assets (default true)",
+    )
+    title_audit.add_argument("--limit", type=int, default=0, help="Limit assets scanned (0 = no limit)")
+    title_audit.add_argument(
+        "--table-out",
+        default="",
+        help="Optional markdown output path for impact table",
+    )
+    title_audit.set_defaults(func=cmd_ai_title_audit)
+
+    title_audit_stage = ai_sub.add_parser("title-audit-stage", help="Stage title-audit candidates into a review batch")
+    title_audit_stage.add_argument("--source", default="", help="Optional source filter")
+    title_audit_stage.add_argument(
+        "--include-hidden",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Include hidden assets while staging (default true)",
+    )
+    title_audit_stage.add_argument("--limit", type=int, default=0, help="Limit assets scanned (0 = no limit)")
+    title_audit_stage.add_argument("--actor", default="cli", help="Who staged this batch")
+    title_audit_stage.add_argument("--notes", default="", help="Optional notes")
+    title_audit_stage.add_argument("--table-out", default="", help="Optional markdown table path")
+    title_audit_stage.set_defaults(func=cmd_ai_title_audit_stage)
+
+    title_audit_review = ai_sub.add_parser("title-audit-review", help="Review a staged title-audit batch")
+    title_audit_review.add_argument("--batch-id", required=True, help="Batch id from title-audit-stage output")
+    title_audit_review.add_argument(
+        "--status",
+        default="",
+        help="Optional filter: pending|approved|rejected|edited|ready|applied",
+    )
+    title_audit_review.add_argument("--limit", type=int, default=100, help="Rows to return (default 100)")
+    title_audit_review.add_argument("--offset", type=int, default=0, help="Row offset (default 0)")
+    title_audit_review.add_argument("--table-out", default="", help="Optional markdown table path")
+    title_audit_review.set_defaults(func=cmd_ai_title_audit_review)
+
+    title_audit_mark = ai_sub.add_parser("title-audit-mark", help="Set review status for staged candidates")
+    title_audit_mark.add_argument("--batch-id", required=True, help="Batch id")
+    title_audit_mark.add_argument(
+        "--status",
+        required=True,
+        choices=["pending", "approved", "rejected"],
+        help="Target review status",
+    )
+    title_audit_mark.add_argument(
+        "--asset-id",
+        action="append",
+        default=[],
+        help="Asset id to update (repeat or pass comma-separated ids)",
+    )
+    title_audit_mark.add_argument("--all", action="store_true", help="Apply to all rows in batch (or filtered subset)")
+    title_audit_mark.add_argument(
+        "--where-status",
+        default="",
+        help="When using --all, optional filter: pending|approved|rejected|edited|ready",
+    )
+    title_audit_mark.add_argument("--note", default="", help="Optional review note")
+    title_audit_mark.set_defaults(func=cmd_ai_title_audit_mark)
+
+    title_audit_edit = ai_sub.add_parser("title-audit-edit", help="Edit a staged candidate title and mark as edited")
+    title_audit_edit.add_argument("--batch-id", required=True, help="Batch id")
+    title_audit_edit.add_argument("--asset-id", required=True, help="Asset id to edit")
+    title_audit_edit.add_argument("--new-title", required=True, help="Replacement title")
+    title_audit_edit.add_argument("--note", default="", help="Optional edit note")
+    title_audit_edit.set_defaults(func=cmd_ai_title_audit_edit)
+
+    title_audit_apply = ai_sub.add_parser("title-audit-apply", help="Apply approved/edited staged title changes")
+    title_audit_apply.add_argument("--batch-id", required=True, help="Batch id")
+    title_audit_apply.add_argument("--dry-run", action="store_true", help="Report changes without writing")
+    title_audit_apply.add_argument("--force", action="store_true", help="Apply even when live title drifted from old title")
+    title_audit_apply.add_argument("--limit", type=int, default=0, help="Limit rows applied (0 = no limit)")
+    title_audit_apply.set_defaults(func=cmd_ai_title_audit_apply)
+
+    title_audit_undo = ai_sub.add_parser("title-audit-undo", help="Undo title changes applied from a staged batch")
+    title_audit_undo.add_argument("--batch-id", required=True, help="Batch id")
+    title_audit_undo.add_argument("--dry-run", action="store_true", help="Report changes without writing")
+    title_audit_undo.add_argument("--force", action="store_true", help="Undo even if current title drifted from applied title")
+    title_audit_undo.add_argument("--limit", type=int, default=0, help="Limit rows undone (0 = no limit)")
+    title_audit_undo.set_defaults(func=cmd_ai_title_audit_undo)
+
     rebuild = sub.add_parser("rebuild-db", help="Nuke DB and reimport from scrape data")
     rebuild.add_argument("--pinterest-json", default="", help="Path to pinterest_scrape.json")
     rebuild.add_argument("--pinterest-image-map", default="", help="Path to pinterest_image_map.json")
@@ -683,6 +940,8 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--app", default="app", help="App directory (static files)")
     serve.add_argument("--store", default="store", help="Store directory (originals/thumbs)")
     serve.add_argument("--reload", action="store_true", help="Auto-reload on file changes")
+    # Backward compatibility for older local launch configs.
+    serve.add_argument("--dev", action="store_true", help=argparse.SUPPRESS)
     serve.set_defaults(func=cmd_serve)
 
     exp = sub.add_parser("export", help="Export artifacts")

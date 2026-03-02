@@ -241,6 +241,57 @@ def _cluster_coords(coords: list[list[float]]) -> list[int]:
     return [int(lbl) for lbl in km.fit_predict(X)]
 
 
+def _filter_layout_result(result: dict, visible_ids: set[str]) -> dict:
+    if not visible_ids:
+        return {"nodes": [], "clusters": []}
+
+    nodes = [
+        dict(node)
+        for node in (result.get("nodes") or [])
+        if str(node.get("id") or "") in visible_ids
+    ]
+    if not nodes:
+        return {"nodes": [], "clusters": []}
+
+    base_clusters: dict[int, dict] = {}
+    for cluster in (result.get("clusters") or []):
+        try:
+            cid = int(cluster.get("id"))  # type: ignore[arg-type]
+        except Exception:
+            continue
+        base_clusters[cid] = dict(cluster)
+
+    cluster_counts: dict[int, int] = {}
+    cluster_sums: dict[int, list[float]] = {}
+    for node in nodes:
+        cid = int(node.get("cluster_id") or 0)
+        cluster_counts[cid] = cluster_counts.get(cid, 0) + 1
+        acc = cluster_sums.setdefault(cid, [0.0, 0.0, 0.0])
+        acc[0] += float(node.get("x") or 0.0)
+        acc[1] += float(node.get("y") or 0.0)
+        acc[2] += float(node.get("z") or 0.0)
+
+    clusters = []
+    for cid in sorted(cluster_counts):
+        count = cluster_counts[cid]
+        sx, sy, sz = cluster_sums[cid]
+        base = base_clusters.get(cid, {})
+        clusters.append(
+            {
+                "id": cid,
+                "label": base.get("label") or f"Cluster {cid}",
+                "centroid": [
+                    round(sx / count, 4),
+                    round(sy / count, 4),
+                    round(sz / count, 4),
+                ],
+                "color": base.get("color") or CLUSTER_PALETTE[cid % len(CLUSTER_PALETTE)],
+                "count": count,
+            }
+        )
+    return {"nodes": nodes, "clusters": clusters}
+
+
 def compute_layout(
     db: Db,
     data_dir: Path,
@@ -251,14 +302,24 @@ def compute_layout(
 ) -> dict:
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    ids, vectors = _load_embeddings(db, collection_id, include_hidden=include_hidden)
+    # Keep global layout coordinates stable by projecting against the full corpus
+    # for "all items", then filter hidden IDs from the response when needed.
+    layout_include_hidden = include_hidden or collection_id is None
+    ids, vectors = _load_embeddings(db, collection_id, include_hidden=layout_include_hidden)
     if not ids:
         return {"nodes": [], "clusters": []}
+
+    visible_ids: set[str] | None = None
+    if collection_id is None and not include_hidden:
+        visible_ids = set(_load_embeddings(db, None, include_hidden=False)[0])
+        if not visible_ids:
+            return {"nodes": [], "clusters": []}
 
     cache_file = data_dir / f"{_cache_key(ids)}.json"
     if not refresh and cache_file.exists():
         try:
-            return json.loads(cache_file.read_text())
+            cached = json.loads(cache_file.read_text())
+            return _filter_layout_result(cached, visible_ids) if visible_ids is not None else cached
         except Exception:
             pass
 
@@ -323,4 +384,4 @@ def compute_layout(
         cache_file.write_text(json.dumps(result))
     except Exception:
         pass
-    return result
+    return _filter_layout_result(result, visible_ids) if visible_ids is not None else result

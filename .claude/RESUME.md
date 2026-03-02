@@ -47,36 +47,188 @@ let _showThumbs = true;        // thumbs toggle state
 
 ---
 
-## Next Sprint: Phase 2 — Distance-Based Texture Culling
+### 3D Explorer: Phase 2 — Nearest-First Queue
+
+**File**: `app/attractor-explorer-3d.js` — `index.html` currently at `?v=10`
+
+- **`_queueNearTextures()`** replaces `_queueVisibleTextures()`. Queues all unloaded nodes sorted nearest-first (camera distance) so foreground nodes load before background.
+- Frustum culling was attempted and abandoned — THREE.Frustum approach failed because camera matrices aren't reliable before the first render frame, causing ~zero nodes to pass. Reverted to queue-all-sorted.
+- `cursor: wait` added to `switchExplorerMode()` in `app.js` (wraps `await loadExplorerView()` in try/finally).
+
+## RESOLVED: 3D thumbnails showing correctly
+
+**Symptom**: In 3D explorer, Thumbs checkbox checked, but tiles show only source colors (no images). 2D works perfectly.
+
+### What was verified this session
+
+- Server returns correct thumbnails: `GET /media/UUID?kind=thumb` → `200 image/jpeg` (99KB)
+- API returns correct `t` field for all 4,662 assets: `"t": "/media/UUID?kind=thumb"`
+- Code structure (material, mesh, geometry, UVs) is all correct
+- `_applyTexToMesh()` logic correct: sets `material.map`, `material.color(0xffffff)`, `material.needsUpdate`
+
+### Root cause and fix
+
+**Hypothesis**: `_rebuildForFocusedMode()` is called synchronously by `app.js` immediately after `loadData()` via `syncExplorerFilter()` → `setFilter(null)` (because `_focusedMode = true` by default). It clears `_texQueue` and resets `_texLoading = 0`, but leaves `node._texQueued = true` on all nodes (set by the first `_queueNearTextures()` in `loadData()`). The second `_queueNearTextures()` at the end of `_rebuildForFocusedMode()` then skips all nodes because they already have `_texQueued = true`, leaving the queue permanently empty.
+
+**Fix applied** (`app/attractor-explorer-3d.js`, inside `_rebuildForFocusedMode()`):
+```js
+_texQueue.length = 0;
+_texLoading = 0;
+for (const node of _allNodes) {    // reset so nodes can be re-queued after rebuild
+  if (!node._tex) node._texQueued = false;
+}
+```
+
+### Verification (2026-02-27, Playwright + real browser)
+
+- Loaded explorer in 3D mode on the full dataset (4,662 assets): thumbnail textures rendered correctly.
+- Toggled **Thumbs OFF**: nodes switched to pure source-color squares.
+- Toggled **Thumbs ON**: textures re-applied correctly.
+- Toggled **Focus OFF/ON** (triggers focused rebuild path): textures remained visible after rebuild.
+- No texture warnings/errors observed in console (only favicon 404).
+
+Result: the `_texQueued` reset in `_rebuildForFocusedMode()` resolved the queue-empty condition that was preventing texture application.
+
+---
+
+## Completed: Phase 3 — InstancedMesh + Overlay Textures
 
 **File**: `app/attractor-explorer-3d.js`
-**Reference**: 2D explorer's `_updateVisibleThumbs()` at `attractor-explorer.js:579`
 
-- Only queue textures for nodes within `TEX_LOAD_DISTANCE` of camera
-- Priority-sort by distance (nearest first)
-- Periodically re-cull from render loop (throttled, camera-moved check)
-- **Impact**: 95% fewer texture requests on initial load
+Implemented:
+1. Replaced per-node base meshes with one `THREE.InstancedMesh` (`_instanceMesh`).
+2. Billboarding now uses instance matrices with camera quaternion.
+3. Added near-camera textured overlay meshes (`_overlayMeshes`) only for the nearest visible subset.
+4. Added per-node visibility dimming via instance scale + color lerp toward background.
+5. Updated click picking to support `instanceId` raycast on `InstancedMesh` + overlay fallback.
+6. Focused-mode rebuild now re-creates the instanced mesh and overlays (no per-node mesh churn).
+7. Tween/live updates now drive `_syncInstanceMesh()` instead of per-mesh position copies.
 
-## Phase 3: InstancedMesh (biggest win)
-
-Replace 5,300 individual meshes with 1 `THREE.InstancedMesh` for colored squares + individual texture overlay meshes for nodes near camera.
-
-Sub-steps:
-1. Core InstancedMesh with per-instance color via `InstancedBufferAttribute`
-2. Billboard via instance matrix
-3. Texture overlay meshes (separate individual meshes near camera only)
-4. Visibility: color lerp toward background for dimmed + smaller scale
-5. Click detection: Raycaster supports InstancedMesh → `instanceId`
-6. Focus mode rebuild: Destroy+recreate InstancedMesh with new count
-7. Tween: Same interpolation, call `_syncInstancePositions()`
-
-**Draw calls: 5,300 → ~100-200** (25-50x reduction)
+Validation (Playwright, full dataset):
+- 3D loads with thumbnails.
+- Thumbs OFF/ON works (source colors ↔ textures).
+- Focus OFF/ON rebuild keeps textures working.
+- Click on node opens detail modal.
+- Drag-release click suppression still prevents accidental modal opens.
 
 ## Phase 4: Render Loop Dirty Flags
 
-- `_needsInstanceUpdate`, `_needsVisualUpdate`, `_needsTexOverlayUpdate`
-- Only work when flags are set
-- Near-zero JS cost on idle frames
+Implemented in `app/attractor-explorer-3d.js`:
+- Added `_needsVisualUpdate`, `_needsInstanceUpdate`, `_needsOverlaySync`.
+- `_updateNodeVisuals()` now runs only when visual filter/search/highlight state changes.
+- Overlay sync is event-driven with min interval throttling (`OVERLAY_SYNC_MIN_MS`) instead of periodic every frame.
+- Render loop now avoids full-node visual recompute and overlay sort work while idle.
+
+## Completed: Explorer Busy Feedback
+
+Files: `app/index.html`, `app/styles.css`, `app/app.js`
+
+Implemented:
+- Added an in-canvas Explorer busy overlay (`Building your 3D map…` / `Loading your map…`) with spinner.
+- Kept global wait cursor handling and layered overlay state with depth-safe begin/end helpers.
+- Added a `requestAnimationFrame` paint yield before heavy Explorer load work so busy UI renders immediately before synchronous map build.
+- Added phase-progress copy during load (`Fetching your 3D map…` → `Arranging your 3D tiles…`).
+- Disabled repeat Explorer-toggle clicks while an Explorer load is in flight.
+
+Validation (2026-02-28, Playwright):
+- Clicking Explorer on full dataset shows busy overlay text during load.
+- Timed flow (Grid → Explorer): overlay visible at ~22ms after click, hidden at ~2387ms.
+- Overlay clears after load and Explorer interaction resumes.
+- Existing console output unchanged (favicon 404 only).
+
+## Sprint-End Review Checklist
+
+- [x] 3D orbit drag-release should not open detail modal (spin/pan, release over node, no click-through).
+- [x] 2D → 3D switch responsiveness on full dataset should feel clearly busy (visible wait cursor) and complete within an acceptable delay.
+
+## Post-Sprint Follow-Up
+
+- [ ] Review the dedupe work for potential quality and performance improvements after this sprint is committed.
+
+## Elaboration Progress: AI Title Audit Baseline
+
+- Added draft report: `docs/AI_TITLE_AUDIT_BASELINE_2026-03-01.md`.
+- Dataset scanned: 5,306 assets (`data/inspirations.sqlite`).
+- Top findings:
+  - 72 empty titles
+  - 54 junk short-domain titles
+  - 40 Facebook generic saved-link titles (25 dynamic-link risk, 15 title-check)
+- Includes initial replacement workflow proposal and open decisions for morning.
+
+## Completed: AI Title Audit Dry-Run Workflow
+
+Files: `src/inspirations/title_audit.py`, `src/inspirations/cli.py`, `tests/test_title_audit.py`
+
+Implemented:
+- Added reusable title-audit engine with concise-title rules aligned to current review feedback.
+- Added CLI command: `inspirations ai title-audit` (JSON output only).
+- Added optional markdown table export via `--table-out`.
+- Added unit tests for concise formatting, saved-link cleanup, hidden filtering, and CLI wiring.
+
+Validation:
+- `PYTHONPATH=src python3 -m unittest -q tests.test_title_audit` (pass)
+- `PYTHONPATH=src python3 -m unittest -q tests.test_ai_semantic` (pass)
+- CLI smoke test on real DB produced 112 candidates and wrote `docs/AI_TITLE_IMPACT_TABLE_AUTOGEN.md`.
+
+## Perf Follow-Up: Option 2 (Deferred 3D Settle)
+
+Files: `app/attractor-explorer-3d.js`, `app/app.js`
+
+Implemented:
+- Added deferred-settle window on 3D load (`deferSettle` hint from app view switch).
+- Reworked settle/tween path to support frame-chunked settle computation before tween target commit.
+- Added cancellation guards for deferred settle on rebuild/destroy to avoid stale async runs.
+
+Validation (2026-03-01, Playwright):
+- Grid -> Explorer, full dataset, 3 runs:
+  - overlay first-visible: 57ms / 36ms / 42ms
+  - overlay hidden (load complete): 4619ms / 2250ms / 2411ms
+- Console remained clean except favicon 404.
+
+## Completed: AI Title Audit Staging/Apply CLI Workflow
+
+Files: `src/inspirations/db.py`, `src/inspirations/title_audit.py`, `src/inspirations/cli.py`, `tests/test_title_audit.py`
+
+Implemented:
+- Added DB-backed batch workflow tables for title audits (`title_audit_batches`, `title_audit_candidates`, `title_audit_applied`).
+- Added title-audit lifecycle functions:
+  - stage batch,
+  - review batch rows,
+  - mark rows approved/rejected/pending,
+  - edit row title (marks edited),
+  - apply approved/edited rows with drift protection (`--force` override),
+  - undo applied batch rows with drift protection (`--force` override).
+- Added CLI commands:
+  - `inspirations ai title-audit-stage`
+  - `inspirations ai title-audit-review`
+  - `inspirations ai title-audit-mark`
+  - `inspirations ai title-audit-edit`
+  - `inspirations ai title-audit-apply`
+  - `inspirations ai title-audit-undo`
+- Kept existing dry-run command (`inspirations ai title-audit`) intact.
+
+Validation:
+- `PYTHONPATH=src python3 -m unittest -q tests.test_title_audit` (pass; 8 tests)
+- `PYTHONPATH=src python3 -m unittest -q tests.test_server_api tests.test_storage_backfill` (pass; 32 tests)
+
+## Session Update (Mar 2, 2026)
+
+### Sidebar / tree behavior
+- `Collections` is now treated as a peer root directly under `All Items` in Browse.
+- Collaborator default remains collapsed-under-All-Items behavior for non-collection branches; collections stay visible.
+- Owner/collaborator IA requirements were captured in backlog:
+  - owner roots + default-expanded rules (`Status > All`, `All Items`),
+  - collaborator roots (`Collections` then `All Items`, no Status).
+
+### Modal UX fixes
+- Removed visible UUID from modal header; kept `Copy ID` button only.
+- Reworked modal header layout so title/meta are not squeezed by action buttons.
+- Fixed clip modal `Print` to open a dedicated print shell that reliably calls print in Safari-style flows.
+- Removed `View Page` from modal actions as redundant; clip/source flow is now `Open PDF` + `Print`.
+
+### Header icon work
+- Explorer toggle icon was iterated toward a perspective cube with internal dots.
+- Added explicit next-sprint item to finish a matched icon redesign (Grid + Explorer) with Safari clipping/legibility validation.
 
 ---
 
@@ -86,6 +238,6 @@ Sub-steps:
 - Dev server: `PYTHONPATH=src python3 -m inspirations serve --port 8001 --reload`
 - Gemini API key: `security find-generic-password -s inspirations_gemini_api_key -w`
 - Branch: `fix/grid-detail-view-fixes`
-- All 155 tests pass
+- All 160 tests pass
 - Three.js v0.160.0 via importmap from unpkg CDN
 - ES module cache tip: bump `?v=N` in `index.html` script tag when Chrome caches stale module

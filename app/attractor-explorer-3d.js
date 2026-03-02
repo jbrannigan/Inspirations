@@ -28,6 +28,7 @@
   } catch (e) {
     console.error("[AttractorExplorer3D] Three.js not available:", e);
     window.AttractorExplorer3D = {
+      __unavailable: true,
       init() {}, loadData() {}, setFilter() {}, setSearch() {},
       setFocusedMode() {}, highlight() {}, onSelect() {}, onClickNode() {},
       pause() {}, resume() {}, destroy() {},
@@ -68,30 +69,38 @@
   let _attractStrength = 0.35;
   let _repulsion = 6;
   let _nodeSize = 8;             // world units (scene spans ±350)
+  let _restPull = 0.02;          // return-to-rest strength when no attractors are active
   let _liveMode = false;
 
   // Tween
   let _tweenStart = 0;
   const _tweenDuration = 600;
   let _tweening = false;
+  let _deferredSettleRaf = null;
+  let _deferredSettleRunId = 0;
+  let _deferSettleUntil = 0;
 
   // Physics
   const SETTLE_TICKS = 200;
   const RETICK = 150;
+  const LOAD_SETTLE_DEFER_MS = 2500;
 
   // Texture loading
   const _texCache = {};
   let _texLoader = null;
   let _texLoading = 0;
   let _texQueue = [];
-  const MAX_CONCURRENT_TEX = 12;
-  // 0 means "no cap" (use all visible nodes).
-  const MAX_TEXTURE_OVERLAYS = 0;
-  const TEX_PREFETCH_COUNT = 0;
+  let _texQueueDirty = false;
+  let _maxConcurrentTex = 12;
+  // 0 means "no cap" (allow overlays for all currently visible nodes).
+  let _maxTextureOverlays = 0;
+  let _texPrefetchCount = 180;
   const OVERLAY_SYNC_MIN_MS = 90;
   const SETTINGS_KEY = "inspirations.attractor3d.settings.v2";
   const MAX_PRESET_NAME_LEN = 32;
   const MAX_PRESET_COUNT = 12;
+  const MIN_REST_PULL = 0.002;
+  const MAX_REST_PULL = 0.08;
   const SIZE_BUCKET = Object.freeze({
     SMALL: "small",
     MEDIUM: "medium",
@@ -197,8 +206,17 @@
   let _pointerMoveHandler = null;
   let _pointerUpHandler = null;
   let _pointerCancelHandler = null;
+  let _pointerLeaveHandler = null;
   let _controlsStartHandler = null;
   let _controlsEndHandler = null;
+  let _hoverPreviewEl = null;
+  let _hoverPreviewImgEl = null;
+  let _hoverPreviewTitleEl = null;
+  let _hoverPreviewNodeId = "";
+  let _hoverPreviewRaf = 0;
+  let _hoverPreviewClientX = 0;
+  let _hoverPreviewClientY = 0;
+  const _hoverPreviewEnabled = !!(window.matchMedia && window.matchMedia("(hover: hover) and (pointer: fine)").matches);
 
   // Source colors
   const SOURCE_COLORS = {
@@ -206,7 +224,16 @@
     facebook: 0x4267b2,
     houzz: 0x4dbc63,
     scan: 0x8b6914,
+    photo: 0x5b6f8c,
   };
+
+  function _normalizeSourceKey(source) {
+    const key = String(source || "").trim().toLowerCase();
+    if (key === "clip" || key === "clips" || key === "magazine clip" || key === "magazine clips") {
+      return "scan";
+    }
+    return key;
+  }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -217,6 +244,64 @@
 
   function _armClickSuppression() {
     _suppressClickUntil = performance.now() + CLICK_SUPPRESS_MS;
+  }
+
+  function _hideHoverPreview() {
+    if (_hoverPreviewEl) _hoverPreviewEl.hidden = true;
+    _hoverPreviewNodeId = "";
+    if (_renderer?.domElement) _renderer.domElement.style.cursor = "";
+  }
+
+  function _showHoverPreview(node, clientX, clientY) {
+    if (!_hoverPreviewEl || !_container || !_renderer) return;
+    if (!node) {
+      _hideHoverPreview();
+      return;
+    }
+    if (_hoverPreviewNodeId !== node.id) {
+      if (_hoverPreviewTitleEl) {
+        _hoverPreviewTitleEl.textContent = String(node.title || "(untitled)");
+      }
+      if (_hoverPreviewImgEl) {
+        const url = String(node.thumb_url || "");
+        _hoverPreviewImgEl.hidden = !url;
+        if (url && _hoverPreviewImgEl.src !== url) _hoverPreviewImgEl.src = url;
+      }
+      _hoverPreviewNodeId = node.id;
+    }
+    _hoverPreviewEl.hidden = false;
+    const bounds = _container.getBoundingClientRect();
+    const x = clientX - bounds.left;
+    const y = clientY - bounds.top;
+    const pad = 10;
+    const offset = 16;
+    const previewW = _hoverPreviewEl.offsetWidth || 220;
+    const previewH = _hoverPreviewEl.offsetHeight || 170;
+    let left = x + offset;
+    let top = y + offset;
+    if (left + previewW > bounds.width - pad) left = x - previewW - offset;
+    if (left < pad) left = pad;
+    if (top + previewH > bounds.height - pad) top = bounds.height - previewH - pad;
+    if (top < pad) top = pad;
+    _hoverPreviewEl.style.left = `${Math.round(left)}px`;
+    _hoverPreviewEl.style.top = `${Math.round(top)}px`;
+    if (_renderer?.domElement) _renderer.domElement.style.cursor = "pointer";
+  }
+
+  function _scheduleHoverPreview(clientX, clientY) {
+    if (!_hoverPreviewEnabled) return;
+    _hoverPreviewClientX = clientX;
+    _hoverPreviewClientY = clientY;
+    if (_hoverPreviewRaf) return;
+    _hoverPreviewRaf = requestAnimationFrame(() => {
+      _hoverPreviewRaf = 0;
+      if (!_hoverPreviewEnabled || _controlsDragging || !!_pointerDown) {
+        _hideHoverPreview();
+        return;
+      }
+      const node = _pickNodeAtClient(_hoverPreviewClientX, _hoverPreviewClientY);
+      _showHoverPreview(node, _hoverPreviewClientX, _hoverPreviewClientY);
+    });
   }
 
   function _settleTicksForNodeCount(nodeCount) {
@@ -235,6 +320,38 @@
     return RETICK;
   }
 
+  function _settleChunkSizeForNodeCount(nodeCount) {
+    if (nodeCount >= 5000) return 2;
+    if (nodeCount >= 3000) return 3;
+    if (nodeCount >= 1500) return 4;
+    return 8;
+  }
+
+  function _textureBudgetForNodeCount(nodeCount) {
+    if (nodeCount >= 5000) {
+      return { prefetch: 90, overlays: 0, concurrent: 10 };
+    }
+    if (nodeCount >= 3000) {
+      return { prefetch: 120, overlays: 0, concurrent: 12 };
+    }
+    if (nodeCount >= 1500) {
+      return { prefetch: 160, overlays: 0, concurrent: 14 };
+    }
+    return { prefetch: 220, overlays: 0, concurrent: 16 };
+  }
+
+  function _cancelDeferredSettle() {
+    _deferredSettleRunId += 1;
+    if (_deferredSettleRaf) {
+      cancelAnimationFrame(_deferredSettleRaf);
+      _deferredSettleRaf = null;
+    }
+  }
+
+  function _shouldDeferSettleNow() {
+    return performance.now() < _deferSettleUntil;
+  }
+
   function _sameIdSet(a, b) {
     if (a === b) return true;
     if (!a || !b) return false;
@@ -246,7 +363,7 @@
   }
 
   function _sourceColorValue(source) {
-    return SOURCE_COLORS[source] || 0x999999;
+    return SOURCE_COLORS[_normalizeSourceKey(source)] || 0x999999;
   }
 
   function _nodeOpacity(node) {
@@ -300,6 +417,7 @@
       strength: _clamp(rawPreset.strength, 0.05, 0.8, 0.35),
       spread: _clamp(rawPreset.spread, 1, 20, 6),
       size: _clamp(rawPreset.size, 0.05, 30, 8),
+      restPull: _clamp(rawPreset.restPull, MIN_REST_PULL, MAX_REST_PULL, 0.02),
       focusedMode: !!rawPreset.focusedMode,
       liveMode: !!rawPreset.liveMode,
       showThumbs: typeof rawPreset.showThumbs === "boolean" ? rawPreset.showThumbs : true,
@@ -315,6 +433,9 @@
       _nodeSize = nextSize;
       _hasSavedNodeSize = true;
       if (markManualSize) _sizeManuallySet = true;
+    }
+    if (Number.isFinite(look?.restPull)) {
+      _restPull = _clamp(look.restPull, MIN_REST_PULL, MAX_REST_PULL, _restPull);
     }
     if (typeof look?.focusedMode === "boolean") _focusedMode = look.focusedMode;
     if (typeof look?.liveMode === "boolean") _liveMode = look.liveMode;
@@ -344,6 +465,9 @@
         _nodeSize = _clamp(s.size, 0.05, 30, _nodeSize);
         _hasSavedNodeSize = true;
       }
+      if (Number.isFinite(s.restPull)) {
+        _restPull = _clamp(s.restPull, MIN_REST_PULL, MAX_REST_PULL, _restPull);
+      }
       if (typeof s.focusedMode === "boolean") _focusedMode = s.focusedMode;
       if (typeof s.showThumbs === "boolean") _showThumbs = s.showThumbs;
       if (typeof s.liveMode === "boolean") _liveMode = s.liveMode;
@@ -371,6 +495,7 @@
         strength: _attractStrength,
         spread: _repulsion,
         size: _nodeSize,
+        restPull: _restPull,
         focusedMode: _focusedMode,
         showThumbs: _showThumbs,
         liveMode: _liveMode,
@@ -379,6 +504,7 @@
           strength: p.strength,
           spread: p.spread,
           size: p.size,
+          restPull: p.restPull,
           focusedMode: p.focusedMode,
           liveMode: p.liveMode,
           showThumbs: p.showThumbs,
@@ -467,6 +593,7 @@
     _controls.screenSpacePanning = true;
     _controlsStartHandler = () => {
       _controlsDragging = true;
+      _hideHoverPreview();
     };
     _controlsEndHandler = () => {
       _controlsDragging = false;
@@ -493,6 +620,18 @@
     _controlsEl.className = "attractor-controls";
     _container.appendChild(_controlsEl);
 
+    // Hover preview (desktop/laptop pointers only)
+    _hoverPreviewEl = document.createElement("div");
+    _hoverPreviewEl.className = "attractor-hover-preview";
+    _hoverPreviewEl.hidden = true;
+    _hoverPreviewEl.innerHTML = `
+      <img class="attractor-hover-preview-img" alt="">
+      <div class="attractor-hover-preview-title"></div>
+    `;
+    _container.appendChild(_hoverPreviewEl);
+    _hoverPreviewImgEl = _hoverPreviewEl.querySelector(".attractor-hover-preview-img");
+    _hoverPreviewTitleEl = _hoverPreviewEl.querySelector(".attractor-hover-preview-title");
+
     // Texture loader
     _texLoader = new THREE.TextureLoader();
 
@@ -515,14 +654,17 @@
     _pointerDownHandler = (e) => {
       _pointerDown = { x: e.clientX, y: e.clientY };
       _dragMoved = false;
+      _hideHoverPreview();
     };
     _pointerMoveHandler = (e) => {
-      if (!_pointerDown) return;
-      const dx = e.clientX - _pointerDown.x;
-      const dy = e.clientY - _pointerDown.y;
-      if ((dx * dx + dy * dy) > (CLICK_DRAG_PX * CLICK_DRAG_PX)) {
-        _dragMoved = true;
+      if (_pointerDown) {
+        const dx = e.clientX - _pointerDown.x;
+        const dy = e.clientY - _pointerDown.y;
+        if ((dx * dx + dy * dy) > (CLICK_DRAG_PX * CLICK_DRAG_PX)) {
+          _dragMoved = true;
+        }
       }
+      _scheduleHoverPreview(e.clientX, e.clientY);
     };
     _pointerUpHandler = () => {
       if (_dragMoved) _armClickSuppression();
@@ -535,11 +677,16 @@
       _pointerDown = null;
       _dragMoved = false;
       _controlsDragging = false;
+      _hideHoverPreview();
+    };
+    _pointerLeaveHandler = () => {
+      _hideHoverPreview();
     };
     _renderer.domElement.addEventListener("pointerdown", _pointerDownHandler);
     _renderer.domElement.addEventListener("pointermove", _pointerMoveHandler);
     _renderer.domElement.addEventListener("pointerup", _pointerUpHandler);
     _renderer.domElement.addEventListener("pointercancel", _pointerCancelHandler);
+    _renderer.domElement.addEventListener("pointerleave", _pointerLeaveHandler);
     window.addEventListener("pointerup", _pointerUpHandler);
     window.addEventListener("pointercancel", _pointerCancelHandler);
 
@@ -594,8 +741,12 @@
     };
   }
 
-  function loadData(rawData) {
+  function loadData(rawData, options = {}) {
     const data = _normalizeDataPayload(rawData);
+    _cancelDeferredSettle();
+    _deferSettleUntil = options.deferSettle
+      ? (performance.now() + LOAD_SETTLE_DEFER_MS)
+      : 0;
     _clearScene();
 
     _dimensions = data.dimensions || [];
@@ -631,15 +782,21 @@
         vx: 0, vy: 0, vz: 0,
         thumb_url: a.t,
         title: a.title || "",
-        source: a.src || "",
+        source: _normalizeSourceKey(a.src || ""),
         _tex: null,
         _texQueued: false,
         _texFailed: false,
+        _texPriority: Number.POSITIVE_INFINITY,
         _visAlpha: 1,
         _visible: true,
         _instanceIndex: -1,
       };
     });
+
+    const texBudget = _textureBudgetForNodeCount(_nodes.length);
+    _texPrefetchCount = texBudget.prefetch;
+    _maxTextureOverlays = texBudget.overlays;
+    _maxConcurrentTex = texBudget.concurrent;
 
     _normalizeRestLayoutToScene();
     _allNodes = _nodes.slice();
@@ -765,6 +922,7 @@
     Object.values(_texCache).forEach((t) => t.dispose());
     for (const key in _texCache) delete _texCache[key];
     _texQueue.length = 0;
+    _texQueueDirty = false;
     _texLoading = 0;
   }
 
@@ -796,7 +954,7 @@
       }
 
       // Return-to-rest force
-      const restStr = _activeAttractors.length > 0 ? 0.003 : 0.05;
+      const restStr = _activeAttractors.length > 0 ? 0.003 : _restPull;
       fx += (node._restX - node.x) * restStr;
       fy += (node._restY - node.y) * restStr;
       fz += (node._restZ - node.z) * restStr;
@@ -912,13 +1070,17 @@
   }
 
   function _settleSimulation(ticks) {
+    _cancelDeferredSettle();
     for (let i = 0; i < ticks; i++) {
       _forceTick();
     }
     _markSceneDirty();
   }
 
-  function _settleAndTween(ticks) {
+  function _settleAndTween(ticks, options = {}) {
+    const defer = !!options.defer;
+    _cancelDeferredSettle();
+
     // Stash current positions
     for (const node of _nodes) {
       node._tweenFromX = node.x;
@@ -926,21 +1088,60 @@
       node._tweenFromZ = node.z;
     }
 
-    // Settle
-    _settleSimulation(ticks);
-
-    // Stash settled as targets, restore old
-    for (const node of _nodes) {
-      node._targetX = node.x;
-      node._targetY = node.y;
-      node._targetZ = node.z;
-      node.x = node._tweenFromX;
-      node.y = node._tweenFromY;
-      node.z = node._tweenFromZ;
+    // Default behavior: settle synchronously then tween to settled targets.
+    if (!defer) {
+      _settleSimulation(ticks);
+      for (const node of _nodes) {
+        node._targetX = node.x;
+        node._targetY = node.y;
+        node._targetZ = node.z;
+        node.x = node._tweenFromX;
+        node.y = node._tweenFromY;
+        node.z = node._tweenFromZ;
+      }
+      _tweenStart = performance.now();
+      _tweening = true;
+      return;
     }
 
-    _tweenStart = performance.now();
-    _tweening = true;
+    // Defer settle work across frames to keep view switch responsive.
+    let remaining = Math.max(0, ticks | 0);
+    const chunkTicks = _settleChunkSizeForNodeCount(_nodes.length);
+    const runId = _deferredSettleRunId;
+
+    const finalize = () => {
+      if (runId !== _deferredSettleRunId) return;
+      for (const node of _nodes) {
+        node._targetX = node.x;
+        node._targetY = node.y;
+        node._targetZ = node.z;
+        node.x = node._tweenFromX;
+        node.y = node._tweenFromY;
+        node.z = node._tweenFromZ;
+      }
+      _tweenStart = performance.now();
+      _tweening = true;
+      _markSceneDirty();
+      _deferredSettleRaf = null;
+    };
+
+    const step = () => {
+      if (runId !== _deferredSettleRunId) return;
+      const stepTicks = Math.min(chunkTicks, remaining);
+      for (let i = 0; i < stepTicks; i++) _forceTick();
+      remaining -= stepTicks;
+      if (remaining > 0) {
+        _deferredSettleRaf = requestAnimationFrame(step);
+        return;
+      }
+      finalize();
+    };
+
+    if (remaining <= 0) {
+      finalize();
+      return;
+    }
+    _deferredSettleRaf = requestAnimationFrame(step);
   }
 
   // ─── Attractor forces ─────────────────────────────────────────────────────
@@ -970,7 +1171,9 @@
     if (_liveMode) {
       // Live mode: render loop handles ticking
     } else {
-      _settleAndTween(_retickTicksForNodeCount(_nodes.length));
+      const useDeferredSettle = _shouldDeferSettleNow();
+      _settleAndTween(_retickTicksForNodeCount(_nodes.length), { defer: useDeferredSettle });
+      if (useDeferredSettle) _deferSettleUntil = 0;
     }
 
     _updatePoleMarkers();
@@ -1169,19 +1372,35 @@
 
   function _queueNearTextures() {
     if (!_showThumbs) return;
-    const toLoad = _rankNearestNodes(TEX_PREFETCH_COUNT, true);
-    for (const { node } of toLoad) {
-      node._texQueued = true;
-      _texQueue.push(node);
+    if (_texPrefetchCount <= 0) return;
+    const toLoad = _rankNearestNodes(_texPrefetchCount, true);
+    for (let i = 0; i < toLoad.length; i++) {
+      _enqueueTextureNode(toLoad[i].node, i);
     }
     _processTexQueue();
   }
 
+  function _enqueueTextureNode(node, priority) {
+    if (!node || node._tex || node._texFailed || !node.thumb_url) return;
+    if (node._texQueued) return;
+    node._texQueued = true;
+    node._texPriority = Number.isFinite(priority) ? priority : Number.POSITIVE_INFINITY;
+    _texQueue.push(node);
+    _texQueueDirty = true;
+  }
+
   function _processTexQueue() {
-    while (_texLoading < MAX_CONCURRENT_TEX && _texQueue.length > 0) {
+    if (_texQueueDirty && _texQueue.length > 1) {
+      _texQueue.sort((a, b) => (a._texPriority ?? Number.POSITIVE_INFINITY) - (b._texPriority ?? Number.POSITIVE_INFINITY));
+      _texQueueDirty = false;
+    }
+    while (_texLoading < _maxConcurrentTex && _texQueue.length > 0) {
       const node = _texQueue.shift();
       if (!node || node._tex || node._texFailed || !node.thumb_url) {
-        if (node) node._texQueued = false;
+        if (node) {
+          node._texQueued = false;
+          node._texPriority = Number.POSITIVE_INFINITY;
+        }
         continue;
       }
       _texLoading++;
@@ -1189,6 +1408,7 @@
       if (_texCache[node.thumb_url]) {
         node._tex = _texCache[node.thumb_url];
         node._texQueued = false;
+        node._texPriority = Number.POSITIVE_INFINITY;
         _needsInstanceUpdate = true;
         _needsOverlaySync = true;
         _texLoading--;
@@ -1203,6 +1423,7 @@
           _texCache[node.thumb_url] = tex;
           node._tex = tex;
           node._texQueued = false;
+          node._texPriority = Number.POSITIVE_INFINITY;
           _needsInstanceUpdate = true;
           _needsOverlaySync = true;
           _texLoading--;
@@ -1213,6 +1434,7 @@
           console.warn('[3D] tex error', node.thumb_url.slice(0, 40), err);
           node._texQueued = false;
           node._texFailed = true;
+          node._texPriority = Number.POSITIVE_INFINITY;
           _texLoading--;
           _processTexQueue();
         }
@@ -1294,15 +1516,13 @@
       return;
     }
 
-    const ranked = _rankNearestNodes(MAX_TEXTURE_OVERLAYS, false);
+    const ranked = _rankNearestNodes(_maxTextureOverlays, false);
     const wantedIds = new Set();
-    for (const { node } of ranked) {
+    for (let i = 0; i < ranked.length; i++) {
+      const { node } = ranked[i];
       wantedIds.add(node.id);
       if (!node._tex) {
-        if (!node._texQueued && !node._texFailed) {
-          node._texQueued = true;
-          _texQueue.push(node);
-        }
+        _enqueueTextureNode(node, i);
         continue;
       }
       const entry = _ensureOverlay(node);
@@ -1320,17 +1540,15 @@
 
   // ─── Click detection ──────────────────────────────────────────────────────
 
-  function _onClick(e) {
-    if (!_scene || !_camera) return;
-    // OrbitControls can miss end events on some browsers/devices.
-    // If no pointer is currently down, treat a lingering drag flag as stale.
-    if (_controlsDragging && !_pointerDown) _controlsDragging = false;
-    if (_controlsDragging) return;
-    if (performance.now() < _suppressClickUntil) return;
+  function _pickNodeAtClient(clientX, clientY) {
+    if (!_scene || !_camera || !_renderer) return null;
     const rect = _renderer.domElement.getBoundingClientRect();
+    if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
+      return null;
+    }
     const mouse = new THREE.Vector2(
-      ((e.clientX - rect.left) / rect.width) * 2 - 1,
-      -((e.clientY - rect.top) / rect.height) * 2 + 1
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1
     );
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(mouse, _camera);
@@ -1340,24 +1558,26 @@
       if (mesh.visible) pickTargets.push(mesh);
     }
     const hits = raycaster.intersectObjects(pickTargets, false);
-    if (hits[0]) {
-      const hit = hits[0];
-      let node = null;
-      let nodeId = null;
-      if (hit.object === _instanceMesh && hit.instanceId !== undefined) {
-        node = _instanceNodes[hit.instanceId] || null;
-        nodeId = node ? node.id : null;
-      } else {
-        node = hit.object?.userData?.node || null;
-        nodeId = hit.object?.userData?.nodeId || (node ? node.id : null);
-      }
-      if (node && nodeId && _clickCallback) _clickCallback(nodeId, node);
+    if (!hits[0]) return null;
+    const hit = hits[0];
+    if (hit.object === _instanceMesh && hit.instanceId !== undefined) {
+      return _instanceNodes[hit.instanceId] || null;
     }
+    return hit.object?.userData?.node || null;
+  }
+
+  function _onClick(e) {
+    if (!_scene || !_camera) return;
+    // OrbitControls can miss end events on some browsers/devices.
+    // If no pointer is currently down, treat a lingering drag flag as stale.
+    if (_controlsDragging && !_pointerDown) _controlsDragging = false;
+    if (_controlsDragging) return;
+    if (performance.now() < _suppressClickUntil) return;
+    const node = _pickNodeAtClient(e.clientX, e.clientY);
+    if (node && node.id && _clickCallback) _clickCallback(node.id, node);
   }
 
   // ─── Control panel ────────────────────────────────────────────────────────
-
-  let _on3DToggleCb = null;
 
   function _sanitizePresetName(rawName) {
     return String(rawName || "")
@@ -1377,6 +1597,7 @@
       strength: _attractStrength,
       spread: _repulsion,
       size: _nodeSize,
+      restPull: _restPull,
       focusedMode: _focusedMode,
       liveMode: _liveMode,
       showThumbs: _showThumbs,
@@ -1388,18 +1609,22 @@
     const strSlider = _controlsEl.querySelector("#_attr3dStr");
     const spreadSlider = _controlsEl.querySelector("#_attr3dSpread");
     const sizeSlider = _controlsEl.querySelector("#_attr3dSize");
+    const restPullSlider = _controlsEl.querySelector("#_attr3dRestPull");
     const strVal = _controlsEl.querySelector("#_attr3dStrVal");
     const spreadVal = _controlsEl.querySelector("#_attr3dSpreadVal");
     const sizeVal = _controlsEl.querySelector("#_attr3dSizeVal");
+    const restPullVal = _controlsEl.querySelector("#_attr3dRestPullVal");
     const focusToggle = _controlsEl.querySelector("#_attr3dFocus");
     const liveToggle = _controlsEl.querySelector("#_attr3dLive");
     const thumbsToggle = _controlsEl.querySelector("#_attr3dThumbs");
     if (strSlider) strSlider.value = String(_attractStrength);
     if (spreadSlider) spreadSlider.value = String(_repulsion);
     if (sizeSlider) sizeSlider.value = String(_nodeSize);
+    if (restPullSlider) restPullSlider.value = String(_restPull);
     if (strVal) strVal.textContent = _fmtNum(_attractStrength, 2);
     if (spreadVal) spreadVal.textContent = _fmtNum(_repulsion, 0);
     if (sizeVal) sizeVal.textContent = _fmtNum(_nodeSize, 2);
+    if (restPullVal) restPullVal.textContent = _fmtNum(_restPull, 3);
     if (focusToggle) focusToggle.checked = _focusedMode;
     if (liveToggle) liveToggle.checked = _liveMode;
     if (thumbsToggle) thumbsToggle.checked = _showThumbs;
@@ -1514,7 +1739,10 @@
         <span class="slider-head">Size <input type="range" id="_attr3dSize" min="0.05" max="30" step="0.05" value="${_nodeSize}"></span>
         <span class="slider-value" id="_attr3dSizeVal">${_fmtNum(_nodeSize, 2)}</span>
       </label>
-      <label class="physics-toggle">3D <input type="checkbox" id="_attr3dToggle" checked></label>
+      <label class="slider-with-value">
+        <span class="slider-head">Anchor <input type="range" id="_attr3dRestPull" min="${MIN_REST_PULL}" max="${MAX_REST_PULL}" step="0.002" value="${_restPull}"></span>
+        <span class="slider-value" id="_attr3dRestPullVal">${_fmtNum(_restPull, 3)}</span>
+      </label>
       <label class="physics-toggle">Focus <input type="checkbox" id="_attr3dFocus" ${_focusedMode ? "checked" : ""}></label>
       <label class="physics-toggle">Live <input type="checkbox" id="_attr3dLive" ${_liveMode ? "checked" : ""}></label>
       <label class="physics-toggle">Thumbs <input type="checkbox" id="_attr3dThumbs" ${_showThumbs ? "checked" : ""}></label>
@@ -1649,6 +1877,15 @@
         _markSceneDirty();
       });
 
+    const restPullSlider = _controlsEl.querySelector("#_attr3dRestPull");
+    const restPullVal = _controlsEl.querySelector("#_attr3dRestPullVal");
+    if (restPullSlider)
+      restPullSlider.addEventListener("input", (e) => {
+        _restPull = _clamp(e.target.value, MIN_REST_PULL, MAX_REST_PULL, _restPull);
+        if (restPullVal) restPullVal.textContent = _fmtNum(_restPull, 3);
+        _saveSettings();
+      });
+
     const focusToggle = _controlsEl.querySelector("#_attr3dFocus");
     if (focusToggle)
       focusToggle.addEventListener("change", (e) => {
@@ -1667,7 +1904,15 @@
           if (_activeAttractors.length > 0) {
             _settleSimulation(_retickTicksForNodeCount(_nodes.length));
           } else {
-            _resetNodesToRest();
+            // Preserve the current geometry when exiting Live mode.
+            // Hard-resetting to rest coordinates makes the map "ball up" and
+            // loses local clustering context the user was exploring.
+            for (const node of _nodes) {
+              node.vx = 0;
+              node.vy = 0;
+              node.vz = 0;
+            }
+            _markSceneDirty();
           }
           _syncInstanceMesh();
           _queueNearTextures();
@@ -1749,13 +1994,6 @@
         _refreshPresetControls(selectedName);
       });
     }
-
-    // 3D toggle — fires callback to switch back to 2D
-    const toggle3D = _controlsEl.querySelector("#_attr3dToggle");
-    if (toggle3D)
-      toggle3D.addEventListener("change", (e) => {
-        if (_on3DToggleCb) _on3DToggleCb(e.target.checked);
-      });
 
     _refreshPresetControls("");
   }
@@ -1863,12 +2101,15 @@
   // ─── Focused mode ─────────────────────────────────────────────────────────
 
   function _rebuildForFocusedMode() {
+    _cancelDeferredSettle();
     _clearOverlayMeshes();
     _disposeInstanceMesh();
     _texQueue.length = 0;               // clear pending queue
+    _texQueueDirty = false;
     _texLoading = 0;
     for (const node of _allNodes) {    // reset so nodes can be re-queued after rebuild
       if (!node._tex && !node._texFailed) node._texQueued = false;
+      node._texPriority = Number.POSITIVE_INFINITY;
     }
 
     // Determine visible node set
@@ -1958,6 +2199,8 @@
   }
 
   function destroy() {
+    _cancelDeferredSettle();
+    _deferSettleUntil = 0;
     _stopRenderLoop();
     _clearScene();
     if (_controls) {
@@ -1974,17 +2217,27 @@
       if (_pointerMoveHandler) _renderer.domElement.removeEventListener("pointermove", _pointerMoveHandler);
       if (_pointerUpHandler) _renderer.domElement.removeEventListener("pointerup", _pointerUpHandler);
       if (_pointerCancelHandler) _renderer.domElement.removeEventListener("pointercancel", _pointerCancelHandler);
+      if (_pointerLeaveHandler) _renderer.domElement.removeEventListener("pointerleave", _pointerLeaveHandler);
     }
     if (_pointerUpHandler) window.removeEventListener("pointerup", _pointerUpHandler);
     if (_pointerCancelHandler) window.removeEventListener("pointercancel", _pointerCancelHandler);
+    if (_hoverPreviewRaf) {
+      cancelAnimationFrame(_hoverPreviewRaf);
+      _hoverPreviewRaf = 0;
+    }
+    _hideHoverPreview();
     _pointerDownHandler = null;
     _pointerMoveHandler = null;
     _pointerUpHandler = null;
     _pointerCancelHandler = null;
+    _pointerLeaveHandler = null;
     _pointerDown = null;
     _dragMoved = false;
     _controlsDragging = false;
     _suppressClickUntil = 0;
+    _hoverPreviewClientX = 0;
+    _hoverPreviewClientY = 0;
+    _hoverPreviewNodeId = "";
     _lastCameraPos = null;
     _needsVisualUpdate = false;
     _needsInstanceUpdate = false;
@@ -2009,6 +2262,12 @@
       _resizeObserver.disconnect();
       _resizeObserver = null;
     }
+    if (_hoverPreviewEl) {
+      _hoverPreviewEl.remove();
+      _hoverPreviewEl = null;
+    }
+    _hoverPreviewImgEl = null;
+    _hoverPreviewTitleEl = null;
     if (_controlsEl) _controlsEl.remove();
     if (_labelsEl) _labelsEl.remove();
     _controlsEl = null;
@@ -2018,6 +2277,7 @@
   // ─── Export ───────────────────────────────────────────────────────────────
 
   window.AttractorExplorer3D = {
+    __unavailable: false,
     init,
     loadData,
     setFilter,
@@ -2026,7 +2286,6 @@
     highlight,
     onSelect,
     onClickNode,
-    on3DToggle(cb) { _on3DToggleCb = cb; },
     pause,
     resume,
     destroy,
