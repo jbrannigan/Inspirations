@@ -5,6 +5,7 @@ const state = {
   sidebarHidden: false,         // side panel collapsed state
   currentBoard: null,           // board filter (null = all)
   currentSource: null,          // source filter (null = all)
+  currentContentKind: null,     // clip subtype filter (scan/photo/video)
   currentCollection: null,      // collection ID filter
   currentCollectionIds: [],     // recursive collection scope
   currentCollectionLabel: "",   // display label for collection scope
@@ -51,8 +52,10 @@ const state = {
   // Imports
   scanImportBusy: false,
   photoImportBusy: false,
+  videoImportBusy: false,
   scanImportFile: null,
   photoImportFile: null,
+  videoImportFile: null,
 
   // Canvas review mode
   canvasReview: false,          // true when canvas review overlay is active
@@ -63,6 +66,9 @@ const state = {
   hiddenTree: null,             // hidden items tree for sidebar (owners only)
   expandedTreeNodes: new Set(), // track which tree nodes are expanded by user
   allItemsTreeCollapsed: null,  // collaborator default: collapse browse tree under "All Items"
+  collaboratorTreeUnlocked: false, // collaborator default: hide broader tree until explicit browse
+  collaboratorDefaultScopeApplied: false, // avoid re-applying collaborator default collection scope
+  lastCollaboratorBrowseUnlockAt: 0, // guards accidental follow-up taps right after browse unlock
   openQuestions: [],             // open question annotations (owners only)
   questionPollTimer: null,
 };
@@ -94,14 +100,72 @@ const VIEW_MODE_KEY = "inspirations.ui.view.mode.v1";
 const CONTEXT_LINK_BANNER_DEFAULT = "Use this shared context link to review the referenced item.";
 
 const IMAGE_SUFFIX_RE = /\.(jpg|jpeg|png|webp|gif|bmp|svg)(\?.*)?$/i;
+const VIDEO_SUFFIX_RE = /\.(mp4|mov|m4v|webm|avi|mkv|mpeg|mpg|wmv|3gp)(\?.*)?$/i;
 const PDF_FILE_EXT_RE = /\.pdf$/i;
 const IMAGE_FILE_EXT_RE = /\.(jpg|jpeg|png|webp|gif|bmp|heic|heif|tif|tiff)$/i;
+const VIDEO_FILE_EXT_RE = /\.(mp4|mov|m4v|webm|avi|mkv|mpeg|mpg|wmv|3gp)$/i;
 const TITLE_DYNAMIC_SEGMENT_RE = /^(?:home|index|main|blog|news|latest|feed|explore|discover|topics?|category|categories|tag|tags|shop|products?|wirecutter)$/i;
 const TITLE_DYNAMIC_QUERY_KEY_RE = /^(?:page|p|offset|start|sort|view)$/i;
 const TITLE_GENERIC_PREVIEW_RE = /(?:og[_-]?(?:image|default|general)|default(?:[_-]?image)?|site[_-]?icon|logo|placeholder)/i;
+const INGEST_TAG_GROUPS = [
+  {
+    key: "source",
+    label: "Source",
+    tags: ["scan", "photo", "video"],
+  },
+  {
+    key: "rooms",
+    label: "Rooms",
+    tags: [
+      "bathroom", "kitchen", "bedroom", "living_room", "dining_room", "office",
+      "laundry", "mudroom", "closet", "garage", "hallway", "foyer", "nursery",
+      "basement", "attic", "pantry", "sunroom", "patio", "pool", "garden",
+    ],
+  },
+  {
+    key: "styles",
+    label: "Styles",
+    tags: [
+      "modern", "contemporary", "traditional", "transitional", "farmhouse",
+      "rustic", "coastal", "industrial", "mid_century", "scandinavian",
+      "mediterranean", "craftsman", "colonial", "art_deco", "bohemian",
+      "minimalist", "eclectic", "french_country", "spanish", "japanese",
+    ],
+  },
+  {
+    key: "materials",
+    label: "Materials",
+    tags: [
+      "wood", "tile", "stone", "marble", "granite", "quartz", "concrete",
+      "brick", "metal", "glass", "stainless_steel", "brass", "copper",
+      "iron", "ceramic", "porcelain", "hardwood", "laminate", "vinyl",
+      "leather", "fabric", "linen", "wallpaper", "stucco", "shiplap",
+    ],
+  },
+  {
+    key: "types",
+    label: "Types",
+    tags: ["interior", "exterior", "product", "plan", "document", "other"],
+  },
+  {
+    key: "colors",
+    label: "Colors",
+    tags: [
+      "white", "black", "gray", "brown", "beige", "blue", "green", "red",
+      "yellow", "orange", "pink", "purple", "gold", "silver", "navy",
+    ],
+  },
+  {
+    key: "elements",
+    label: "Elements",
+    tags: ["cabinet", "countertop", "sink", "bathtub", "shower", "fireplace", "lighting", "window", "door", "shelving"],
+  },
+];
 
 async function apiUpload(path, formData) {
-  const res = await fetch(path, { method: "POST", body: formData });
+  const actorToken = typeof Shared.getActorToken === "function" ? Shared.getActorToken() : "";
+  const headers = actorToken ? { "X-Actor-Token": actorToken } : {};
+  const res = await fetch(path, { method: "POST", body: formData, headers });
   if (!res.ok) { const t = await res.text(); throw new Error(t || res.statusText); }
   return res.json();
 }
@@ -119,8 +183,25 @@ function semanticQueryFromInput(value) {
 
 function previewForAsset(a) {
   if (a.thumb_path) return `/media/${a.id}?kind=thumb`;
-  if (a.stored_path) return `/media/${a.id}?kind=original`;
+  if (a.stored_path && IMAGE_SUFFIX_RE.test(a.stored_path)) return `/media/${a.id}?kind=original`;
   if (a.image_url && IMAGE_SUFFIX_RE.test(a.image_url)) return a.image_url;
+  return "";
+}
+
+function isVideoAsset(asset) {
+  const mediaStatus = String(asset?.media_status || "").trim().toLowerCase();
+  const contentKind = String(asset?.content_kind || "").trim().toLowerCase();
+  if (mediaStatus === "video") return true;
+  if (contentKind === "video" || contentKind === "reel") return true;
+  if (asset?.stored_path && VIDEO_SUFFIX_RE.test(String(asset.stored_path))) return true;
+  if (asset?.image_url && VIDEO_SUFFIX_RE.test(String(asset.image_url))) return true;
+  return false;
+}
+
+function videoUrlForAsset(asset) {
+  if (!asset || !isVideoAsset(asset)) return "";
+  if (asset.stored_path) return `/media/${asset.id}?kind=original`;
+  if (asset.image_url && VIDEO_SUFFIX_RE.test(asset.image_url)) return asset.image_url;
   return "";
 }
 
@@ -411,6 +492,7 @@ async function restoreContextLinkFromUrl() {
   if (String(report?.reason || "") !== "collection_not_found") {
     state.currentSource = null;
     state.currentBoard = null;
+    state.currentContentKind = null;
     clearCatalogFilter();
     setCollectionFilterIds([payload.collectionId], { label: collectionName, nodeId: null });
     state.offset = 0;
@@ -469,6 +551,11 @@ function isImageFile(file) {
   return (file.type || "").startsWith("image/") || IMAGE_FILE_EXT_RE.test(file.name || "");
 }
 
+function isVideoFile(file) {
+  if (!file) return false;
+  return (file.type || "").startsWith("video/") || VIDEO_FILE_EXT_RE.test(file.name || "");
+}
+
 function setSingleFileSelection(input, file, stateKey) {
   state[stateKey] = file || null;
   if (!input) return;
@@ -492,6 +579,73 @@ function wireSingleFileDropZone(options) {
     setSingleFileSelection(input, file, options.stateKey);
     if (typeof options.onSelected === "function") options.onSelected(file);
   });
+}
+
+function parseTagInput(raw) {
+  const out = [];
+  const seen = new Set();
+  for (const part of String(raw || "").split(/[,\n;]+/)) {
+    const tag = part.trim();
+    if (!tag) continue;
+    const key = tag.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(tag);
+  }
+  return out;
+}
+
+function _ingestTagDisplayLabel(raw) {
+  return String(raw || "")
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function renderIngestTagChips(inputId, chipsId) {
+  const input = document.getElementById(inputId);
+  const wrap = document.getElementById(chipsId);
+  if (!input || !wrap) return;
+  wrap.innerHTML = "";
+  if (!INGEST_TAG_GROUPS.length) return;
+  const selected = new Set(parseTagInput(input.value).map((t) => t.toLowerCase()));
+  for (const group of INGEST_TAG_GROUPS) {
+    const section = document.createElement("section");
+    section.className = "ingestTagGroup";
+
+    const heading = document.createElement("div");
+    heading.className = "ingestTagGroupLabel";
+    heading.textContent = group.label;
+    section.appendChild(heading);
+
+    const row = document.createElement("div");
+    row.className = "ingestTagGroupChips";
+    for (const value of group.tags) {
+      const tag = String(value || "").trim();
+      if (!tag) continue;
+      const key = tag.toLowerCase();
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = selected.has(key) ? "ingestTagChip active" : "ingestTagChip";
+      btn.textContent = _ingestTagDisplayLabel(tag);
+      btn.addEventListener("click", () => {
+        const tags = parseTagInput(input.value);
+        const idx = tags.findIndex((t) => t.toLowerCase() === key);
+        if (idx >= 0) tags.splice(idx, 1);
+        else tags.push(tag);
+        input.value = tags.join(", ");
+        renderIngestTagChips(inputId, chipsId);
+      });
+      row.appendChild(btn);
+    }
+    section.appendChild(row);
+    wrap.appendChild(section);
+  }
+}
+
+function refreshIngestTagPickers() {
+  renderIngestTagChips("scanImportTagsInput", "scanImportTagChips");
+  renderIngestTagChips("photoImportTagsInput", "photoImportTagChips");
+  renderIngestTagChips("videoImportTagsInput", "videoImportTagChips");
 }
 
 function _uniqNonEmpty(values) {
@@ -599,7 +753,7 @@ function clearCollectionFilter() {
 }
 
 function isAllItemsScopeActive() {
-  return !state.currentSource && !state.currentBoard && !hasCollectionFilter() && !hasCatalogFilter();
+  return !state.currentSource && !state.currentBoard && !state.currentContentKind && !hasCollectionFilter() && !hasCatalogFilter();
 }
 
 function setCollectionFilterIds(ids, { label = "", nodeId = null } = {}) {
@@ -613,6 +767,52 @@ function setCollectionFilterIds(ids, { label = "", nodeId = null } = {}) {
     state.currentCollectionLabel = label || "";
     state.currentTreeNodeId = nodeId;
   }
+}
+
+function isCollaboratorActor() {
+  return !!(state.actor && state.actor.role !== "owner");
+}
+
+function shouldIgnorePostBrowseUnlockTreeClick() {
+  if (!isCollaboratorActor()) return false;
+  if (!state.lastCollaboratorBrowseUnlockAt) return false;
+  const elapsed = Date.now() - state.lastCollaboratorBrowseUnlockAt;
+  if (elapsed < 0 || elapsed > 500) return false;
+  // Only guard while collaborator is still in collection scope.
+  return hasCollectionFilter();
+}
+
+function _findCollectionsGroupNode() {
+  const tree = Array.isArray(state.catalogTree) ? state.catalogTree : [];
+  return tree.find((node) => node && node.type === "collections_group") || null;
+}
+
+function _applyCollaboratorCollectionsDefaultScope() {
+  if (!isCollaboratorActor()) return;
+  if (state.collaboratorDefaultScopeApplied) return;
+  state.collaboratorDefaultScopeApplied = true;
+
+  const hasExistingScope = !isAllItemsScopeActive()
+    || !!state.triageFilter
+    || !!(state.q && state.q.trim())
+    || !!(state.chatItemIds && state.chatItemIds.length);
+  if (hasExistingScope) return;
+
+  const collectionsNode = _findCollectionsGroupNode();
+  if (!collectionsNode) return;
+  const collectionIds = collectDescendantCollectionIds(collectionsNode);
+  if (!collectionIds.length) return;
+
+  resetTriageFilter();
+  state.currentSource = null;
+  state.currentBoard = null;
+  state.currentContentKind = null;
+  clearCatalogFilter();
+  setCollectionFilterIds(collectionIds, { label: "Shared Collections", nodeId: collectionsNode.id });
+  state.expandedTreeNodes.add("collections");
+  state.allItemsTreeCollapsed = true;
+  state.collaboratorTreeUnlocked = false;
+  renderCatalogTree();
 }
 
 function collectDescendantCatalogFiles(node) {
@@ -843,6 +1043,7 @@ async function loadAssets(opts = {}) {
 
   if (state.currentSource) params.set("source", state.currentSource);
   if (state.currentBoard) params.set("board", state.currentBoard);
+  if (state.currentContentKind) params.set("content_kind", state.currentContentKind);
   if (state.currentCollection) params.set("collection_id", state.currentCollection);
 
   if (state.triageFilter === "needs-comment") {
@@ -973,6 +1174,8 @@ function buildCard(a) {
   el.dataset.id = a.id;
 
   const imgUrl = previewForAsset(a);
+  const videoUrl = videoUrlForAsset(a);
+  const showVideo = !!(videoUrl && isVideoAsset(a));
   const ts = a.triage_status || "";
   const needsComment = a.needs_annotation == 1;
   const flagged = a.flagged == 1;
@@ -1026,12 +1229,16 @@ function buildCard(a) {
   const selectedClass = state.canvasReview && state.canvasSelected.has(a.id) ? " canvas-selected" : "";
   el.className = "card" + selectedClass;
 
+  const mediaHtml = showVideo
+    ? `<video src="${escapeHtml(videoUrl)}" preload="metadata" playsinline muted></video>`
+    : imgUrl
+      ? `<img src="${escapeHtml(imgUrl)}" loading="lazy" alt="" />`
+      : `<div class="card-placeholder">${escapeHtml(displayTitle(a))}</div>`;
+
   el.innerHTML = `
     <div class="card-image">
       <div class="card-checkbox"></div>
-      ${imgUrl
-        ? `<img src="${escapeHtml(imgUrl)}" loading="lazy" alt="" />`
-        : `<div class="card-placeholder">${escapeHtml(displayTitle(a))}</div>`}
+      ${mediaHtml}
       ${tagBadgeHtml}${badgeHtml}
       <span class="source-badge source-${escapeHtml(a.source || "")}">${escapeHtml(sourceLabel)}</span>
       ${quickStarHtml}
@@ -1155,6 +1362,7 @@ async function loadFacets() {
     const data = await api(`/api/facets${qs ? "?" + qs : ""}`);
     const facets = data.facets || data;
     state.facets = facets;
+    refreshIngestTagPickers();
   } catch (e) {
     console.error("Failed to load facets:", e);
   }
@@ -1194,15 +1402,17 @@ function renderCatalogTree() {
   }
 
   const allItemsActive = isAllItemsScopeActive();
-  const collapseRest = allItemsActive && !!state.allItemsTreeCollapsed;
+  const collaboratorLockedTree = isCollaboratorActor() && !state.collaboratorTreeUnlocked;
+  const collapseRest = (allItemsActive && !!state.allItemsTreeCollapsed) || collaboratorLockedTree;
 
-  // "All items" node at top with collapse/expand for the rest of Browse tree
+  // "All items" node (root order differs for collaborator view)
   const allBtn = document.createElement("button");
   allBtn.className = `tree-toggle${allItemsActive ? " active" : ""}${!collapseRest ? " expanded" : ""}`;
   allBtn.innerHTML = `<span class="tree-arrow">&#9654;</span><span>All Items</span>`;
   allBtn.onclick = () => {
+    if (shouldIgnorePostBrowseUnlockTreeClick()) return;
     const wasAllItemsActive = isAllItemsScopeActive();
-    if (wasAllItemsActive) {
+    if (wasAllItemsActive && !collaboratorLockedTree) {
       state.allItemsTreeCollapsed = !state.allItemsTreeCollapsed;
       renderCatalogTree();
       return;
@@ -1210,20 +1420,52 @@ function renderCatalogTree() {
     resetTriageFilter();
     state.currentSource = null;
     state.currentBoard = null;
+    state.currentContentKind = null;
     clearCollectionFilter();
     clearCatalogFilter();
+    if (isCollaboratorActor()) {
+      state.collaboratorTreeUnlocked = true;
+      state.allItemsTreeCollapsed = false;
+    }
     state.currentTreeNodeId = null;
     state.offset = 0;
     renderCatalogTree();
     loadAssets();
   };
-  wrap.appendChild(allBtn);
-
-  // Collections are a peer of "All Items" and stay visible even when
-  // the rest of the browse tree is collapsed.
+  const appendAllItemsRoot = () => wrap.appendChild(allBtn);
   const collectionsNodes = tree.filter((n) => n.type === "collections_group");
-  for (const node of collectionsNodes) {
-    wrap.appendChild(buildCollectionsGroupNode(node));
+  const appendCollectionsRoots = () => {
+    for (const node of collectionsNodes) {
+      wrap.appendChild(buildCollectionsGroupNode(node));
+    }
+  };
+
+  // Collaborator IA: Collections first, then All Items.
+  if (isCollaboratorActor()) {
+    appendCollectionsRoots();
+    appendAllItemsRoot();
+  } else {
+    appendAllItemsRoot();
+    appendCollectionsRoots();
+  }
+
+  if (collaboratorLockedTree) {
+    const browseBtn = document.createElement("button");
+    browseBtn.type = "button";
+    browseBtn.className = "browse-owner-tree-btn";
+    browseBtn.textContent = "Browse Leslie's collection";
+    browseBtn.onclick = (e) => {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      state.collaboratorTreeUnlocked = true;
+      state.allItemsTreeCollapsed = false;
+      state.expandedTreeNodes.add("collections");
+      state.lastCollaboratorBrowseUnlockAt = Date.now();
+      renderCatalogTree();
+    };
+    wrap.appendChild(browseBtn);
   }
 
   if (!collapseRest) {
@@ -1251,7 +1493,13 @@ function buildSourceNode(node) {
   const selectedCatalogFiles = getCatalogFilterFiles();
   const selectedCatalogSet = new Set(selectedCatalogFiles);
   const isActiveSource = state.currentTreeNodeId === node.id
-    || (state.currentSource === sourceKey && !state.currentBoard && !hasCatalogFilter() && !hasCollectionFilter());
+    || (
+      state.currentSource === sourceKey
+      && !state.currentBoard
+      && !state.currentContentKind
+      && !hasCatalogFilter()
+      && !hasCollectionFilter()
+    );
   const toggle = document.createElement("button");
   toggle.className = `tree-toggle${isActiveSource ? " active" : ""}`;
   toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span>${escapeHtml(sourceLabel)}</span><span class="tree-count">${node.count}</span>`;
@@ -1262,6 +1510,16 @@ function buildSourceNode(node) {
   // Check if any child is active — auto-expand
   const hasActiveChild = (node.children || []).some(
     (c) => {
+      if (c.type === "source_subtype") {
+        const subtypeKind = String(c.content_kind || "").trim().toLowerCase();
+        return (
+          state.currentSource === sourceKey
+          && !state.currentBoard
+          && !hasCatalogFilter()
+          && !hasCollectionFilter()
+          && state.currentContentKind === subtypeKind
+        );
+      }
       const boardName = c.board_name || "";
       const isCatchAll = boardName.startsWith("(");
       if (isCatchAll) return !!c.file && selectedCatalogSet.has(c.file);
@@ -1274,9 +1532,11 @@ function buildSourceNode(node) {
 
   // Header click filters to the full source scope (all descendant folders).
   toggle.onclick = () => {
+    if (shouldIgnorePostBrowseUnlockTreeClick()) return;
     resetTriageFilter();
     state.currentSource = sourceKey;
     state.currentBoard = null;
+    state.currentContentKind = null;
     clearCollectionFilter();
     clearCatalogFilter();
     state.currentTreeNodeId = node.id;
@@ -1286,6 +1546,38 @@ function buildSourceNode(node) {
   };
 
   for (const child of (node.children || [])) {
+    if (child.type === "source_subtype") {
+      const subtypeLeaf = document.createElement("button");
+      const subtypeKind = String(child.content_kind || "").trim().toLowerCase();
+      const isSubtypeActive = (
+        state.currentSource === sourceKey
+        && state.currentContentKind === subtypeKind
+        && !state.currentBoard
+        && !hasCatalogFilter()
+        && !hasCollectionFilter()
+      );
+      subtypeLeaf.className = `tree-leaf${isSubtypeActive ? " active" : ""}`;
+      subtypeLeaf.innerHTML = `<span>${escapeHtml(child.label)}</span><span class="tree-count">${child.count}</span>`;
+      subtypeLeaf.onclick = () => {
+        if (shouldIgnorePostBrowseUnlockTreeClick()) return;
+        resetTriageFilter();
+        state.currentSource = sourceKey;
+        state.currentBoard = null;
+        state.currentContentKind = subtypeKind || null;
+        clearCollectionFilter();
+        clearCatalogFilter();
+        state.currentTreeNodeId = child.id || null;
+        state.offset = 0;
+        renderCatalogTree();
+        loadAssets();
+      };
+      const _src = sourceKey;
+      const _kind = subtypeKind;
+      addTreeHideToggle(subtypeLeaf, () => ({ source: _src, content_kind: _kind }));
+      children.appendChild(subtypeLeaf);
+      continue;
+    }
+
     const leaf = document.createElement("button");
     const boardName = child.label;
     const boardDbName = child.board_name || "";  // original board name from DB
@@ -1301,17 +1593,20 @@ function buildSourceNode(node) {
     leaf.className = `tree-leaf${isActive ? " active" : ""}`;
     leaf.innerHTML = `<span>${escapeHtml(boardName)}</span><span class="tree-count">${child.count}</span>`;
     leaf.onclick = () => {
+      if (shouldIgnorePostBrowseUnlockTreeClick()) return;
       resetTriageFilter();
       if (isCatchAll) {
         // Use catalog file mode for catch-all entries
         state.currentSource = null;
         state.currentBoard = null;
+        state.currentContentKind = null;
         clearCollectionFilter();
         setCatalogFilter([child.file], { label: child.label, nodeId: child.id });
       } else {
         // Direct source+board filter for named boards
         state.currentSource = sourceKey;
         state.currentBoard = boardDbName;
+        state.currentContentKind = null;
         clearCollectionFilter();
         clearCatalogFilter();
         state.currentTreeNodeId = child.id;
@@ -1362,9 +1657,11 @@ function buildDimensionNode(node) {
 
   // Header click filters to all descendant catalog files.
   toggle.onclick = () => {
+    if (shouldIgnorePostBrowseUnlockTreeClick()) return;
     resetTriageFilter();
     state.currentSource = null;
     state.currentBoard = null;
+    state.currentContentKind = null;
     clearCollectionFilter();
     setCatalogFilter(collectDescendantCatalogFiles(node), { label: node.label, nodeId: node.id });
     state.offset = 0;
@@ -1378,9 +1675,11 @@ function buildDimensionNode(node) {
     leaf.className = `tree-leaf${isActive ? " active" : ""}`;
     leaf.innerHTML = `<span>${escapeHtml(child.label)}</span><span class="tree-count">${child.count}</span>`;
     leaf.onclick = () => {
+      if (shouldIgnorePostBrowseUnlockTreeClick()) return;
       resetTriageFilter();
       state.currentSource = null;
       state.currentBoard = null;
+      state.currentContentKind = null;
       clearCollectionFilter();
       setCatalogFilter([child.file], { label: child.label, nodeId: child.id });
       state.offset = 0;
@@ -1411,6 +1710,9 @@ function buildCollectionsGroupNode(node) {
   children.className = "tree-children";
 
   const hasActiveChild = (node.children || []).some((c) => selectedCollectionSet.has(c.collection_id));
+  if (isCollaboratorActor() && !state.collaboratorTreeUnlocked) {
+    state.expandedTreeNodes.add(nodeKey);
+  }
   if (hasActiveChild || isActiveHeader) state.expandedTreeNodes.add(nodeKey);
   _setTreeNodeExpanded(nodeKey, toggle, children, state.expandedTreeNodes.has(nodeKey));
   _wireTreeArrowToggle(toggle, nodeKey, children);
@@ -1420,6 +1722,7 @@ function buildCollectionsGroupNode(node) {
     resetTriageFilter();
     state.currentSource = null;
     state.currentBoard = null;
+    state.currentContentKind = null;
     clearCatalogFilter();
     setCollectionFilterIds(collectDescendantCollectionIds(node), { label: "All Collections", nodeId: node.id });
     state.offset = 0;
@@ -1436,6 +1739,7 @@ function buildCollectionsGroupNode(node) {
       resetTriageFilter();
       state.currentSource = null;
       state.currentBoard = null;
+      state.currentContentKind = null;
       clearCatalogFilter();
       setCollectionFilterIds([child.collection_id], { label: child.label, nodeId: child.id });
       state.offset = 0;
@@ -1540,6 +1844,7 @@ function setSourceFilter(source) {
   resetTriageFilter();
   state.currentSource = normalizeSourceKey(source) || null;
   state.currentBoard = null;
+  state.currentContentKind = null;
   clearCollectionFilter();
   clearCatalogFilter();
   state.currentTreeNodeId = null;
@@ -1551,6 +1856,7 @@ function setSourceFilter(source) {
 function setBoardFilter(board) {
   resetTriageFilter();
   state.currentBoard = board || null;
+  state.currentContentKind = null;
   clearCollectionFilter();
   clearCatalogFilter();
   state.currentTreeNodeId = null;
@@ -1609,6 +1915,7 @@ function renderHiddenTree() {
   const allHidden = state.triageFilter === "hidden"
     && !state.currentSource
     && !state.currentBoard
+    && !state.currentContentKind
     && !hasCollectionFilter()
     && !hasCatalogFilter();
   toggle.className = `tree-toggle${allHidden ? " active" : ""}`;
@@ -1624,6 +1931,7 @@ function renderHiddenTree() {
   allLeaf.onclick = () => {
     state.currentSource = null;
     state.currentBoard = null;
+    state.currentContentKind = null;
     clearCollectionFilter();
     clearCatalogFilter();
     state.currentTreeNodeId = null;
@@ -1645,6 +1953,7 @@ function renderHiddenTree() {
       leaf.onclick = () => {
         state.currentSource = hiddenSource;
         state.currentBoard = b.board;
+        state.currentContentKind = null;
         clearCollectionFilter();
         clearCatalogFilter();
         state.currentTreeNodeId = null;
@@ -1669,6 +1978,7 @@ function renderHiddenTree() {
   toggle.onclick = () => {
     state.currentSource = null;
     state.currentBoard = null;
+    state.currentContentKind = null;
     clearCollectionFilter();
     clearCatalogFilter();
     state.currentTreeNodeId = null;
@@ -1791,6 +2101,7 @@ function setCollectionFilter(collectionId) {
   if (collectionId) {
     state.currentSource = null;
     state.currentBoard = null;
+    state.currentContentKind = null;
     clearCatalogFilter();
     const col = state.collections.find((c) => c.id === collectionId);
     setCollectionFilterIds([collectionId], { label: col ? col.name : "", nodeId: null });
@@ -1866,12 +2177,30 @@ async function openModal(asset) {
   }
 
   const img = $("#modalImage");
-  if (img) {
+  const video = $("#modalVideo");
+  const modalVideoUrl = videoUrlForAsset(asset);
+  if (modalVideoUrl) {
+    if (img) {
+      img.removeAttribute("src");
+      img.style.display = "none";
+    }
+    if (video) {
+      video.src = modalVideoUrl;
+      video.hidden = false;
+    }
+  } else {
     const url = asset.thumb_path ? `/media/${asset.id}?kind=original`
-                : asset.stored_path ? `/media/${asset.id}?kind=original`
-                : asset.image_url || "";
-    img.src = url;
-    img.style.display = url ? "block" : "none";
+      : asset.stored_path ? `/media/${asset.id}?kind=original`
+        : asset.image_url || "";
+    if (img) {
+      img.src = url;
+      img.style.display = url ? "block" : "none";
+    }
+    if (video) {
+      video.pause();
+      video.removeAttribute("src");
+      video.hidden = true;
+    }
   }
 
   // Content kind badge
@@ -2223,6 +2552,12 @@ function closeModal() {
   state.annotations = [];
   const img = $("#modalImage");
   if (img) img.style.display = "block";
+  const video = $("#modalVideo");
+  if (video) {
+    video.pause();
+    video.removeAttribute("src");
+    video.hidden = true;
+  }
 }
 
 async function _navModalScan(delta) {
@@ -3150,8 +3485,10 @@ window.addEventListener("keydown", (e) => {
   // Close modal with Escape
   if (e.key === "Escape") {
     if (!$("#modal").classList.contains("hidden")) { closeModal(); return; }
+    if (!$("#mediaImportModal").classList.contains("hidden") && !isAnyImportBusy()) { closeMediaImportModal(); return; }
     if (!$("#scanImportModal").classList.contains("hidden") && !state.scanImportBusy) { closeScanImportModal(); return; }
     if (!$("#photoImportModal").classList.contains("hidden") && !state.photoImportBusy) { closePhotoImportModal(); return; }
+    if (!$("#videoImportModal").classList.contains("hidden") && !state.videoImportBusy) { closeVideoImportModal(); return; }
     if (state.canvasReview) { exitCanvasReview(); return; }
     if (state.view === "review") { exitReview(); return; }
     return;
@@ -3363,6 +3700,7 @@ async function executeChatAction(action, params) {
         state.q = "";
         state.currentSource = null;
         state.currentBoard = null;
+        state.currentContentKind = null;
         clearCollectionFilter();
         clearCatalogFilter();
         state.currentTreeNodeId = null;
@@ -3403,6 +3741,7 @@ async function executeChatAction(action, params) {
           const sourceLabel = sourceDisplayName(sourceKey) || node.label;
           if (sourceFilter && sourceKey !== sourceFilter) continue;
           for (const child of (node.children || [])) {
+            if (child.type !== "board") continue;
             boards.push({
               label: `${child.label} (${sourceLabel})`,
               count: child.count,
@@ -3412,11 +3751,13 @@ async function executeChatAction(action, params) {
                 if (isCatchAll && child.file) {
                   state.currentSource = null;
                   state.currentBoard = null;
+                  state.currentContentKind = null;
                   clearCollectionFilter();
                   setCatalogFilter([child.file], { label: child.label, nodeId: null });
                 } else {
                   state.currentSource = sourceKey;
                   state.currentBoard = boardDbName || child.label;
+                  state.currentContentKind = null;
                   clearCollectionFilter();
                   clearCatalogFilter();
                 }
@@ -3439,6 +3780,7 @@ async function executeChatAction(action, params) {
             onclick: () => {
               state.currentSource = sourceKeyFromNode(n);
               state.currentBoard = null;
+              state.currentContentKind = null;
               clearCollectionFilter();
               clearCatalogFilter();
               state.currentTreeNodeId = null;
@@ -3457,6 +3799,9 @@ async function executeChatAction(action, params) {
       state.currentTreeNodeId = null;
       if (params.source !== undefined) {
         state.currentSource = normalizeSourceKey(params.source) || null;
+        if (params.content_kind === undefined || params.source === "" || params.source == null) {
+          state.currentContentKind = null;
+        }
         if (params.source) {
           clearCatalogFilter();
           if (!params.board) clearCollectionFilter();
@@ -3464,9 +3809,20 @@ async function executeChatAction(action, params) {
       }
       if (params.board !== undefined) {
         state.currentBoard = params.board || null;
+        state.currentContentKind = null;
         if (params.board) {
           clearCollectionFilter();
           clearCatalogFilter();
+        }
+      }
+      if (params.content_kind !== undefined) {
+        const kind = String(params.content_kind || "").trim().toLowerCase();
+        state.currentContentKind = kind || null;
+        if (kind) {
+          clearCollectionFilter();
+          clearCatalogFilter();
+          if (!state.currentSource) state.currentSource = "scan";
+          state.currentBoard = null;
         }
       }
       if (params.triage_status !== undefined) {
@@ -3482,6 +3838,7 @@ async function executeChatAction(action, params) {
         if (params.collection_id) {
           state.currentSource = null;
           state.currentBoard = null;
+          state.currentContentKind = null;
           clearCatalogFilter();
           const col = state.collections.find((c) => c.id === params.collection_id);
           setCollectionFilterIds([params.collection_id], { label: col ? col.name : "", nodeId: null });
@@ -3539,6 +3896,7 @@ async function executeChatAction(action, params) {
     case "clear_filters": {
       state.currentSource = null;
       state.currentBoard = null;
+      state.currentContentKind = null;
       clearCollectionFilter();
       clearCatalogFilter();
       state.currentTreeNodeId = null;
@@ -4032,6 +4390,7 @@ async function syncExplorerFilter() {
   if (state.q && state.q.trim()) params.set("q", state.q.trim());
   if (state.currentSource) params.set("source", state.currentSource);
   if (state.currentBoard) params.set("board", state.currentBoard);
+  if (state.currentContentKind) params.set("content_kind", state.currentContentKind);
   const collectionIds = getCollectionFilterIds();
   if (collectionIds.length) params.set("collection_id", collectionIds.join(","));
   if (state.triageFilter === "needs-comment") {
@@ -4083,6 +4442,10 @@ function updateFilterIndicator() {
   if (state.currentSource && !catalogFiles.length && !collectionIds.length) {
     parts.push(`Source: ${sourceDisplayName(state.currentSource) || state.currentSource}`);
   }
+  if (state.currentContentKind && !catalogFiles.length && !collectionIds.length) {
+    const kindLabel = _ingestTagDisplayLabel(state.currentContentKind);
+    parts.push(`Type: ${kindLabel}`);
+  }
   if (state.currentBoard && !catalogFiles.length && !collectionIds.length) {
     parts.push(`Board: ${state.currentBoard}`);
   }
@@ -4122,6 +4485,7 @@ const clearFilterBtn = $("#clearFilterIndicator");
 if (clearFilterBtn) clearFilterBtn.addEventListener("click", () => {
   state.currentSource = null;
   state.currentBoard = null;
+  state.currentContentKind = null;
   clearCollectionFilter();
   clearCatalogFilter();
   state.currentTreeNodeId = null;
@@ -4144,33 +4508,107 @@ if (clearFilterBtn) clearFilterBtn.addEventListener("click", () => {
 const loadMoreBtn = $("#loadMore");
 if (loadMoreBtn) loadMoreBtn.addEventListener("click", () => loadAssets({ append: true }));
 
-// ─── Scan import ──────────────────────────────────────────────────────────────────
+// ─── Media import ───────────────────────────────────────────────────────────────
+
+function isAnyImportBusy() {
+  return !!(state.scanImportBusy || state.photoImportBusy || state.videoImportBusy);
+}
+
+function openMediaImportModal() { $("#mediaImportModal")?.classList.remove("hidden"); }
+function closeMediaImportModal() { $("#mediaImportModal")?.classList.add("hidden"); }
+
+function setAddMediaButtonState() {
+  const btn = $("#addMedia");
+  if (!btn) return;
+  btn.disabled = isAnyImportBusy();
+  btn.textContent = isAnyImportBusy() ? "Importing…" : "Add Media";
+}
 
 function openScanImportModal() { $("#scanImportModal")?.classList.remove("hidden"); }
 function closeScanImportModal() { $("#scanImportModal")?.classList.add("hidden"); }
+function openPhotoImportModal() { $("#photoImportModal")?.classList.remove("hidden"); }
+function closePhotoImportModal() { $("#photoImportModal")?.classList.add("hidden"); }
+function openVideoImportModal() { $("#videoImportModal")?.classList.remove("hidden"); }
+function closeVideoImportModal() { $("#videoImportModal")?.classList.add("hidden"); }
 
 function currentScanImportFile() {
   const input = $("#scanPdfInput");
   return state.scanImportFile || (input?.files?.[0]) || null;
 }
 
+function currentPhotoImportFile() {
+  const input = $("#photoInput");
+  return state.photoImportFile || (input?.files?.[0]) || null;
+}
+
+function currentVideoImportFile() {
+  const input = $("#videoInput");
+  return state.videoImportFile || (input?.files?.[0]) || null;
+}
+
 function setScanImportButtonState() {
-  const btn = $("#addScanPdf");
-  if (btn) { btn.disabled = !!state.scanImportBusy; btn.textContent = state.scanImportBusy ? "Importing…" : "Add Clip"; }
   const runBtn = $("#runScanImport");
-  if (runBtn) runBtn.disabled = !!state.scanImportBusy || !currentScanImportFile();
+  if (runBtn) runBtn.disabled = isAnyImportBusy() || !currentScanImportFile();
+}
+
+function setPhotoImportButtonState() {
+  const runBtn = $("#runPhotoImport");
+  if (runBtn) runBtn.disabled = isAnyImportBusy() || !currentPhotoImportFile();
+}
+
+function setVideoImportButtonState() {
+  const runBtn = $("#runVideoImport");
+  if (runBtn) runBtn.disabled = isAnyImportBusy() || !currentVideoImportFile();
+}
+
+function refreshImportButtonStates() {
+  setAddMediaButtonState();
+  setScanImportButtonState();
+  setPhotoImportButtonState();
+  setVideoImportButtonState();
 }
 
 function resetScanImportModal() {
   const input = $("#scanPdfInput");
   setSingleFileSelection(input, null, "scanImportFile");
+  const titleInput = $("#scanImportTitleInput");
+  if (titleInput) titleInput.value = "";
+  const tagsInput = $("#scanImportTagsInput");
+  if (tagsInput) tagsInput.value = "";
   const parser = $("#scanUseFormParser");
   if (parser) parser.checked = false;
   const delimiters = $("#scanDetectDelimiters");
   if (delimiters) delimiters.checked = true;
   const dropZone = $("#scanDropZone");
   if (dropZone) dropZone.classList.remove("dragActive");
+  renderIngestTagChips("scanImportTagsInput", "scanImportTagChips");
   setScanImportButtonState();
+}
+
+function resetPhotoImportModal() {
+  const input = $("#photoInput");
+  setSingleFileSelection(input, null, "photoImportFile");
+  const titleInput = $("#photoImportTitleInput");
+  if (titleInput) titleInput.value = "";
+  const tagsInput = $("#photoImportTagsInput");
+  if (tagsInput) tagsInput.value = "";
+  const dropZone = $("#photoDropZone");
+  if (dropZone) dropZone.classList.remove("dragActive");
+  renderIngestTagChips("photoImportTagsInput", "photoImportTagChips");
+  setPhotoImportButtonState();
+}
+
+function resetVideoImportModal() {
+  const input = $("#videoInput");
+  setSingleFileSelection(input, null, "videoImportFile");
+  const titleInput = $("#videoImportTitleInput");
+  if (titleInput) titleInput.value = "";
+  const tagsInput = $("#videoImportTagsInput");
+  if (tagsInput) tagsInput.value = "";
+  const dropZone = $("#videoDropZone");
+  if (dropZone) dropZone.classList.remove("dragActive");
+  renderIngestTagChips("videoImportTagsInput", "videoImportTagChips");
+  setVideoImportButtonState();
 }
 
 async function importScanPdf(file, opts = {}) {
@@ -4179,8 +4617,10 @@ async function importScanPdf(file, opts = {}) {
   const name = file.name || "";
   const useFormParser = !!opts.useFormParser;
   const detectDelimiters = opts.detectDelimiters !== false;
+  const title = String(opts.title || "").trim();
+  const tags = parseTagInput(opts.tags || "").join(", ");
   state.scanImportBusy = true;
-  setScanImportButtonState();
+  refreshImportButtonStates();
   const narrative = $("#canvasNarrative");
   if (narrative) narrative.textContent = `Importing "${name}"…`;
   try {
@@ -4188,6 +4628,8 @@ async function importScanPdf(file, opts = {}) {
     formData.append("file", file, name);
     formData.append("use_form_parser", useFormParser ? "1" : "0");
     formData.append("split_on_delimiters", detectDelimiters ? "1" : "0");
+    if (title) formData.append("title", title);
+    if (tags) formData.append("tags", tags);
     const payload = await apiUpload("/api/import/scans", formData);
     const report = payload.import || {};
     const created = Number(report.created_assets || 0);
@@ -4199,90 +4641,27 @@ async function importScanPdf(file, opts = {}) {
     Shared.showToast(`Clip import failed: ${formatApiError(e)}`, { type: "error", duration: 8000 });
   } finally {
     state.scanImportBusy = false;
-    setScanImportButtonState();
+    refreshImportButtonStates();
     setSingleFileSelection($("#scanPdfInput"), null, "scanImportFile");
     if (narrative) narrative.textContent = "";
   }
 }
 
-const addScanPdfBtn = $("#addScanPdf");
-const scanPdfInput = $("#scanPdfInput");
-const scanDropZone = $("#scanDropZone");
-const runScanImportBtn = $("#runScanImport");
-const cancelScanImportBtn = $("#cancelScanImport");
-const closeScanImportBtn = $("#closeScanImport");
-
-if (addScanPdfBtn) addScanPdfBtn.onclick = () => { if (!state.scanImportBusy) { openScanImportModal(); resetScanImportModal(); } };
-if (scanPdfInput) {
-  scanPdfInput.addEventListener("change", () => {
-    const file = scanPdfInput.files?.[0] || null;
-    if (file && !isPdfFile(file)) {
-      Shared.showToast("Please choose a PDF file.", { type: "error" });
-      setSingleFileSelection(scanPdfInput, null, "scanImportFile");
-      setScanImportButtonState(); return;
-    }
-    state.scanImportFile = file || null;
-    setScanImportButtonState();
-  });
-}
-if (scanDropZone) {
-  wireSingleFileDropZone({
-    zone: scanDropZone, input: scanPdfInput, stateKey: "scanImportFile",
-    accept: isPdfFile, invalidMessage: "Please drop a PDF file.",
-    isBusy: () => state.scanImportBusy || state.photoImportBusy,
-    onSelected: () => setScanImportButtonState(),
-  });
-}
-if (runScanImportBtn) {
-  runScanImportBtn.addEventListener("click", async () => {
-    if (state.scanImportBusy) return;
-    const file = currentScanImportFile();
-    const useFormParser = !!($("#scanUseFormParser")?.checked);
-    const detectDelimiters = !!($("#scanDetectDelimiters")?.checked);
-    await importScanPdf(file, { useFormParser, detectDelimiters });
-  });
-}
-if (cancelScanImportBtn) cancelScanImportBtn.onclick = () => { if (!state.scanImportBusy) { closeScanImportModal(); resetScanImportModal(); } };
-if (closeScanImportBtn) closeScanImportBtn.onclick = () => { if (!state.scanImportBusy) { closeScanImportModal(); resetScanImportModal(); } };
-setScanImportButtonState();
-
-// ─── Photo import ─────────────────────────────────────────────────────────────────
-
-function openPhotoImportModal() { $("#photoImportModal")?.classList.remove("hidden"); }
-function closePhotoImportModal() { $("#photoImportModal")?.classList.add("hidden"); }
-
-function currentPhotoImportFile() {
-  const input = $("#photoInput");
-  return state.photoImportFile || (input?.files?.[0]) || null;
-}
-
-function setPhotoImportButtonState() {
-  const btn = $("#addPhotos");
-  if (btn) { btn.disabled = !!state.photoImportBusy || !!state.scanImportBusy; btn.textContent = state.photoImportBusy ? "Importing…" : "Add Photos"; }
-  const runBtn = $("#runPhotoImport");
-  if (runBtn) runBtn.disabled = !!state.photoImportBusy || !!state.scanImportBusy || !currentPhotoImportFile();
-}
-
-function resetPhotoImportModal() {
-  const input = $("#photoInput");
-  setSingleFileSelection(input, null, "photoImportFile");
-  const dropZone = $("#photoDropZone");
-  if (dropZone) dropZone.classList.remove("dragActive");
-  setPhotoImportButtonState();
-}
-
-async function importPhoto(file) {
+async function importPhoto(file, opts = {}) {
   if (!file) return;
   const name = file.name || "";
+  const title = String(opts.title || "").trim();
+  const tags = parseTagInput(opts.tags || "").join(", ");
   if (!isImageFile(file)) { Shared.showToast("Please choose an image file.", { type: "error" }); return; }
   state.photoImportBusy = true;
-  setPhotoImportButtonState();
-  setScanImportButtonState();
+  refreshImportButtonStates();
   const narrative = $("#canvasNarrative");
   if (narrative) narrative.textContent = `Importing "${name}"…`;
   try {
     const formData = new FormData();
     formData.append("file", file, name);
+    if (title) formData.append("title", title);
+    if (tags) formData.append("tags", tags);
     const payload = await apiUpload("/api/import/photos", formData);
     const report = payload.import || {};
     const created = Number(report.created_assets || 0);
@@ -4294,30 +4673,159 @@ async function importPhoto(file) {
     Shared.showToast(`Photo import failed: ${formatApiError(e)}`, { type: "error", duration: 8000 });
   } finally {
     state.photoImportBusy = false;
-    setPhotoImportButtonState();
-    setScanImportButtonState();
+    refreshImportButtonStates();
     setSingleFileSelection($("#photoInput"), null, "photoImportFile");
     if (narrative) narrative.textContent = "";
   }
 }
 
-const addPhotosBtn = $("#addPhotos");
+async function importVideo(file, opts = {}) {
+  if (!file) return;
+  const name = file.name || "";
+  const title = String(opts.title || "").trim();
+  const tags = parseTagInput(opts.tags || "").join(", ");
+  if (!isVideoFile(file)) { Shared.showToast("Please choose a video file.", { type: "error" }); return; }
+  state.videoImportBusy = true;
+  refreshImportButtonStates();
+  const narrative = $("#canvasNarrative");
+  if (narrative) narrative.textContent = `Importing "${name}"…`;
+  try {
+    const formData = new FormData();
+    formData.append("file", file, name);
+    if (title) formData.append("title", title);
+    if (tags) formData.append("tags", tags);
+    const payload = await apiUpload("/api/import/videos", formData);
+    const report = payload.import || {};
+    const created = Number(report.created_assets || 0);
+    await loadFacets();
+    await loadAssets();
+    Shared.showToast(`Imported ${created} video${created === 1 ? "" : "s"} from "${name}".`, { type: "success" });
+    closeVideoImportModal();
+  } catch (e) {
+    Shared.showToast(`Video import failed: ${formatApiError(e)}`, { type: "error", duration: 8000 });
+  } finally {
+    state.videoImportBusy = false;
+    refreshImportButtonStates();
+    setSingleFileSelection($("#videoInput"), null, "videoImportFile");
+    if (narrative) narrative.textContent = "";
+  }
+}
+
+const addMediaBtn = $("#addMedia");
+const closeMediaImportBtn = $("#closeMediaImport");
+const openClipImportBtn = $("#openClipImport");
+const openPhotoImportBtn = $("#openPhotoImport");
+const openVideoImportBtn = $("#openVideoImport");
+
+const scanPdfInput = $("#scanPdfInput");
+const scanDropZone = $("#scanDropZone");
+const runScanImportBtn = $("#runScanImport");
+const cancelScanImportBtn = $("#cancelScanImport");
+const closeScanImportBtn = $("#closeScanImport");
+
 const photoInput = $("#photoInput");
 const photoDropZone = $("#photoDropZone");
 const runPhotoImportBtn = $("#runPhotoImport");
 const cancelPhotoImportBtn = $("#cancelPhotoImport");
 const closePhotoImportBtn = $("#closePhotoImport");
 
-if (addPhotosBtn) addPhotosBtn.onclick = () => {
-  if (!state.photoImportBusy && !state.scanImportBusy) { openPhotoImportModal(); resetPhotoImportModal(); }
-};
+const videoInput = $("#videoInput");
+const videoDropZone = $("#videoDropZone");
+const runVideoImportBtn = $("#runVideoImport");
+const cancelVideoImportBtn = $("#cancelVideoImport");
+const closeVideoImportBtn = $("#closeVideoImport");
+
+for (const [inputId, chipsId] of [
+  ["scanImportTagsInput", "scanImportTagChips"],
+  ["photoImportTagsInput", "photoImportTagChips"],
+  ["videoImportTagsInput", "videoImportTagChips"],
+]) {
+  const input = document.getElementById(inputId);
+  if (!input) continue;
+  input.addEventListener("input", () => renderIngestTagChips(inputId, chipsId));
+}
+
+if (addMediaBtn) {
+  addMediaBtn.onclick = () => {
+    if (!isAnyImportBusy()) openMediaImportModal();
+  };
+}
+if (closeMediaImportBtn) {
+  closeMediaImportBtn.onclick = () => {
+    if (!isAnyImportBusy()) closeMediaImportModal();
+  };
+}
+if (openClipImportBtn) {
+  openClipImportBtn.onclick = () => {
+    if (isAnyImportBusy()) return;
+    closeMediaImportModal();
+    resetScanImportModal();
+    openScanImportModal();
+  };
+}
+if (openPhotoImportBtn) {
+  openPhotoImportBtn.onclick = () => {
+    if (isAnyImportBusy()) return;
+    closeMediaImportModal();
+    resetPhotoImportModal();
+    openPhotoImportModal();
+  };
+}
+if (openVideoImportBtn) {
+  openVideoImportBtn.onclick = () => {
+    if (isAnyImportBusy()) return;
+    closeMediaImportModal();
+    resetVideoImportModal();
+    openVideoImportModal();
+  };
+}
+
+if (scanPdfInput) {
+  scanPdfInput.addEventListener("change", () => {
+    const file = scanPdfInput.files?.[0] || null;
+    if (file && !isPdfFile(file)) {
+      Shared.showToast("Please choose a PDF file.", { type: "error" });
+      setSingleFileSelection(scanPdfInput, null, "scanImportFile");
+      setScanImportButtonState();
+      return;
+    }
+    state.scanImportFile = file || null;
+    setScanImportButtonState();
+  });
+}
+if (scanDropZone) {
+  wireSingleFileDropZone({
+    zone: scanDropZone,
+    input: scanPdfInput,
+    stateKey: "scanImportFile",
+    accept: isPdfFile,
+    invalidMessage: "Please drop a PDF file.",
+    isBusy: () => isAnyImportBusy(),
+    onSelected: () => setScanImportButtonState(),
+  });
+}
+if (runScanImportBtn) {
+  runScanImportBtn.addEventListener("click", async () => {
+    if (isAnyImportBusy()) return;
+    const file = currentScanImportFile();
+    const useFormParser = !!($("#scanUseFormParser")?.checked);
+    const detectDelimiters = !!($("#scanDetectDelimiters")?.checked);
+    const title = String($("#scanImportTitleInput")?.value || "").trim();
+    const tags = String($("#scanImportTagsInput")?.value || "").trim();
+    await importScanPdf(file, { useFormParser, detectDelimiters, title, tags });
+  });
+}
+if (cancelScanImportBtn) cancelScanImportBtn.onclick = () => { if (!state.scanImportBusy) { closeScanImportModal(); resetScanImportModal(); } };
+if (closeScanImportBtn) closeScanImportBtn.onclick = () => { if (!state.scanImportBusy) { closeScanImportModal(); resetScanImportModal(); } };
+
 if (photoInput) {
   photoInput.addEventListener("change", () => {
     const file = photoInput.files?.[0] || null;
     if (file && !isImageFile(file)) {
       Shared.showToast("Please choose an image file.", { type: "error" });
       setSingleFileSelection(photoInput, null, "photoImportFile");
-      setPhotoImportButtonState(); return;
+      setPhotoImportButtonState();
+      return;
     }
     state.photoImportFile = file || null;
     setPhotoImportButtonState();
@@ -4325,21 +4833,63 @@ if (photoInput) {
 }
 if (photoDropZone) {
   wireSingleFileDropZone({
-    zone: photoDropZone, input: photoInput, stateKey: "photoImportFile",
-    accept: isImageFile, invalidMessage: "Please drop an image file.",
-    isBusy: () => state.photoImportBusy || state.scanImportBusy,
+    zone: photoDropZone,
+    input: photoInput,
+    stateKey: "photoImportFile",
+    accept: isImageFile,
+    invalidMessage: "Please drop an image file.",
+    isBusy: () => isAnyImportBusy(),
     onSelected: () => setPhotoImportButtonState(),
   });
 }
 if (runPhotoImportBtn) {
   runPhotoImportBtn.addEventListener("click", async () => {
-    if (state.photoImportBusy || state.scanImportBusy) return;
-    await importPhoto(currentPhotoImportFile());
+    if (isAnyImportBusy()) return;
+    const title = String($("#photoImportTitleInput")?.value || "").trim();
+    const tags = String($("#photoImportTagsInput")?.value || "").trim();
+    await importPhoto(currentPhotoImportFile(), { title, tags });
   });
 }
 if (cancelPhotoImportBtn) cancelPhotoImportBtn.onclick = () => { if (!state.photoImportBusy) { closePhotoImportModal(); resetPhotoImportModal(); } };
 if (closePhotoImportBtn) closePhotoImportBtn.onclick = () => { if (!state.photoImportBusy) { closePhotoImportModal(); resetPhotoImportModal(); } };
-setPhotoImportButtonState();
+
+if (videoInput) {
+  videoInput.addEventListener("change", () => {
+    const file = videoInput.files?.[0] || null;
+    if (file && !isVideoFile(file)) {
+      Shared.showToast("Please choose a video file.", { type: "error" });
+      setSingleFileSelection(videoInput, null, "videoImportFile");
+      setVideoImportButtonState();
+      return;
+    }
+    state.videoImportFile = file || null;
+    setVideoImportButtonState();
+  });
+}
+if (videoDropZone) {
+  wireSingleFileDropZone({
+    zone: videoDropZone,
+    input: videoInput,
+    stateKey: "videoImportFile",
+    accept: isVideoFile,
+    invalidMessage: "Please drop a video file.",
+    isBusy: () => isAnyImportBusy(),
+    onSelected: () => setVideoImportButtonState(),
+  });
+}
+if (runVideoImportBtn) {
+  runVideoImportBtn.addEventListener("click", async () => {
+    if (isAnyImportBusy()) return;
+    const title = String($("#videoImportTitleInput")?.value || "").trim();
+    const tags = String($("#videoImportTagsInput")?.value || "").trim();
+    await importVideo(currentVideoImportFile(), { title, tags });
+  });
+}
+if (cancelVideoImportBtn) cancelVideoImportBtn.onclick = () => { if (!state.videoImportBusy) { closeVideoImportModal(); resetVideoImportModal(); } };
+if (closeVideoImportBtn) closeVideoImportBtn.onclick = () => { if (!state.videoImportBusy) { closeVideoImportModal(); resetVideoImportModal(); } };
+
+refreshImportButtonStates();
+refreshIngestTagPickers();
 
 // ─── Init ─────────────────────────────────────────────────────────────────────────
 
@@ -4363,10 +4913,8 @@ function applyRoleVisibility() {
   // Review button, import buttons, admin link — owner-only
   const reviewBtnEl = $("#reviewBtn");
   if (reviewBtnEl) reviewBtnEl.hidden = !owner;
-  const addScanEl = $("#addScanPdf");
-  if (addScanEl) addScanEl.hidden = !owner;
-  const addPhotosEl = $("#addPhotos");
-  if (addPhotosEl) addPhotosEl.hidden = !owner;
+  const addMediaEl = $("#addMedia");
+  if (addMediaEl) addMediaEl.hidden = !owner;
   const adminEl = $(".adminLink");
   if (adminEl) adminEl.hidden = !owner;
 
@@ -4424,8 +4972,16 @@ async function checkFlaggedCount() {
     applyRoleVisibility();
 
     await Promise.all([loadCollections(), loadFacets(), loadCatalogTree()]);
+    _applyCollaboratorCollectionsDefaultScope();
     await loadAssets();
-    const preferredView = _readViewModeFromUrl() || _readViewModePref();
+    const viewFromUrl = _readViewModeFromUrl();
+    const hasContextLink = !!_contextLinkPayloadFromUrl();
+    let preferredView = viewFromUrl || _readViewModePref();
+    // Shared context links and collaborator entry should default to Grid unless
+    // the URL explicitly requests a specific view.
+    if (!viewFromUrl && (hasContextLink || isCollaboratorActor())) {
+      preferredView = "grid";
+    }
     if (preferredView === "explorer") {
       setViewMode("explorer", { persist: false });
     }

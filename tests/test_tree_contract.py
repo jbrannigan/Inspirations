@@ -16,6 +16,7 @@ broken. This test enforces that invariant end-to-end by:
   5. For EVERY node with count > 0, hitting the same API the frontend would
      use and asserting items come back:
        - Source boards (regular): /api/assets?source=X&board=Y
+       - Source subtype branches: /api/assets?source=X&content_kind=Y
        - Source boards (synthetic/catch-all): /api/catalog/items?file=X
        - Dimension children: /api/catalog/items?file=X
 """
@@ -85,6 +86,24 @@ def _seed_assets(db: Db) -> None:
                    triage_status, imported_at)
                values (?, ?, ?, ?, ?, ?, datetime('now'))""",
             (aid, source, f"ref://{aid}", title, board, triage),
+        )
+
+    # Clip subtype rows under source=scan to validate JIM-2 branches.
+    for i in range(4):
+        aid = f"a100{i:04x}-1000-4000-a000-000000000000"
+        db.exec(
+            """insert into assets (id, source, source_ref, title, board,
+                   triage_status, imported_at, content_kind)
+               values (?, ?, ?, ?, ?, ?, datetime('now'), ?)""",
+            (aid, "scan", f"clip-photo://{aid}", f"Scan Photo {i}", None, None, "photo"),
+        )
+    for i in range(3):
+        aid = f"a200{i:04x}-1000-4000-a000-000000000000"
+        db.exec(
+            """insert into assets (id, source, source_ref, title, board,
+                   triage_status, imported_at, content_kind)
+               values (?, ?, ?, ?, ?, ?, datetime('now'), ?)""",
+            (aid, "scan", f"clip-video://{aid}", f"Scan Video {i}", None, None, "video"),
         )
 
 
@@ -166,6 +185,20 @@ class TestTreeContract(unittest.TestCase):
             if count <= 0:
                 continue
 
+            if child.get("type") == "source_subtype":
+                kind = str(child.get("content_kind") or "").strip().lower()
+                data = self._get(
+                    f"/api/assets?source={urllib.parse.quote(src_label.lower())}"
+                    f"&content_kind={urllib.parse.quote(kind)}&limit=1"
+                )
+                items = data.get("assets", [])
+                if not items:
+                    failures.append(
+                        f"{src_label} > {child.get('label', kind)} "
+                        f"(count={count}, subtype={kind}): 0 items returned"
+                    )
+                continue
+
             board_name = child.get("board_name", "")
             is_catch_all = board_name.startswith("(")
 
@@ -239,6 +272,19 @@ class TestTreeContract(unittest.TestCase):
 
         self.assertNotIn("scan", source_labels,
                          "Fully-hidden source should be removed from tree")
+
+    def test_scan_source_exposes_subtype_branches(self):
+        tree = self._get("/api/catalog/tree")["tree"]
+        scan = next((n for n in tree if n.get("type") == "source" and n.get("label", "").lower() == "scan"), None)
+        self.assertIsNotNone(scan, "scan source should exist")
+        subtype_children = [c for c in scan.get("children", []) if c.get("type") == "source_subtype"]
+        by_kind = {str(c.get("content_kind") or ""): c for c in subtype_children}
+        self.assertIn("scan", by_kind)
+        self.assertIn("photo", by_kind)
+        self.assertIn("video", by_kind)
+        self.assertGreater(by_kind["scan"].get("count", 0), 0)
+        self.assertGreater(by_kind["photo"].get("count", 0), 0)
+        self.assertGreater(by_kind["video"].get("count", 0), 0)
 
     def test_catalog_endpoints_support_multi_file_scope(self):
         """Catalog endpoints should union descendants when multiple files are selected."""

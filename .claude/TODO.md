@@ -52,16 +52,30 @@ removes duplicate entries (Dave multiline/follow-up appeared twice).
 
 1. **[ ] Review UX unification (Grid + Explorer + role model)**
    - Existing backlog item #5.
-2. **[ ] Collaborator default entry = Collections-first shared scope**
+   - Active scope/acceptance doc: `docs/SPRINT1_AGENDA_NEXT.md`
+2. **[x] Collaborator default entry = Collections-first shared scope**
    - Open collaborators directly into shared-collections scope (no per-collaborator custom workflow).
-3. **[ ] Explicit secondary browse affordance**
+   - Implemented (Mar 2, 2026): collaborator init now defaults to `Shared Collections` scope and starts with broader browse tree locked.
+3. **[x] Explicit secondary browse affordance**
    - Add `Browse Leslie's collection` action to reveal the rest of the browse tree on demand.
-4. **[ ] Harmonize Inspirations IA with new Home websites**
+   - Implemented (Mar 2, 2026): added collaborator-only `Browse Leslie's collection` button that reveals source/dimension tree while preserving shared-collections scope until the collaborator explicitly changes filters.
+   - Follow-up fix (Mar 2, 2026): added short post-unlock click guard to prevent accidental immediate scope-drop taps while the tree rerenders.
+4. **[x] Collaborator hidden-item leak after browse unlock**
+   - Hidden items should never appear for collaborator roles while browsing unlocked source/dimension folders.
+   - Implemented (Mar 2, 2026): server now role-gates `include_hidden` on `/api/assets`, `/api/asset-ids`, `/api/catalog/items`, and `/api/catalog/asset-ids` (owner-only).
+   - Added regression coverage in `tests/test_server_api.py` for both generic and catalog include-hidden endpoints.
+5. **[ ] Harmonize Inspirations IA with new Home websites**
    - Align naming, flow, and shared IA conventions across properties.
-5. **[ ] Upgrade `Add Scan` / `Add Clip` to unified `Add Media` intake**
+6. **[x] Upgrade `Add Scan` / `Add Clip` to unified `Add Media` intake**
    - Single owner entry point for media ingestion (`Add Media`).
    - Include photos and video upload/import paths in the same flow (not scan-only).
    - Keep current scan ingest capability while expanding to multi-media support.
+   - Implemented (Mar 2, 2026):
+     - Replaced separate header actions with one owner-facing `Add Media` launcher.
+     - Added upload paths for clip PDF, photo, and video in one flow.
+     - Per user direction, all three ingest paths now land in the `Clip` (`source='scan'`) bucket while preserving media subtype (`content_kind` = `scan` / `photo` / `video`).
+     - Added optional ingest metadata fields (`Title`, `Tags`) with quick-pick chips from existing system label facets.
+   - Active scope/acceptance doc: `docs/SPRINT1_AGENDA_NEXT.md`
 
 #### Sprint 2 — P1 Dave conversation upgrade
 
@@ -97,6 +111,46 @@ removes duplicate entries (Dave multiline/follow-up appeared twice).
    - Idempotent incremental ingest path (skip existing; ingest only new/changed).
 3. **[ ] Optional Explorer edges revisit**
    - Evaluate edge rendering as toggle-only experiment (not default).
+
+#### Sprint 6 — P1/P2 Stabilization Bug-Fix Sprint (queued after current agenda)
+
+Context:
+- Post-merge validation on real devices surfaced multiple regressions/behavior mismatches.
+- Decision: finish the current agenda slice first, then run a focused bug-fix sprint.
+
+Planned workflow:
+1. **[x] Bug intake consolidation**
+   - Collect all newly observed breakages from iPad + desktop into one numbered list.
+   - Deduplicate and tag each as `P1`/`P2`/`P3`.
+   - Update (Mar 2, 2026): baseline inventory + scope captured in `docs/BUGFIX_SPRINT_BASELINE_2026-03-02.md`.
+2. **[x] Repro + owner assignment**
+   - Add clear repro steps and expected vs actual behavior for each issue.
+   - Mark owner (`UI`, `API`, `3D`, `IA`, `mobile-deferred`).
+   - Update (Mar 2, 2026): workflow/test matrix and manual validation ownership documented in `docs/WORKFLOW_TEST_MATRIX_2026-03-02.md`.
+3. **[ ] Fix in severity order**
+   - Execute P1 blockers first, then P2 UX regressions, then P3 polish.
+   - Decision-locked implementation tasks:
+     - `JIM-1`: ingest chips align to Explorer groups + auto-tags (`actor`, `ingested_at`).
+       - Implemented (Mar 2, 2026):
+         - Add Media scan/photo/video modals now render grouped taxonomy chips for `source`, `rooms`, `styles`, `materials`, `types`, `colors`, `elements`.
+         - Upload requests now include actor token header so ingest endpoints can resolve authenticated actor.
+         - Backend ingest metadata now auto-applies `actor:<name|unknown>` and `ingested_at:<iso8601>` tags with case-insensitive dedupe.
+         - Regression coverage added for unknown actor + authenticated actor auto-tag behavior.
+     - `JIM-2`: expose `Clip > Scan/Photo/Video` subtype branches in tree/filter UX.
+       - Implemented (Mar 2, 2026):
+         - `/api/catalog/tree` now injects `source_subtype` children under Clip (`Scan`, `Photo`, `Video`) with counts derived from visible (non-hidden) `content_kind` rows.
+         - Sidebar source tree now supports subtype node clicks, applying `source=scan` + `content_kind=<scan|photo|video>` filters.
+         - Grid + Explorer filter sync now includes `content_kind` so both views stay aligned.
+         - Tree contract tests extended to assert subtype branches exist and each subtype node resolves to items.
+     - `JIM-3`: preserve scan doc/page suffix behavior on title override (already aligned; keep regression coverage).
+     - `JIM-4`: add video poster generation in ingest/display pipeline.
+4. **[ ] Regression pack**
+   - Re-run Sprint 0 + Sprint 1 acceptance checks after each fix batch.
+   - Update (Mar 2, 2026): canonical bug-fix suite runner added at `tools/run_bugfix_suite.py` (lint + full unit discover).
+5. **[ ] Sign-off checklist**
+   - iPad + desktop pass list before closing sprint.
+   - `JIM-5` gate (approved): no assumed passes; execute manual run log with per-item pass/fail notes.
+   - Any failed manual item must be tracked as a bug with owner+repro before sprint closure.
 
 ### Next Sprint — Implementation (easiest-first)
 

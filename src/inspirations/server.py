@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from email.parser import BytesParser
 from email.policy import default as email_policy_default
@@ -21,7 +22,7 @@ from urllib.parse import parse_qs, urlparse
 from .ai import DEFAULT_GEMINI_EMBEDDING_MODEL, run_similarity_search
 from .chat import process_chat_message
 from .db import Db, ensure_schema
-from .importers.scans import import_photos_inbox, import_scans_inbox
+from .importers.scans import import_photos_inbox, import_scans_inbox, import_videos_inbox
 from .store import (
     add_items_to_collection,
     bulk_set_flag,
@@ -68,6 +69,8 @@ MAX_BODY = 2_000_000
 MAX_UPLOAD_BODY = 350_000_000
 DEFAULT_ASSETS_PAGE_SIZE = 240
 MAX_SCAN_DOC_GROUP_PAGES = 6
+VIDEO_UPLOAD_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".mpeg", ".mpg", ".wmv", ".3gp"}
+SCAN_DOC_TITLE_SUFFIX_RE = re.compile(r"(\s-\sdoc\s+\d+(?:\s+p\d+)?)\s*$", re.IGNORECASE)
 
 # ── API key helpers ──────────────────────────────────────────────────────────────
 
@@ -115,6 +118,36 @@ def _json_body(handler: BaseHTTPRequestHandler) -> dict:
         raise ValueError("Body too large")
     raw = handler.rfile.read(length) if length else b"{}"
     return json.loads(raw.decode("utf-8") or "{}")
+
+
+def _parse_ingest_tags(raw: str) -> list[str]:
+    return _dedupe_ingest_tags(re.split(r"[,\n;]+", str(raw or "")))
+
+
+def _dedupe_ingest_tags(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for chunk in values:
+        tag = chunk.strip()
+        if not tag:
+            continue
+        key = tag.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(tag[:120])
+    return out
+
+
+def _ingest_actor_tag(actor: dict | None) -> str:
+    raw_name = str((actor or {}).get("name") or "")
+    cleaned = re.sub(r"\s+", " ", raw_name).strip()
+    return f"actor:{cleaned or 'unknown'}"
+
+
+def _ingest_time_tag(imported_at: str) -> str:
+    stamp = str(imported_at or "").strip() or datetime.now(timezone.utc).isoformat()
+    return f"ingested_at:{stamp}"
 
 
 def _multipart_form(handler: BaseHTTPRequestHandler, *, max_body: int) -> tuple[dict[str, str], dict[str, dict[str, object]]]:
@@ -241,6 +274,9 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/assets":
             q = parse_qs(parsed.query)
+            include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
+            actor = _resolve_actor(self)
+            include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
             page_limit = int(q.get("limit", [str(DEFAULT_ASSETS_PAGE_SIZE)])[0])
             assets = self._with_db(
                 list_assets,
@@ -259,7 +295,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 needs_annotation=_parse_bool_param(q.get("needs_annotation", [""])[0], default=False),
                 flagged_only=_parse_bool_param(q.get("flagged", [""])[0], default=False),
                 tagged_only=_parse_bool_param(q.get("tagged", [""])[0], default=False),
-                include_hidden=_parse_bool_param(q.get("include_hidden", [""])[0], default=False),
+                include_hidden=include_hidden,
                 limit=page_limit + 1,
                 offset=int(q.get("offset", ["0"])[0]),
             )
@@ -293,6 +329,9 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/asset-ids":
             q = parse_qs(parsed.query)
+            include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
+            actor = _resolve_actor(self)
+            include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
             ids = self._with_db(
                 list_asset_ids,
                 q=q.get("q", [""])[0],
@@ -302,7 +341,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 triage_status=q.get("triage_status", [""])[0],
                 needs_annotation=_parse_bool_param(q.get("needs_annotation", [""])[0], default=False),
                 flagged_only=_parse_bool_param(q.get("flagged", [""])[0], default=False),
-                include_hidden=_parse_bool_param(q.get("include_hidden", [""])[0], default=False),
+                include_hidden=include_hidden,
             )
             return _send(self, 200, {"ids": ids})
 
@@ -472,6 +511,9 @@ class ApiHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/catalog/items":
             # Load items by one or more catalog file paths.
             q = parse_qs(parsed.query)
+            include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
+            actor = _resolve_actor(self)
+            include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
             catalog_dir = getattr(self.server, "catalog_dir", None)
             file_params = [str(v or "").strip() for v in q.get("file", []) if str(v or "").strip()]
             if not catalog_dir or not file_params:
@@ -487,7 +529,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             assets = self._with_db(
                 list_assets,
                 ids=ids_str,
-                include_hidden=True,
+                include_hidden=include_hidden,
                 limit=limit + 1,
                 offset=offset,
             )
@@ -504,6 +546,9 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/catalog/asset-ids":
             q = parse_qs(parsed.query)
+            include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
+            actor = _resolve_actor(self)
+            include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
             catalog_dir = getattr(self.server, "catalog_dir", None)
             file_params = [str(v or "").strip() for v in q.get("file", []) if str(v or "").strip()]
             if not catalog_dir or not file_params:
@@ -513,7 +558,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return _send(self, err_status, {"error": err_msg})
             if not short_ids:
                 return _send(self, 200, {"ids": []})
-            ids = self._with_db(list_asset_ids, ids=",".join(short_ids), include_hidden=True)
+            ids = self._with_db(list_asset_ids, ids=",".join(short_ids), include_hidden=include_hidden)
             return _send(self, 200, {"ids": ids})
 
         if parsed.path == "/api/tray":
@@ -582,6 +627,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             return self._handle_scan_pdf_upload()
         if parsed.path == "/api/import/photos":
             return self._handle_photo_upload()
+        if parsed.path == "/api/import/videos":
+            return self._handle_video_upload()
         try:
             body = _json_body(self)
         except Exception as e:
@@ -901,6 +948,9 @@ class ApiHandler(BaseHTTPRequestHandler):
         split_on_delimiters = split_on_delimiters_raw not in {"0", "false", "off", "no"}
         use_form_parser_raw = str(fields.get("use_form_parser") or "0").strip().lower()
         use_form_parser = use_form_parser_raw in {"1", "true", "on", "yes"}
+        title_override = str(fields.get("title") or "").strip()
+        ingest_tags = _parse_ingest_tags(str(fields.get("tags") or ""))
+        actor = _resolve_actor(self)
 
         upload = files.get("file") or {}
         filename = str(upload.get("filename") or "").strip()
@@ -944,6 +994,19 @@ class ApiHandler(BaseHTTPRequestHandler):
                 limit=0,
                 tool="auto",
             )
+            imported_at = str(import_report.get("imported_at") or "")
+            auto_tags = [
+                _ingest_actor_tag(actor),
+                _ingest_time_tag(imported_at),
+            ]
+            ingest_meta_report = self._with_db(
+                self._apply_ingest_metadata,
+                source="scan",
+                imported_at=imported_at,
+                title=title_override,
+                tags=ingest_tags,
+                auto_tags=auto_tags,
+            )
         except Exception as e:
             return _send(self, 500, {"error": f"scan import failed: {e}"})
 
@@ -957,17 +1020,25 @@ class ApiHandler(BaseHTTPRequestHandler):
                 "options": {
                     "split_on_delimiters": split_on_delimiters,
                     "use_form_parser": use_form_parser,
+                    "title": title_override,
+                    "tags": ingest_tags,
+                    "auto_tags": auto_tags,
                 },
                 "import": import_report,
                 "thumbs": thumbs_report,
+                "ingest_metadata": ingest_meta_report,
             },
         )
 
     def _handle_photo_upload(self) -> None:
         try:
-            _fields, files = _multipart_form(self, max_body=MAX_UPLOAD_BODY)
+            fields, files = _multipart_form(self, max_body=MAX_UPLOAD_BODY)
         except Exception as e:
             return _send(self, 400, {"error": str(e)})
+
+        title_override = str(fields.get("title") or "").strip()
+        ingest_tags = _parse_ingest_tags(str(fields.get("tags") or ""))
+        actor = _resolve_actor(self)
 
         upload = files.get("file") or {}
         filename = str(upload.get("filename") or "").strip()
@@ -997,14 +1068,30 @@ class ApiHandler(BaseHTTPRequestHandler):
                 inbox_dir=batch_dir,
                 store_dir=Path(self.server.store_dir).resolve(),
                 limit=0,
+                source="scan",
+                content_kind="photo",
+                source_ref_scheme="clip-photo",
             )
             thumbs_report = self._with_db(
                 generate_thumbnails,
                 store_dir=Path(self.server.store_dir).resolve(),
-                source="photo",
+                source="scan",
                 size=512,
                 limit=0,
                 tool="auto",
+            )
+            imported_at = str(import_report.get("imported_at") or "")
+            auto_tags = [
+                _ingest_actor_tag(actor),
+                _ingest_time_tag(imported_at),
+            ]
+            ingest_meta_report = self._with_db(
+                self._apply_ingest_metadata,
+                source="scan",
+                imported_at=imported_at,
+                title=title_override,
+                tags=ingest_tags,
+                auto_tags=auto_tags,
             )
         except Exception as e:
             return _send(self, 500, {"error": f"photo import failed: {e}"})
@@ -1018,6 +1105,87 @@ class ApiHandler(BaseHTTPRequestHandler):
                 "upload_size_bytes": len(data),
                 "import": import_report,
                 "thumbs": thumbs_report,
+                "options": {
+                    "title": title_override,
+                    "tags": ingest_tags,
+                    "auto_tags": auto_tags,
+                },
+                "ingest_metadata": ingest_meta_report,
+            },
+        )
+
+    def _handle_video_upload(self) -> None:
+        try:
+            fields, files = _multipart_form(self, max_body=MAX_UPLOAD_BODY)
+        except Exception as e:
+            return _send(self, 400, {"error": str(e)})
+
+        title_override = str(fields.get("title") or "").strip()
+        ingest_tags = _parse_ingest_tags(str(fields.get("tags") or ""))
+        actor = _resolve_actor(self)
+
+        upload = files.get("file") or {}
+        filename = str(upload.get("filename") or "").strip()
+        data = upload.get("data") or b""
+        if not filename:
+            return _send(self, 400, {"error": "file required"})
+        ext = Path(filename).suffix.lower()
+        if ext not in VIDEO_UPLOAD_EXTS:
+            return _send(self, 400, {"error": "file must be a supported video"})
+        if not isinstance(data, (bytes, bytearray)) or not data:
+            return _send(self, 400, {"error": "uploaded file is empty"})
+
+        cleaned_name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename).name).strip("._")
+        if not cleaned_name:
+            cleaned_name = f"video_upload{ext or '.mp4'}"
+
+        uploads_root = self._imports_root() / "videos" / "inbox" / "uploads"
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+        batch_dir = uploads_root / f"{stamp}-{secrets.token_hex(4)}"
+        batch_dir.mkdir(parents=True, exist_ok=True)
+        uploaded_path = batch_dir / cleaned_name
+        uploaded_path.write_bytes(bytes(data))
+
+        try:
+            import_report = self._with_db(
+                import_videos_inbox,
+                inbox_dir=batch_dir,
+                store_dir=Path(self.server.store_dir).resolve(),
+                limit=0,
+                source="scan",
+                content_kind="video",
+                source_ref_scheme="clip-video",
+            )
+            imported_at = str(import_report.get("imported_at") or "")
+            auto_tags = [
+                _ingest_actor_tag(actor),
+                _ingest_time_tag(imported_at),
+            ]
+            ingest_meta_report = self._with_db(
+                self._apply_ingest_metadata,
+                source="scan",
+                imported_at=imported_at,
+                title=title_override,
+                tags=ingest_tags,
+                auto_tags=auto_tags,
+            )
+        except Exception as e:
+            return _send(self, 500, {"error": f"video import failed: {e}"})
+
+        return _send(
+            self,
+            200,
+            {
+                "ok": True,
+                "uploaded_file": str(uploaded_path),
+                "upload_size_bytes": len(data),
+                "import": import_report,
+                "options": {
+                    "title": title_override,
+                    "tags": ingest_tags,
+                    "auto_tags": auto_tags,
+                },
+                "ingest_metadata": ingest_meta_report,
             },
         )
 
@@ -1191,6 +1359,77 @@ class ApiHandler(BaseHTTPRequestHandler):
         with Db(self.server.db_path) as db:
             ensure_schema(db)
             return fn(db, **kwargs)
+
+    def _apply_ingest_metadata(
+        self,
+        db: Db,
+        *,
+        source: str,
+        imported_at: str,
+        title: str = "",
+        tags: list[str] | None = None,
+        auto_tags: list[str] | None = None,
+    ) -> dict[str, int]:
+        src = str(source or "").strip()
+        stamp = str(imported_at or "").strip()
+        tags = _dedupe_ingest_tags([*(tags or []), *(auto_tags or [])])
+        if not src or not stamp or (not title and not tags):
+            return {"updated_titles": 0, "applied_tags": 0}
+
+        rows = db.query(
+            "select id, source_ref, title from assets where source=? and imported_at=?",
+            (src, stamp),
+        )
+        if not rows:
+            return {"updated_titles": 0, "applied_tags": 0}
+
+        updated_titles = 0
+        if title:
+            updates: list[tuple[str, str]] = []
+            for row in rows:
+                current_title = str(row["title"] or "").strip()
+                source_ref = str(row["source_ref"] or "").strip()
+                next_title = title
+                m = SCAN_DOC_TITLE_SUFFIX_RE.search(current_title)
+                if source_ref.startswith("scan://") and "#p" in source_ref and m:
+                    next_title = f"{title}{m.group(1)}"
+                if next_title != current_title:
+                    updates.append((next_title, str(row["id"])))
+            if updates:
+                db.executemany("update assets set title=? where id=?", updates)
+                updated_titles = len(updates)
+
+        applied_tags = 0
+        if tags:
+            now = datetime.now(timezone.utc).isoformat()
+            label_rows: list[tuple[str, str, str, float, str, str | None, str | None, str]] = []
+            for row in rows:
+                asset_id = str(row["id"])
+                for tag in tags:
+                    label_rows.append(
+                        (
+                            str(uuid.uuid4()),
+                            asset_id,
+                            tag,
+                            1.0,
+                            "owner-upload",
+                            None,
+                            None,
+                            now,
+                        )
+                    )
+            if label_rows:
+                db.executemany(
+                    """
+                    insert or ignore into asset_labels
+                      (id, asset_id, label, confidence, source, model, run_id, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    label_rows,
+                )
+                applied_tags = len(label_rows)
+
+        return {"updated_titles": updated_titles, "applied_tags": applied_tags}
 
     def _resolve_context_link(
         self,
@@ -1464,9 +1703,18 @@ class ApiHandler(BaseHTTPRequestHandler):
                 "from assets where triage_status is null or triage_status != 'hidden' "
                 "group by 1, 2"
             )
+            # Visible counts per source+content_kind (for subtype browsing under Clip)
+            kind_rows = db.query(
+                "select lower(source) as src, lower(coalesce(content_kind,'')) as kind, count(*) as n "
+                "from assets where triage_status is null or triage_status != 'hidden' "
+                "group by 1, 2"
+            )
         visible_by_source: dict[str, int] = {r["src"]: r["n"] for r in src_rows}
         visible_by_board: dict[tuple[str, str], int] = {
             (r["src"], r["brd"]): r["n"] for r in board_rows
+        }
+        visible_by_kind: dict[tuple[str, str], int] = {
+            (r["src"], r["kind"]): r["n"] for r in kind_rows
         }
 
         for node in tree:
@@ -1482,7 +1730,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             # Adjust known board children
             accounted = 0
             synthetic_children = []  # children that aggregate multiple DB boards
-            for child in node.get("children", []):
+            board_children = [c for c in node.get("children", []) if c.get("type") == "board"]
+            for child in board_children:
                 board_name = (child.get("board_name") or "").lower()
                 # Synthetic groups like "(unsorted reels)" aggregate many DB boards
                 if board_name.startswith("("):
@@ -1497,8 +1746,48 @@ class ApiHandler(BaseHTTPRequestHandler):
                 old_total = sum(c["count"] for c in synthetic_children) or 1
                 for child in synthetic_children:
                     child["count"] = max(0, round(remaining * child["count"] / old_total))
-            # Remove zero-count children (all items hidden)
-            node["children"] = [c for c in node.get("children", []) if c["count"] > 0]
+            # Remove zero-count board children (all items hidden)
+            board_children = [c for c in board_children if c.get("count", 0) > 0]
+
+            # JIM-2: expose Clip subtype branches under source=scan.
+            if src == "scan":
+                scan_count = visible_by_kind.get((src, "scan"), 0) + visible_by_kind.get((src, ""), 0)
+                photo_count = visible_by_kind.get((src, "photo"), 0)
+                video_count = visible_by_kind.get((src, "video"), 0)
+                known_total = scan_count + photo_count + video_count
+                # Keep subtype totals aligned with visible source count even if
+                # legacy rows use unexpected content_kind values.
+                if known_total < visible_total:
+                    scan_count += visible_total - known_total
+                subtype_children = [
+                    {
+                        "id": "source_subtype:scan:scan",
+                        "label": "Scan",
+                        "count": scan_count,
+                        "type": "source_subtype",
+                        "source": "scan",
+                        "content_kind": "scan",
+                    },
+                    {
+                        "id": "source_subtype:scan:photo",
+                        "label": "Photo",
+                        "count": photo_count,
+                        "type": "source_subtype",
+                        "source": "scan",
+                        "content_kind": "photo",
+                    },
+                    {
+                        "id": "source_subtype:scan:video",
+                        "label": "Video",
+                        "count": video_count,
+                        "type": "source_subtype",
+                        "source": "scan",
+                        "content_kind": "video",
+                    },
+                ]
+                node["children"] = [c for c in subtype_children if c["count"] > 0] + board_children
+            else:
+                node["children"] = board_children
 
         # Remove zero-count source nodes (all items hidden)
         tree[:] = [n for n in tree if n.get("type") != "source" or n["count"] > 0]

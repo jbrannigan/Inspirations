@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 from inspirations.db import Db, ensure_schema
-from inspirations.importers.scans import import_scans_inbox, _split_pages_into_documents
+from inspirations.importers.scans import import_scans_inbox, import_videos_inbox, _split_pages_into_documents
 
 
 TINY_PNG = base64.b64decode(
@@ -182,6 +182,31 @@ class TestScansImport(unittest.TestCase):
                     f"scan://{sha}#p4",
                 ],
             )
+
+    def test_import_single_video_idempotent(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            inbox = base / "inbox"
+            store = base / "store"
+            inbox.mkdir()
+            vid = inbox / "walkthrough.mp4"
+            vid.write_bytes(b"\x00\x00\x00\x18ftypmp42mock")
+
+            db_path = base / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                report1 = import_videos_inbox(db, inbox_dir=inbox, store_dir=store)
+                report2 = import_videos_inbox(db, inbox_dir=inbox, store_dir=store)
+                n = db.query_value("select count(*) from assets where source='video'")
+                row = db.query("select media_status, content_kind, stored_video_path from assets where source='video' limit 1")[0]
+
+            self.assertEqual(n, 1)
+            self.assertEqual(report1["created_assets"], 1)
+            self.assertEqual(report2["created_assets"], 0)
+            self.assertEqual(report2["duplicates_skipped"], 1)
+            self.assertEqual(str(row["media_status"]), "video")
+            self.assertEqual(str(row["content_kind"]), "video")
+            self.assertTrue(str(row["stored_video_path"]).endswith(".mp4"))
 
 
 if __name__ == "__main__":

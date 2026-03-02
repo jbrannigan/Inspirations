@@ -258,8 +258,283 @@ Implemented (Sprint 0 prioritized items):
 
 Planning/docs updates:
 - Added consolidated observation intake and sprint structure in `.claude/TODO.md` (Sprints 0-5).
+
+## Session Update (Mar 2, 2026 — Sprint 0/1 Regression Recheck)
+
+Branch: `codex/sprint1-collaborator-collections-default`
+
+### Fixes finalized on branch
+
+- `app/app.js`:
+  - Collaborator root order now renders `Collections` before `All Items`.
+  - Collaborator locked mode keeps `Collections` expanded by default.
+  - `Browse Leslie's collection` reliably unlocks the broader tree without clearing shared-collections scope.
+  - Collaborator/context-link entry defaults to Grid unless URL explicitly sets `view=explorer`.
+- `app/index.html`:
+  - Bumped app script cache-buster to `app.js?v=15` to force delivery of latest collaborator IA logic.
+
+### QA verification (Playwright, Mar 2, 2026)
+
+- Sprint 0 checks:
+  - Header view-toggle icons present (`Grid`, `Explorer`).
+  - Explorer stats show scope count format (`N items`) with no stale `X of Y`.
+  - Explorer content container reports zero horizontal overflow in tested desktop viewport (`overflowX: 0`).
+  - Owner modal `Print` button exists and is inside `#modalShareGroup`.
+- Sprint 1 checks:
+  - Collaborator opens in Grid by default on plain actor link.
+  - Collaborator root order is `Collections`, then `All Items`.
+  - `Collections` is expanded by default with visible child leaves (`70` in test dataset).
+  - Default filter indicator shows shared collections scope.
+  - Clicking `Browse Leslie's collection` reveals broader tree (`By Room`, `By Style`, etc.) and preserves shared-collections filter indicator.
+  - Context-link URL (`collection_id` + `item_id`) also opens in Grid by default unless `view=` is explicitly set.
+
+### Notes
+
+- Console output in checks showed only favicon `404` noise.
+
+## Session Update (Mar 2, 2026 — Collaborator Hidden-Leak Fix)
+
+Issue reported:
+- In collaborator mode, after `Browse Leslie's collection`, some globally hidden assets were still visible.
+
+Root cause:
+- Server catalog endpoints used by unlocked browse-folder flows were not role-gating hidden access:
+  - `/api/catalog/items` forced `include_hidden=True`
+  - `/api/catalog/asset-ids` forced `include_hidden=True`
+- Also tightened parity hardening for generic endpoints:
+  - `/api/assets`
+  - `/api/asset-ids`
+  - `include_hidden=1` is now owner-only on all four routes.
+
+Implemented:
+- `src/inspirations/server.py`
+  - Added actor-aware `include_hidden` gating on:
+    - `/api/assets`
+    - `/api/asset-ids`
+    - `/api/catalog/items`
+    - `/api/catalog/asset-ids`
+  - Non-owner (or unauthenticated) requests now ignore `include_hidden=1`.
+
+Tests added:
+- `tests/test_server_api.py`
+  - `test_assets_and_asset_ids_include_hidden_require_owner`
+  - `test_catalog_endpoints_include_hidden_require_owner`
+
+Validation:
+- `PYTHONPATH=src python3 -m unittest -q tests.test_server_api` (pass; 38 tests).
+- Isolated server check against real dataset/catalog now shows `leak_files=0` for `/api/catalog/items` default requests (was 4 leak files before patch).
+
+## Night Handoff (Mar 2, 2026)
+
+### Branch / PR
+
+- Branch: `codex/sprint1-collaborator-collections-default`
+- PR: `#65` — `Sprint 1 IA: default collaborators to shared collections`
+
+### Commits from this session window (latest first)
+
+- `444339a` — fix: block hidden assets in collaborator browse catalogs
+- `6f38c4b` — fix: guard collaborator browse unlock from accidental scope drop
+- `8d1c40c` — docs: record sprint 0/1 regression recheck status
+- `778c066` — chore: bust app.js cache for collaborator IA order fix
+- `29ac2e3` — fix: stabilize collaborator tree order and grid entry
+- `f1a6764` — fix: reveal collaborator browse tree without changing scope
+- `4b856f1` — feat: default collaborators to shared collections scope
+
+### Current acceptance status
+
+- Sprint 0 checks: pass in automated regression.
+- Sprint 1 IA checks: pass in automated regression.
+- Reported collaborator hidden-leak during `Browse Leslie's collection`: fixed server-side and covered by tests.
+
+### Morning first-step checklist
+
+1. Start server from this repo root using local source path:
+   - `PYTHONPATH=src python3 -m inspirations --db data/inspirations.sqlite --store store serve --host 0.0.0.0 --port 8001`
+2. Open collaborator URL with cache-bust query:
+   - `http://localhost:8001/?actor=collab-b629bd3ae17e4be9&r=morning-check`
+3. Verify flow:
+   - `Collections` first, expanded.
+   - Click `Browse Leslie's collection`.
+   - Confirm hidden items do not appear in unlocked browse folders.
+
+### Known operational note
+
+- If another launcher process auto-starts an old `--reload` server, browser behavior can appear stale even after code fixes. When in doubt, stop existing `:8001` listeners and restart with the command above before validating.
+
+## Session Update (Mar 3, 2026 — Agenda vs Stabilization Split)
+
+User direction:
+- Continue with planned agenda work now.
+- Queue a dedicated bug-fix sprint immediately after agenda slice completion.
+
+Tracking updates:
+- Added queued stabilization sprint in `.claude/TODO.md` as:
+  - `Sprint 6 — P1/P2 Stabilization Bug-Fix Sprint`
+  - Includes intake, repro, severity-order fix execution, and regression/sign-off steps.
 - Marked iPhone Explorer crash work as deferred to a future mobile sprint.
 - Explicit scope decision recorded: active platform target is iPad + desktop.
 
 Next sprint entry point:
 - Start Sprint 1 IA harmonization with collaborator-first browsing defaults (`Collections` first), then owner review UX unification.
+
+## Session Update (Mar 2, 2026 — Sprint 1 IA: Collaborator Entry Defaults)
+
+Files changed:
+- `app/app.js`
+- `app/styles.css`
+- `.claude/TODO.md`
+
+Implemented:
+- Collaborators now default into shared `Collections` scope on load (`Shared Collections`) instead of opening into broad all-items browsing.
+- Added collaborator gate for browse tree expansion: source/dimension branches stay hidden initially.
+- Added collaborator-only `Browse Leslie's collection` button to reveal the broader tree while preserving shared-collections scope until collaborators deliberately change filters.
+
+Scope note:
+- Phone-specific concerns remain deferred; this IA work targets iPad + desktop flows.
+
+## Session Update (Mar 2, 2026 — Sprint 1 Agenda: Add Media + Ingest Metadata)
+
+Files changed:
+- `app/index.html`
+- `app/styles.css`
+- `app/app.js`
+- `src/inspirations/importers/scans.py`
+- `src/inspirations/server.py`
+- `tests/test_scans_import.py`
+- `tests/test_server_api.py`
+- `.claude/TODO.md`
+- `docs/SPRINT1_AGENDA_NEXT.md`
+
+Implemented:
+- Replaced separate owner header actions (`Add Clip`, `Add Photos`) with one `Add Media` action.
+- Added a unified media chooser and wired three upload flows:
+  - Clip PDF upload (`/api/import/scans`)
+  - Photo upload (`/api/import/photos`)
+  - Video upload (`/api/import/videos`)
+- Per latest product direction, all three ingest flows are stored under Clip source (`source='scan'`) while preserving subtype with `content_kind` (`scan` / `photo` / `video`).
+- Added optional ingest metadata on all three flows:
+  - `Title` input
+  - `Tags` input
+  - Clickable quick-pick tag chips sourced from existing label facets (`/api/facets` labels)
+- Backend now applies ingest metadata to newly created assets from each upload batch:
+  - Updates title on newly imported assets (scan doc suffix preserved for PDF split pages).
+  - Inserts user-selected tags into `asset_labels` (`source='owner-upload'`).
+- Added video-safe rendering updates in UI:
+  - Grid cards render video assets with `<video>` element.
+  - Detail modal supports video playback via `#modalVideo`.
+
+Validation:
+- `PYTHONPATH=src python3 -m unittest -q tests.test_scans_import tests.test_server_api` (pass, 47 tests).
+- `python3 -m py_compile src/inspirations/server.py src/inspirations/importers/scans.py` (pass).
+
+## Session Update (Mar 2, 2026 — Bug-Fix Sprint Kickoff: Inventory + Validation Suite)
+
+User direction:
+- Pause new feature work and shift to a dedicated bug-fix sprint.
+- Document known features/workflows, define a complete validation suite, run it, and queue unclear decisions for Jim.
+
+Delivered:
+- Added bug-fix sprint baseline doc: `docs/BUGFIX_SPRINT_BASELINE_2026-03-02.md`
+  - Known feature/workflow inventory across auth, browse, collab links, review, explorer, ingest, media, AI, export, scrape, and security flows.
+  - Canonical validation commands and baseline run status.
+  - Explicit decision queue for Jim (`JIM-1` ... `JIM-5`).
+- Added workflow test matrix: `docs/WORKFLOW_TEST_MATRIX_2026-03-02.md`
+  - Automated coverage map by workflow area and current status.
+  - Manual-only validation matrix for iPad/desktop sign-off.
+- Added canonical runner: `tools/run_bugfix_suite.py`
+  - Runs lint + full unit-test discover with JSON output for repeatable sprint validation.
+
+Coverage improvements:
+- Added ingest-metadata workflow tests in `tests/test_server_api.py`:
+  - scan upload metadata apply (title/tags + scan doc suffix preservation),
+  - photo upload metadata apply,
+  - video upload metadata apply.
+
+Clear bug fixes applied:
+- Fixed CI lint break (`F821 undefined name uuid`) by importing `uuid` in `src/inspirations/server.py`.
+
+Validation run (bug-fix baseline):
+- `tools/run_bugfix_suite.py` → PASS
+  - lint: PASS
+  - full unit discover: PASS (`212` tests)
+
+## Session Update (Mar 2, 2026 — Jim Decision Interview Completed)
+
+Decision interview completed and recorded in:
+- `docs/JIM_DECISION_TICKETS_2026-03-02.md`
+
+Approved outcomes:
+- `JIM-1`: ingest chips should align to Explorer taxonomy groups (`source`, `rooms`, `styles`, `materials`, `types`, `colors`, `elements`) and auto-apply actor/date-time ingest tags.
+- `JIM-2`: expose Clip subtype branches now (`Clip > Scan / Photo / Video`).
+- `JIM-3`: keep scan title override suffix-preserving behavior for split pages.
+- `JIM-4`: implement video poster generation now.
+- `JIM-5`: no assumed manual passes; sprint closure requires explicit manual run log with pass/fail and bug tracking for failures.
+
+Sprint docs updated to reflect locked outcomes:
+- `docs/BUGFIX_SPRINT_BASELINE_2026-03-02.md`
+- `.claude/TODO.md`
+
+## Session Update (Mar 2, 2026 — JIM-1 Implemented: Ingest Taxonomy Chips + Auto Tags)
+
+Implemented `JIM-1` across frontend ingest UI and backend ingest metadata flow.
+
+Files changed:
+- `app/app.js`
+- `app/styles.css`
+- `src/inspirations/server.py`
+- `tests/test_server_api.py`
+- `.claude/TODO.md`
+
+Delivered:
+- Replaced flat ingest quick-picks with grouped Explorer-aligned chip sets in all three owner ingest modals (scan/photo/video):
+  - `source`, `rooms`, `styles`, `materials`, `types`, `colors`, `elements`
+- Upload requests now carry `X-Actor-Token` in multipart upload paths, matching JSON API auth behavior.
+- Backend ingest metadata now auto-applies tags on successful ingest batch metadata writes:
+  - `actor:<name|unknown>`
+  - `ingested_at:<iso8601>`
+- Auto + manual ingest tags are case-insensitively deduped before insertion into `asset_labels`.
+- Kept existing title override behavior:
+  - scan split-page doc suffix preservation remains intact.
+
+Test coverage updates:
+- Updated ingest metadata tests to assert auto-tag persistence for scan/photo/video batch flows.
+- Added authenticated actor regression test:
+  - verifies `actor:<resolved-name>` when `X-Actor-Token` is present.
+
+Validation:
+- `python3 tools/run_bugfix_suite.py` → PASS
+  - lint: PASS
+  - full unit discover: PASS (`213` tests)
+
+## Session Update (Mar 2, 2026 — JIM-2 Implemented: Clip Subtype Branches)
+
+Implemented `JIM-2` to expose and wire Clip subtype branches (`Scan`, `Photo`, `Video`) in browse tree UX.
+
+Files changed:
+- `src/inspirations/server.py`
+- `app/app.js`
+- `tests/test_tree_contract.py`
+- `.claude/TODO.md`
+
+Delivered:
+- `/api/catalog/tree` now adds `source_subtype` children under `Scan` source with visible-count-based totals:
+  - `Scan` (includes legacy blank `content_kind` rows)
+  - `Photo`
+  - `Video`
+- Sidebar source tree now handles subtype clicks as first-class filters.
+- Added `currentContentKind` filter state in frontend; propagated to:
+  - `/api/assets`
+  - `/api/asset-ids` (Explorer sync path)
+  - filter indicator text
+- Filter resets were updated so subtype state clears when switching scopes (All Items, collections, catalog folders, source boards, hidden folders, chat-driven clear/filter flows).
+
+Contract validation updates:
+- Extended tree contract checks so `source_subtype` nodes validate via:
+  - `/api/assets?source=scan&content_kind=<kind>`
+- Added explicit contract test ensuring scan source exposes `scan/photo/video` subtype branches with non-zero counts in seeded fixture.
+
+Validation:
+- `python3 tools/run_bugfix_suite.py` → PASS
+  - lint: PASS
+  - full unit discover: PASS (`214` tests)
