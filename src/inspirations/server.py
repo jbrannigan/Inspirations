@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from email.parser import BytesParser
 from email.policy import default as email_policy_default
