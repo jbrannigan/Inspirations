@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Modal Header Mockup</title>
+    <style>
+      :root {
+        --bg: #f3f0eb;
+        --panel: #ffffff;
+        --surface: #f8f5f1;
+        --text: #2f2a24;
+        --text-muted: #706860;
+        --border: rgba(47, 42, 36, 0.14);
+        --shadow: 0 20px 48px rgba(44, 40, 37, 0.18);
+        --radius: 14px;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        font: 14px/1.4 "DM Sans", system-ui, sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(900px 400px at 50% -5%, rgba(184, 134, 11, 0.15), transparent 70%),
+          var(--bg);
+      }
+
+      .stage {
+        width: min(1120px, 95vw);
+        border-radius: 18px;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.65);
+        padding: 22px;
+      }
+
+      .modal {
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: var(--panel);
+        box-shadow: var(--shadow);
+        padding: 18px;
+      }
+
+      .modal-header {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 14px;
+        align-items: start;
+      }
+
+      .title-block {
+        min-width: 0;
+      }
+
+      .badge {
+        display: inline-block;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        padding: 3px 8px;
+        border-radius: 999px;
+        border: 1px solid rgba(184, 134, 11, 0.38);
+        background: rgba(184, 134, 11, 0.14);
+        color: #7a5a09;
+        margin-bottom: 8px;
+      }
+
+      .title {
+        font-size: 20px;
+        font-weight: 650;
+        line-height: 1.2;
+        margin: 0 0 7px;
+      }
+
+      .meta {
+        color: var(--text-muted);
+        font-size: 12px;
+      }
+
+      .id-row {
+        margin-top: 7px;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 12px;
+        color: var(--text-muted);
+      }
+
+      .id-chip {
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        color: var(--text);
+      }
+
+      .actions {
+        display: grid;
+        gap: 10px;
+        justify-items: end;
+      }
+
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: end;
+      }
+
+      .btn {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 7px 12px;
+        background: #fff;
+        color: var(--text);
+        font: inherit;
+        font-weight: 600;
+        cursor: default;
+      }
+
+      .btn.flag {
+        background: rgba(245, 158, 11, 0.1);
+        border-color: rgba(245, 158, 11, 0.38);
+        color: #9a4f05;
+      }
+
+      .btn.tag {
+        background: rgba(139, 111, 92, 0.12);
+        border-color: rgba(139, 111, 92, 0.35);
+        color: #6a5242;
+      }
+
+      .btn.keep {
+        background: rgba(34, 197, 94, 0.11);
+        border-color: rgba(34, 197, 94, 0.4);
+        color: #166534;
+      }
+
+      .btn.hide {
+        background: rgba(239, 68, 68, 0.1);
+        border-color: rgba(239, 68, 68, 0.38);
+        color: #991b1b;
+      }
+
+      .btn.utility {
+        background: #fff;
+        border-color: rgba(47, 42, 36, 0.2);
+        color: #2f2a24;
+      }
+
+      .action-group {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px;
+        border: 1px solid rgba(47, 42, 36, 0.18);
+        border-radius: 12px;
+        background: var(--surface);
+      }
+
+      .action-label {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #675e56;
+        padding: 0 4px 0 6px;
+      }
+
+      .review-group {
+        border-color: rgba(184, 134, 11, 0.28);
+        background: rgba(184, 134, 11, 0.08);
+      }
+
+      .review-label {
+        color: #7a5a09;
+      }
+
+      .share-group {
+        border-color: rgba(47, 42, 36, 0.18);
+      }
+
+      .btn.share {
+        padding: 6px 11px;
+        border-radius: 9px;
+        border-color: rgba(47, 42, 36, 0.22);
+        background: #fff;
+        color: #2f2a24;
+      }
+
+      .footnote {
+        margin-top: 14px;
+        font-size: 12px;
+        color: #6f675e;
+      }
+
+      @media (max-width: 880px) {
+        .modal-header { grid-template-columns: 1fr; }
+        .actions, .row { justify-items: start; justify-content: flex-start; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stage">
+      <div class="modal">
+        <div class="modal-header">
+          <div class="title-block">
+            <span class="badge">Clip</span>
+            <h1 class="title">Bathroom Vanity Concepts With Warm Oak Finishes</h1>
+            <div class="meta">bathroom • clips • 2026-03-01</div>
+            <div class="id-row">
+              <span>ID</span>
+              <span class="id-chip">ccc4db1f-7c73-4b4b-9170-feddfe860967</span>
+              <button class="btn utility">Copy</button>
+            </div>
+          </div>
+
+          <div class="actions">
+            <div class="row">
+              <div class="action-group review-group">
+                <span class="action-label review-label">Review</span>
+                <button class="btn flag">Flag</button>
+                <button class="btn tag">Tag</button>
+                <button class="btn keep">Keep</button>
+                <button class="btn hide">Hide</button>
+              </div>
+            </div>
+            <div class="row">
+              <button class="btn utility">View Source</button>
+              <div class="action-group share-group">
+                <span class="action-label">Share</span>
+                <button class="btn share">Copy Link</button>
+                <button class="btn share">Email</button>
+                <button class="btn share">Message</button>
+              </div>
+              <button class="btn utility">Print</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="footnote">
+          Mockup only. No runtime behavior is wired on this page.
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

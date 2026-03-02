@@ -34,6 +34,34 @@ class TestAiSemantic(unittest.TestCase):
         short_text = _build_embedding_input_text(long_row)
         self.assertLessEqual(len(short_text), 4000)
 
+    def test_build_embedding_input_text_strips_facebook_engagement_prefix(self):
+        row = {
+            "source": "facebook",
+            "title": "10K views · 266 reactions | We love installing custom herringbone floors",
+            "description": "",
+            "board": "Flooring Ideas",
+            "notes": "",
+            "ai_summary": "",
+            "labels_csv": "",
+        }
+        text = _build_embedding_input_text(row)
+        self.assertIn("title: We love installing custom herringbone floors", text)
+        self.assertNotIn("10K views", text)
+        self.assertNotIn("266 reactions", text)
+
+    def test_build_embedding_input_text_keeps_non_facebook_title_intact(self):
+        row = {
+            "source": "pinterest",
+            "title": "10K views · 266 reactions | Keep exact title for non-facebook sources",
+            "description": "",
+            "board": "",
+            "notes": "",
+            "ai_summary": "",
+            "labels_csv": "",
+        }
+        text = _build_embedding_input_text(row)
+        self.assertIn("title: 10K views · 266 reactions | Keep exact title for non-facebook sources", text)
+
     def test_cosine_similarity(self):
         self.assertAlmostEqual(_cosine_similarity([1.0, 0.0], [1.0, 0.0]), 1.0, places=6)
         self.assertLess(_cosine_similarity([1.0, 0.0], [0.0, 1.0]), 0.01)

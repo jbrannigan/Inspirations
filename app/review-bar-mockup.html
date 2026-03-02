@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Review Bar Mockup</title>
+    <style>
+      :root {
+        --bg: #f7f4ef;
+        --panel: #fffdf9;
+        --line: #d9d0bf;
+        --ink: #2d261d;
+        --muted: #6a6258;
+        --accent: #b8860b;
+        --keep: #1f9d55;
+        --hide: #b34747;
+        --flag: #bd3c3c;
+        --tag: #3563b5;
+        --chip: #f1e8d8;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Avenir Next", "Segoe UI", sans-serif;
+        color: var(--ink);
+        background: linear-gradient(180deg, #f9f7f2 0%, #f4efe6 100%);
+      }
+      .wrap {
+        max-width: 1240px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 22px;
+      }
+      .subtitle {
+        margin: 0 0 18px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 14px;
+      }
+      .state-title {
+        margin: 0 0 10px;
+        font-size: 13px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 11px;
+        padding: 10px;
+      }
+      .btn,
+      .chip {
+        border: 1px solid #cdbfa8;
+        background: #fff;
+        border-radius: 9px;
+        padding: 8px 12px;
+        font-size: 13px;
+        line-height: 1;
+        color: var(--ink);
+        white-space: nowrap;
+      }
+      .btn.primary {
+        background: #fdf7e7;
+        border-color: #d2be8d;
+        font-weight: 600;
+      }
+      .btn.keep { border-color: #93d4b2; color: #177b42; background: #f2fbf6; }
+      .btn.hide-local { border-color: #e1c2a2; color: #7a4b1d; background: #fff6ee; }
+      .btn.hide-global { border-color: #e5b3b3; color: #982f2f; background: #fff4f4; }
+      .btn.flag { border-color: #e5b3b3; color: #982f2f; background: #fff6f6; }
+      .btn.tag { border-color: #b7c8e9; color: #2c4f90; background: #f6f9ff; }
+      .btn.clear { color: #5d554b; }
+      .btn.exit { color: #5d554b; }
+      .chip {
+        background: var(--chip);
+        border-color: #dbc8a9;
+      }
+      .chip.scope {
+        font-weight: 600;
+      }
+      .chip.count {
+        background: #f5f5f5;
+        border-color: #d7d7d7;
+      }
+      .btn.disabled {
+        opacity: 0.4;
+      }
+      .spacer {
+        flex: 1;
+        min-width: 14px;
+      }
+      .notes {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .legend {
+        margin-top: 16px;
+        padding: 12px;
+        border-radius: 10px;
+        border: 1px dashed #cfbea0;
+        background: #fffaf2;
+        color: #665e54;
+        font-size: 13px;
+      }
+      .legend strong { color: #3b342b; }
+      .modal-shell {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: #fff;
+        padding: 14px;
+      }
+      .modal-header {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+        align-items: start;
+      }
+      .modal-title {
+        margin: 0 0 6px;
+        font-size: 19px;
+      }
+      .meta {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .modal-actions {
+        display: flex;
+        gap: 7px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        max-width: 640px;
+      }
+      .modal-group {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 5px;
+        background: #fffaf2;
+      }
+      .group-label {
+        font-size: 11px;
+        color: #7a6e5e;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        font-weight: 600;
+        padding: 0 4px;
+      }
+      .modal-chip {
+        border: 1px solid #dbc8a9;
+        border-radius: 9px;
+        background: var(--chip);
+        font-size: 12px;
+        padding: 6px 9px;
+        white-space: nowrap;
+        font-weight: 600;
+      }
+      @media (max-width: 960px) {
+        .modal-header {
+          grid-template-columns: 1fr;
+        }
+        .modal-actions {
+          justify-content: flex-start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Unified Review Bar Mockup</h1>
+      <p class="subtitle">Owner-visible review controls, same structure in Grid and Explorer.</p>
+
+      <div class="panel">
+        <h2 class="state-title">Grid · Collection Scope</h2>
+        <div class="bar">
+          <button class="btn primary">Review</button>
+          <span class="chip scope">Collection: Clips / Bathroom</span>
+          <span class="chip count">37 selected</span>
+          <button class="btn keep">★ Keep</button>
+          <button class="btn hide-local">↘ Hide in this collection</button>
+          <button class="btn hide-global">✗ Hide globally</button>
+          <button class="btn flag">🚩 Flag</button>
+          <button class="btn tag">🏷️ Tag</button>
+          <button class="btn clear">Clear</button>
+          <span class="spacer"></span>
+          <button class="btn exit">Exit</button>
+        </div>
+        <div class="notes">Collection-local hide is primary when scoped to a collection.</div>
+      </div>
+
+      <div class="panel">
+        <h2 class="state-title">Grid · Corpus Scope</h2>
+        <div class="bar">
+          <button class="btn primary">Review</button>
+          <span class="chip scope">Scope: Entire library</span>
+          <span class="chip count">112 selected</span>
+          <button class="btn keep">★ Keep</button>
+          <button class="btn hide-local disabled">↘ Hide in this collection</button>
+          <button class="btn hide-global">✗ Hide globally</button>
+          <button class="btn flag">🚩 Flag</button>
+          <button class="btn tag">🏷️ Tag</button>
+          <button class="btn clear">Clear</button>
+          <span class="spacer"></span>
+          <button class="btn exit">Exit</button>
+        </div>
+        <div class="notes">No active collection: collection-local hide is disabled.</div>
+      </div>
+
+      <div class="panel">
+        <h2 class="state-title">Explorer · Collection Scope</h2>
+        <div class="bar">
+          <button class="btn primary">Review</button>
+          <span class="chip scope">Collection: Clips / Bathroom</span>
+          <span class="chip count">14 selected</span>
+          <span class="chip">Selection Tool: Lasso</span>
+          <button class="btn keep">★ Keep</button>
+          <button class="btn hide-local">↘ Hide in this collection</button>
+          <button class="btn hide-global">✗ Hide globally</button>
+          <button class="btn flag">🚩 Flag</button>
+          <button class="btn tag">🏷️ Tag</button>
+          <button class="btn clear">Clear</button>
+          <span class="spacer"></span>
+          <button class="btn exit">Exit</button>
+        </div>
+        <div class="notes">Only Explorer-specific control is selection tool mode.</div>
+      </div>
+
+      <div class="panel">
+        <h2 class="state-title">Explorer · Corpus Scope</h2>
+        <div class="bar">
+          <button class="btn primary">Review</button>
+          <span class="chip scope">Scope: Entire library</span>
+          <span class="chip count">0 selected</span>
+          <span class="chip">Selection Tool: Click</span>
+          <button class="btn keep disabled">★ Keep</button>
+          <button class="btn hide-local disabled">↘ Hide in this collection</button>
+          <button class="btn hide-global disabled">✗ Hide globally</button>
+          <button class="btn flag disabled">🚩 Flag</button>
+          <button class="btn tag disabled">🏷️ Tag</button>
+          <button class="btn clear">Clear</button>
+          <span class="spacer"></span>
+          <button class="btn exit">Exit</button>
+        </div>
+        <div class="notes">Action buttons are disabled until selection exists.</div>
+      </div>
+
+      <div class="panel">
+        <h2 class="state-title">Modal Header Version · Collection Scope</h2>
+        <div class="modal-shell">
+          <div class="modal-header">
+            <div>
+              <h3 class="modal-title">Bathroom Vanity Layout With Oak Cabinets</h3>
+              <div class="meta">clip · bathroom · id ccc4db1f-7c73-4b4b-9170-feddfe860967</div>
+            </div>
+            <div class="modal-actions">
+              <span class="modal-chip">Collection: Clips / Bathroom</span>
+              <span class="modal-chip">1 selected</span>
+              <div class="modal-group">
+                <span class="group-label">Review</span>
+                <button class="btn keep">★ Keep</button>
+                <button class="btn hide-local">↘ Hide in this collection</button>
+                <button class="btn hide-global">✗ Hide globally</button>
+                <button class="btn flag">🚩 Flag</button>
+                <button class="btn tag">🏷️ Tag</button>
+              </div>
+              <div class="modal-group">
+                <span class="group-label">Share</span>
+                <button class="btn">Copy Link</button>
+                <button class="btn">Email</button>
+                <button class="btn">Message</button>
+              </div>
+              <button class="btn clear">Print</button>
+            </div>
+          </div>
+        </div>
+        <div class="notes">Modal uses the same scope labels and review actions as Grid/Explorer bars.</div>
+      </div>
+
+      <div class="panel">
+        <h2 class="state-title">Modal Header Version · Corpus Scope</h2>
+        <div class="modal-shell">
+          <div class="modal-header">
+            <div>
+              <h3 class="modal-title">Outdoor Lighting Inspiration</h3>
+              <div class="meta">photo · exterior · id 2cf8a62d-b89d-42a2-95e6-e7168f4f95a0</div>
+            </div>
+            <div class="modal-actions">
+              <span class="modal-chip">Scope: Entire library</span>
+              <span class="modal-chip">1 selected</span>
+              <div class="modal-group">
+                <span class="group-label">Review</span>
+                <button class="btn keep">★ Keep</button>
+                <button class="btn hide-local disabled">↘ Hide in this collection</button>
+                <button class="btn hide-global">✗ Hide globally</button>
+                <button class="btn flag">🚩 Flag</button>
+                <button class="btn tag">🏷️ Tag</button>
+              </div>
+              <div class="modal-group">
+                <span class="group-label">Share</span>
+                <button class="btn">Copy Link</button>
+                <button class="btn">Email</button>
+                <button class="btn">Message</button>
+              </div>
+              <button class="btn clear">Print</button>
+            </div>
+          </div>
+        </div>
+        <div class="notes">Collection-local hide is disabled when modal is opened outside a collection context.</div>
+      </div>
+
+      <div class="legend">
+        <strong>Scope semantics shown in this mock:</strong>
+        <br />
+        <strong>Hide in this collection</strong> removes membership only from the active collection.
+        <br />
+        <strong>Hide globally</strong> sets corpus-level hidden triage status.
+      </div>
+    </div>
+  </body>
+</html>

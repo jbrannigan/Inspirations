@@ -65,6 +65,7 @@ _SCAN_AUTOGEN_TOKENS = {
     "new",
     "untitled",
 }
+_MAX_SCAN_DOC_COLLAPSE_PAGES = 6
 
 
 def _now_iso() -> str:
@@ -209,6 +210,10 @@ def _expand_scan_asset_ids(db: Db, asset_ids: list[str]) -> list[str]:
             )
             if not members:
                 members = [aid]
+            elif len(members) > _MAX_SCAN_DOC_COLLAPSE_PAGES:
+                # Large inferred scan-doc groups are ambiguous in this dataset;
+                # keep item-level behavior instead of expanding to the whole group.
+                members = [aid]
             scan_member_cache[key] = members
 
         for member_id in members:
@@ -255,8 +260,23 @@ def _collapse_scan_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 str(r.get("id") or ""),
             ),
         )
-        rep = dict(sorted_rows[0])
         member_ids = _unique_ids([str(r.get("id") or "") for r in sorted_rows])
+        if len(member_ids) > _MAX_SCAN_DOC_COLLAPSE_PAGES:
+            # Avoid over-collapsing very large inferred groups; expose items individually.
+            for row in sorted_rows:
+                item = dict(row)
+                item["scan_group_member_ids"] = [str(item.get("id") or "")]
+                item["scan_group_id"] = f"scan-doc://{key[1]}#d{key[2]}"
+                item["scan_doc_index"] = int(key[2])
+                item["scan_doc_pages"] = 1
+                item["scan_doc_page"] = 1
+                display_title = _scan_doc_display_title(str(item.get("title") or ""))
+                if display_title:
+                    item["title"] = display_title
+                out.append(item)
+            continue
+
+        rep = dict(sorted_rows[0])
         rep["scan_group_member_ids"] = member_ids
         rep["scan_group_id"] = f"scan-doc://{key[1]}#d{key[2]}"
         rep["scan_doc_index"] = int(key[2])
@@ -311,19 +331,33 @@ def _build_asset_filter(
             # Use a temp table for large ID lists to avoid SQLite's expression
             # tree depth limit of 1000 (uncategorized rooms can have 2000+ IDs).
             if len(id_list) > 500:
-                db.exec("create temp table if not exists _id_filter (prefix text)")
-                db.exec("delete from _id_filter")
+                db.exec("drop table if exists _id_filter")
+                db.exec("create temp table _id_filter (value text, exact int)")
                 db.executemany(
-                    "insert into _id_filter (prefix) values (?)",
-                    [(p,) for p in id_list],
+                    "insert into _id_filter (value, exact) values (?, ?)",
+                    [(p, 1 if len(p) > 8 else 0) for p in id_list],
                 )
                 clauses.append(
-                    "substr(a.id, 1, 8) in (select prefix from _id_filter)"
+                    "("
+                    "a.id in (select value from _id_filter where exact = 1)"
+                    " or "
+                    "substr(a.id, 1, 8) in (select value from _id_filter where exact = 0)"
+                    ")"
                 )
             else:
-                placeholders = ",".join(["?"] * len(id_list))
-                clauses.append(f"substr(a.id, 1, 8) in ({placeholders})")
-                params.extend(id_list)
+                full_ids = [v for v in id_list if len(v) > 8]
+                short_ids = [v for v in id_list if len(v) <= 8]
+                id_clauses: list[str] = []
+                if full_ids:
+                    placeholders = ",".join(["?"] * len(full_ids))
+                    id_clauses.append(f"a.id in ({placeholders})")
+                    params.extend(full_ids)
+                if short_ids:
+                    placeholders = ",".join(["?"] * len(short_ids))
+                    id_clauses.append(f"substr(a.id, 1, 8) in ({placeholders})")
+                    params.extend(short_ids)
+                if id_clauses:
+                    clauses.append("(" + " or ".join(id_clauses) + ")")
     if source:
         sources = [s.strip() for s in source.split(",") if s.strip()]
         clauses.append("a.source in (%s)" % ",".join(["?"] * len(sources)))
@@ -390,10 +424,11 @@ def _build_asset_filter(
             clauses.append(f"({field_ors})")
             tv = f"%{term}%"
             params += [tv] * len(_search_fields)
-    if collection_id:
+    collection_ids = _csv_values(collection_id)
+    if collection_ids:
         joins.append("join collection_items ci on ci.asset_id = a.id")
-        clauses.append("ci.collection_id = ?")
-        params.append(collection_id)
+        clauses.append("ci.collection_id in (%s)" % ",".join(["?"] * len(collection_ids)))
+        params.extend(collection_ids)
     if triage_status:
         statuses = [s.strip() for s in triage_status.split(",") if s.strip()]
         if "pending" in statuses:
@@ -418,7 +453,7 @@ def _build_asset_filter(
     if not include_hidden:
         clauses.append("(a.triage_status is null or a.triage_status != 'hidden')")
     hidden_collection_id = db.query_value("select id from collections where lower(name)='hidden' limit 1")
-    if hidden_collection_id and not include_hidden and collection_id != hidden_collection_id:
+    if hidden_collection_id and not include_hidden and hidden_collection_id not in set(collection_ids):
         clauses.append(
             "a.id not in (select asset_id from collection_items where collection_id = ?)"
         )
@@ -731,6 +766,72 @@ def bulk_set_triage_status(
             (status, now, *asset_ids),
         )
     return len(asset_ids)
+
+
+def rollback_triage_since(
+    db: Db,
+    *,
+    since_iso: str,
+    reason: str = "",
+    actor: str = "",
+) -> dict[str, Any]:
+    """Rollback triage status to the value before `since_iso`.
+
+    For each asset changed since the cutoff, this restores the `old_status`
+    from the first triage_log entry at/after the cutoff.
+    """
+    cutoff = (since_iso or "").strip()
+    if not cutoff:
+        return {"cutoff": cutoff, "candidates": 0, "updated": 0}
+
+    first_changes = db.query(
+        """
+        select t.asset_id, t.old_status
+        from triage_log t
+        join (
+          select asset_id, min(id) as first_id
+          from triage_log
+          where created_at >= ?
+          group by asset_id
+        ) firsts on firsts.first_id = t.id
+        """,
+        (cutoff,),
+    )
+    if not first_changes:
+        return {"cutoff": cutoff, "candidates": 0, "updated": 0}
+
+    candidate_rows = [dict(r) for r in first_changes]
+    asset_ids = [str(r.get("asset_id") or "").strip() for r in candidate_rows if str(r.get("asset_id") or "").strip()]
+    unique_ids = _unique_ids(asset_ids)
+    if not unique_ids:
+        return {"cutoff": cutoff, "candidates": 0, "updated": 0}
+
+    placeholders = ",".join(["?"] * len(unique_ids))
+    current_rows = db.query(
+        f"select id, triage_status from assets where id in ({placeholders})",
+        tuple(unique_ids),
+    )
+    current_by_id = {str(r["id"]): r["triage_status"] for r in current_rows}
+    target_by_id = {str(r.get("asset_id") or ""): r.get("old_status") for r in candidate_rows}
+
+    updated = 0
+    rollback_reason = (reason or f"triage rollback since {cutoff}").strip()
+    for aid in unique_ids:
+        if aid not in current_by_id:
+            continue
+        target = target_by_id.get(aid)
+        current = current_by_id.get(aid)
+        if current == target:
+            continue
+        set_triage_status(
+            db,
+            aid,
+            target,
+            reason=rollback_reason,
+            actor=actor,
+        )
+        updated += 1
+    return {"cutoff": cutoff, "candidates": len(unique_ids), "updated": updated}
 
 
 def bulk_set_flag(

@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 from inspirations.db import Db, ensure_schema
-from inspirations.server import ApiHandler
+from inspirations.server import ApiHandler, run_server
 
 
 class TestServerApi(unittest.TestCase):
@@ -222,10 +222,381 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertEqual(body.get("error"), "semantic_weight must be number")
 
+    def test_explorer_attractor_data_include_hidden_requires_owner(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec("update assets set triage_status='hidden' where id='a2'")
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-1", "Owner", "owner-token-1", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-1", "Collab", "collab-token-1", "collaborator"),
+            )
+
+        status, body = self._request("/api/explorer/attractor-data?dims=2&include_hidden=1")
+        self.assertEqual(status, 200)
+        ids_public = {a["id"] for a in body.get("assets", [])}
+        self.assertEqual(ids_public, {"a1"})
+
+        status, body = self._request(
+            "/api/explorer/attractor-data?dims=2&include_hidden=1",
+            headers={"X-Actor-Token": "collab-token-1"},
+        )
+        self.assertEqual(status, 200)
+        ids_collab = {a["id"] for a in body.get("assets", [])}
+        self.assertEqual(ids_collab, {"a1"})
+
+        status, body = self._request(
+            "/api/explorer/attractor-data?dims=2&include_hidden=1",
+            headers={"X-Actor-Token": "owner-token-1"},
+        )
+        self.assertEqual(status, 200)
+        ids_owner = {a["id"] for a in body.get("assets", [])}
+        self.assertEqual(ids_owner, {"a1", "a2"})
+
+    def test_explorer_layout_include_hidden_requires_owner(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec("update assets set triage_status='hidden' where id='a2'")
+            db.exec(
+                """
+                insert into asset_embeddings
+                  (id, asset_id, provider, model, input_text, vector_json, dimensions, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                """,
+                ("emb-a1", "a1", "gemini", "gemini-embedding-001", "a1", "[0.1,0.2,0.3]", 3),
+            )
+            db.exec(
+                """
+                insert into asset_embeddings
+                  (id, asset_id, provider, model, input_text, vector_json, dimensions, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                """,
+                ("emb-a2", "a2", "gemini", "gemini-embedding-001", "a2", "[0.2,0.3,0.4]", 3),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-2", "Owner", "owner-token-2", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-2", "Collab", "collab-token-2", "collaborator"),
+            )
+
+        status, body = self._request("/api/explorer/layout?method=pca&refresh=1&include_hidden=1")
+        self.assertEqual(status, 200)
+        ids_public = {n["id"] for n in body.get("nodes", [])}
+        self.assertEqual(ids_public, {"a1"})
+
+        status, body = self._request(
+            "/api/explorer/layout?method=pca&refresh=1&include_hidden=1",
+            headers={"X-Actor-Token": "collab-token-2"},
+        )
+        self.assertEqual(status, 200)
+        ids_collab = {n["id"] for n in body.get("nodes", [])}
+        self.assertEqual(ids_collab, {"a1"})
+
+        status, body = self._request(
+            "/api/explorer/layout?method=pca&refresh=1&include_hidden=1",
+            headers={"X-Actor-Token": "owner-token-2"},
+        )
+        self.assertEqual(status, 200)
+        ids_owner = {n["id"] for n in body.get("nodes", [])}
+        self.assertEqual(ids_owner, {"a1", "a2"})
+
+    def test_asset_detail_endpoint_returns_exact_asset(self):
+        status, body = self._request("/api/assets/a1")
+        self.assertEqual(status, 200)
+        asset = body.get("asset") or {}
+        self.assertEqual(asset.get("id"), "a1")
+        self.assertEqual(asset.get("title"), "Asset One")
+        self.assertEqual(asset.get("notes"), "remove me")
+        self.assertTrue(asset.get("thumb_path"))
+
+    def test_asset_detail_include_hidden_requires_owner(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec("update assets set triage_status='hidden' where id='a2'")
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-asset", "Owner", "owner-asset-token", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-asset", "Collab", "collab-asset-token", "collaborator"),
+            )
+
+        status, _ = self._request("/api/assets/a2?include_hidden=1")
+        self.assertEqual(status, 404)
+
+        status, _ = self._request(
+            "/api/assets/a2?include_hidden=1",
+            headers={"X-Actor-Token": "collab-asset-token"},
+        )
+        self.assertEqual(status, 404)
+
+        status, body = self._request(
+            "/api/assets/a2?include_hidden=1",
+            headers={"X-Actor-Token": "owner-asset-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual((body.get("asset") or {}).get("id"), "a2")
+
     def test_assets_endpoint_supports_media_status_filter(self):
         status, body = self._request("/api/assets?media_status=metadata_only")
         self.assertEqual(status, 200)
         self.assertEqual([a["id"] for a in body["assets"]], ["a2"])
+
+    def test_assets_endpoint_ids_accepts_exact_full_ids(self):
+        full_id = "11111111-2222-3333-4444-555555555555"
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into assets (id, source, source_ref, title, imported_at)
+                values (?, ?, ?, ?, datetime('now'))
+                """,
+                (full_id, "facebook", "facebook://saved/full", "Full ID Asset"),
+            )
+
+        status, body = self._request(f"/api/assets?ids={full_id}&include_hidden=1")
+        self.assertEqual(status, 200)
+        ids = [a["id"] for a in body.get("assets", [])]
+        self.assertEqual(ids, [full_id])
+
+    def test_explorer_attractor_title_fallback_for_saved_link_posts(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into assets (id, source, source_ref, title, imported_at)
+                values (?, ?, ?, ?, datetime('now'))
+                """,
+                (
+                    "fb-generic-1",
+                    "facebook",
+                    "https://example.com/alpha-beta-guide",
+                    "Leslie Brannigan saved a link from Wisebird's post.",
+                ),
+            )
+
+        status, body = self._request("/api/explorer/attractor-data?dims=2")
+        self.assertEqual(status, 200)
+        titles = {a["id"]: (a.get("title") or "") for a in body.get("assets", [])}
+        title = titles.get("fb-generic-1", "")
+        self.assertTrue(title)
+        self.assertNotIn("saved a link from", title.lower())
+        self.assertIn("Alpha Beta Guide", title)
+
+    def test_collection_filter_supports_multiple_collection_ids(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into assets (id, source, source_ref, title, imported_at) values (?, ?, ?, ?, datetime('now'))",
+                ("a3", "facebook", "facebook://saved/3", "Asset Three"),
+            )
+            db.exec(
+                """
+                insert into collections (id, name, description, created_at, updated_at)
+                values (?, ?, ?, datetime('now'), datetime('now'))
+                """,
+                ("c2", "Bathroom", ""),
+            )
+            db.exec("insert into collection_items (collection_id, asset_id, position) values (?, ?, ?)", ("c2", "a3", 1))
+
+        status, ids_body = self._request("/api/asset-ids?collection_id=c1,c2")
+        self.assertEqual(status, 200)
+        self.assertEqual(set(ids_body.get("ids", [])), {"a1", "a2", "a3"})
+
+        status, body = self._request("/api/assets?collection_id=c1,c2&limit=10")
+        self.assertEqual(status, 200)
+        self.assertEqual({a["id"] for a in body.get("assets", [])}, {"a1", "a2", "a3"})
+
+    def test_context_resolve_requires_authentication(self):
+        status, body = self._request("/api/context/resolve?collection_id=c1&item_id=a1")
+        self.assertEqual(status, 401)
+        self.assertEqual(body.get("error"), "authentication required")
+
+    def test_context_resolve_found_and_missing_states(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-ctx-1", "Collab", "collab-ctx-token-1", "collaborator"),
+            )
+
+        status, body = self._request(
+            "/api/context/resolve?collection_id=c1&item_id=a1",
+            headers={"X-Actor-Token": "collab-ctx-token-1"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body.get("found"))
+        self.assertEqual(body.get("collection_id"), "c1")
+        self.assertEqual(body.get("item_id"), "a1")
+
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec("delete from collection_items where collection_id='c1' and asset_id='a1'")
+
+        status, body = self._request(
+            "/api/context/resolve?collection_id=c1&item_id=a1",
+            headers={"X-Actor-Token": "collab-ctx-token-1"},
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(body.get("found"))
+        self.assertEqual(body.get("reason"), "item_not_in_collection")
+
+    def test_context_resolve_hidden_item_is_owner_only(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec("update assets set triage_status='hidden' where id='a2'")
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-ctx-1", "Owner", "owner-ctx-token-1", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-ctx-2", "Collab", "collab-ctx-token-2", "collaborator"),
+            )
+
+        status, body = self._request(
+            "/api/context/resolve?collection_id=c1&item_id=a2",
+            headers={"X-Actor-Token": "collab-ctx-token-2"},
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(body.get("found"))
+        self.assertEqual(body.get("reason"), "item_hidden_for_role")
+
+        status, body = self._request(
+            "/api/context/resolve?collection_id=c1&item_id=a2",
+            headers={"X-Actor-Token": "owner-ctx-token-1"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(body.get("found"))
+        self.assertTrue(body.get("item_hidden"))
+
+    def test_annotation_edit_and_delete_permissions(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-ann-1", "Owner", "owner-ann-token-1", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-ann-1", "Collab A", "collab-ann-token-1", "collaborator"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-ann-2", "Collab B", "collab-ann-token-2", "collaborator"),
+            )
+            db.exec(
+                """
+                insert into annotations
+                  (id, asset_id, x, y, text, created_at, updated_at, actor_id, actor_name, annotation_type, resolved)
+                values (?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?, ?, 'note', 0)
+                """,
+                ("ann-own-1", "a1", 0.1, 0.2, "mine", "collab-ann-1", "Collab A"),
+            )
+            db.exec(
+                """
+                insert into annotations
+                  (id, asset_id, x, y, text, created_at, updated_at, actor_id, actor_name, annotation_type, resolved)
+                values (?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?, ?, 'note', 0)
+                """,
+                ("ann-own-2", "a1", 0.3, 0.4, "theirs", "collab-ann-2", "Collab B"),
+            )
+
+        status, _ = self._request(
+            "/api/annotations/ann-own-1",
+            method="PUT",
+            payload={"text": "updated by owner"},
+            headers={"X-Actor-Token": "owner-ann-token-1"},
+        )
+        self.assertEqual(status, 200)
+
+        status, body = self._request(
+            "/api/annotations/ann-own-2",
+            method="PUT",
+            payload={"text": "unauthorized edit"},
+            headers={"X-Actor-Token": "collab-ann-token-1"},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(body.get("error"), "not allowed to edit this annotation")
+
+        status, _ = self._request(
+            "/api/annotations/ann-own-1",
+            method="PUT",
+            payload={"text": "updated by self"},
+            headers={"X-Actor-Token": "collab-ann-token-1"},
+        )
+        self.assertEqual(status, 200)
+
+        status, body = self._request(
+            "/api/annotations/ann-own-2",
+            method="DELETE",
+            headers={"X-Actor-Token": "collab-ann-token-1"},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(body.get("error"), "not allowed to delete this annotation")
+
+        status, _ = self._request(
+            "/api/annotations/ann-own-2",
+            method="DELETE",
+            headers={"X-Actor-Token": "owner-ann-token-1"},
+        )
+        self.assertEqual(status, 200)
+
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            own_text = db.query_value("select text from annotations where id='ann-own-1'")
+            remaining_other = db.query_value("select count(*) from annotations where id='ann-own-2'")
+        self.assertEqual(own_text, "updated by self")
+        self.assertEqual(remaining_other, 0)
+
+    def test_annotation_resolve_requires_owner(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-ann-2", "Owner", "owner-ann-token-2", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-ann-3", "Collab C", "collab-ann-token-3", "collaborator"),
+            )
+            db.exec(
+                """
+                insert into annotations
+                  (id, asset_id, x, y, text, created_at, updated_at, actor_id, actor_name, annotation_type, resolved)
+                values (?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?, ?, 'question', 0)
+                """,
+                ("ann-q-1", "a1", 0.2, 0.2, "question", "collab-ann-3", "Collab C"),
+            )
+
+        status, body = self._request(
+            "/api/annotations/ann-q-1",
+            method="PUT",
+            payload={"resolved": 1},
+            headers={"X-Actor-Token": "collab-ann-token-3"},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(body.get("error"), "owner access required to resolve questions")
+
+        status, _ = self._request(
+            "/api/annotations/ann-q-1",
+            method="PUT",
+            payload={"resolved": 1},
+            headers={"X-Actor-Token": "owner-ann-token-2"},
+        )
+        self.assertEqual(status, 200)
+
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            resolved = db.query_value("select resolved from annotations where id='ann-q-1'")
+        self.assertEqual(resolved, 1)
 
     def test_assets_endpoint_supports_label_mode_all(self):
         with Db(self.db_path) as db:
@@ -269,6 +640,246 @@ class TestServerApi(unittest.TestCase):
         status, body = self._request(f"/api/assets?collection_id={hidden_id}")
         self.assertEqual(status, 200)
         self.assertEqual([a["id"] for a in body["assets"]], ["a2"])
+
+    def test_scan_doc_pdf_endpoint_returns_doc_scoped_pdf(self):
+        try:
+            from PIL import Image  # type: ignore
+        except Exception:
+            self.skipTest("Pillow not available")
+
+        sha = "a" * 64
+        pages_dir = self.store_dir / "pages" / "scan" / sha
+        pages_dir.mkdir(parents=True, exist_ok=True)
+        p1 = pages_dir / "page-001.jpg"
+        p2 = pages_dir / "page-002.jpg"
+        p3 = pages_dir / "page-003.jpg"
+        Image.new("RGB", (40, 40), (220, 80, 80)).save(p1, format="JPEG")
+        Image.new("RGB", (40, 40), (80, 220, 80)).save(p2, format="JPEG")
+        Image.new("RGB", (40, 40), (80, 80, 220)).save(p3, format="JPEG")
+
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into assets
+                  (id, source, source_ref, title, imported_at, stored_path, thumb_path)
+                values (?, ?, ?, ?, datetime('now'), ?, ?)
+                """,
+                ("s1", "scan", f"scan://{sha}#p1", "Doc one - doc 1", str(p1), str(p1)),
+            )
+            db.exec(
+                """
+                insert into assets
+                  (id, source, source_ref, title, imported_at, stored_path, thumb_path)
+                values (?, ?, ?, ?, datetime('now'), ?, ?)
+                """,
+                ("s2", "scan", f"scan://{sha}#p2", "Doc two - doc 2 p1", str(p2), str(p2)),
+            )
+            db.exec(
+                """
+                insert into assets
+                  (id, source, source_ref, title, imported_at, stored_path, thumb_path)
+                values (?, ?, ?, ?, datetime('now'), ?, ?)
+                """,
+                ("s3", "scan", f"scan://{sha}#p3", "Doc two - doc 2 p2", str(p3), str(p3)),
+            )
+
+        with urllib.request.urlopen(
+            urllib.request.Request(f"{self.base_url}/api/scan/doc-pdf?asset_id=s1", method="GET"),
+            timeout=5,
+        ) as resp:
+            body1 = resp.read()
+            self.assertEqual(resp.status, 200)
+            self.assertIn("application/pdf", (resp.headers.get("Content-Type") or ""))
+            self.assertTrue(body1.startswith(b"%PDF"))
+
+        with urllib.request.urlopen(
+            urllib.request.Request(f"{self.base_url}/api/scan/doc-pdf?asset_id=s2", method="GET"),
+            timeout=5,
+        ) as resp:
+            body2 = resp.read()
+            self.assertEqual(resp.status, 200)
+            self.assertIn("application/pdf", (resp.headers.get("Content-Type") or ""))
+            self.assertTrue(body2.startswith(b"%PDF"))
+
+        doc1 = self.store_dir / "originals" / "scan_docs" / sha / "asset-s1.pdf"
+        doc2 = self.store_dir / "originals" / "scan_docs" / sha / "doc-0002.pdf"
+        self.assertTrue(doc1.exists())
+        self.assertTrue(doc2.exists())
+        self.assertGreater(len(body2), len(body1))
+        self.assertNotEqual(body1, body2)
+
+    def test_scan_doc_pdf_endpoint_prefers_source_pdf_on_disk(self):
+        sha = "b" * 64
+        source_pdf = self.store_dir / "originals" / "scan" / f"{sha}.pdf"
+        source_pdf.parent.mkdir(parents=True, exist_ok=True)
+        pdf_bytes = b"%PDF-1.4\n%scan-source\n%%EOF\n"
+        source_pdf.write_bytes(pdf_bytes)
+
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into assets
+                  (id, source, source_ref, title, imported_at)
+                values (?, ?, ?, ?, datetime('now'))
+                """,
+                ("s_src", "scan", f"scan://{sha}#p12", "Source PDF scan",),
+            )
+
+        with urllib.request.urlopen(
+            urllib.request.Request(f"{self.base_url}/api/scan/doc-pdf?asset_id=s_src", method="GET"),
+            timeout=5,
+        ) as resp:
+            body = resp.read()
+            self.assertEqual(resp.status, 200)
+            self.assertIn("application/pdf", (resp.headers.get("Content-Type") or ""))
+            self.assertEqual(body, pdf_bytes)
+
+    def test_media_pdf_for_scan_prefers_source_pdf_on_disk(self):
+        sha = "c" * 64
+        source_pdf = self.store_dir / "originals" / "scan" / f"{sha}.pdf"
+        source_pdf.parent.mkdir(parents=True, exist_ok=True)
+        pdf_bytes = b"%PDF-1.4\n%media-source\n%%EOF\n"
+        source_pdf.write_bytes(pdf_bytes)
+
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into assets
+                  (id, source, source_ref, title, imported_at)
+                values (?, ?, ?, ?, datetime('now'))
+                """,
+                ("s_media", "scan", f"scan://{sha}#p3", "Media PDF scan",),
+            )
+
+        with urllib.request.urlopen(
+            urllib.request.Request(f"{self.base_url}/media/s_media?kind=pdf", method="GET"),
+            timeout=5,
+        ) as resp:
+            body = resp.read()
+            self.assertEqual(resp.status, 200)
+            self.assertIn("application/pdf", (resp.headers.get("Content-Type") or ""))
+            self.assertEqual(body, pdf_bytes)
+
+    def test_scan_doc_pdf_prefers_doc_scoped_pdf_when_doc_pages_exist(self):
+        try:
+            from PIL import Image  # type: ignore
+        except Exception:
+            self.skipTest("Pillow not available")
+
+        sha = "d" * 64
+        source_pdf = self.store_dir / "originals" / "scan" / f"{sha}.pdf"
+        source_pdf.parent.mkdir(parents=True, exist_ok=True)
+        source_pdf_bytes = b"%PDF-1.4\n%batch-source\n%%EOF\n"
+        source_pdf.write_bytes(source_pdf_bytes)
+
+        pages_dir = self.store_dir / "pages" / "scan" / sha
+        pages_dir.mkdir(parents=True, exist_ok=True)
+        p1 = pages_dir / "page-001.jpg"
+        p2 = pages_dir / "page-002.jpg"
+        Image.new("RGB", (40, 40), (220, 80, 80)).save(p1, format="JPEG")
+        Image.new("RGB", (40, 40), (80, 220, 80)).save(p2, format="JPEG")
+
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into assets
+                  (id, source, source_ref, title, imported_at, stored_path, thumb_path)
+                values (?, ?, ?, ?, datetime('now'), ?, ?)
+                """,
+                ("s_doc1", "scan", f"scan://{sha}#p1", "Clip sample - doc 88 p1", str(p1), str(p1)),
+            )
+            db.exec(
+                """
+                insert into assets
+                  (id, source, source_ref, title, imported_at, stored_path, thumb_path)
+                values (?, ?, ?, ?, datetime('now'), ?, ?)
+                """,
+                ("s_doc2", "scan", f"scan://{sha}#p2", "Clip sample - doc 88 p2", str(p2), str(p2)),
+            )
+
+        with urllib.request.urlopen(
+            urllib.request.Request(f"{self.base_url}/api/scan/doc-pdf?asset_id=s_doc1", method="GET"),
+            timeout=5,
+        ) as resp:
+            body = resp.read()
+            self.assertEqual(resp.status, 200)
+            self.assertIn("application/pdf", (resp.headers.get("Content-Type") or ""))
+            self.assertTrue(body.startswith(b"%PDF"))
+            self.assertNotEqual(body, source_pdf_bytes)
+
+        with urllib.request.urlopen(
+            urllib.request.Request(f"{self.base_url}/media/s_doc1?kind=pdf", method="GET"),
+            timeout=5,
+        ) as resp:
+            body = resp.read()
+            self.assertEqual(resp.status, 200)
+            self.assertIn("application/pdf", (resp.headers.get("Content-Type") or ""))
+            self.assertTrue(body.startswith(b"%PDF"))
+            self.assertNotEqual(body, source_pdf_bytes)
+
+    def test_large_scan_doc_groups_are_not_collapsed_in_assets_list(self):
+        try:
+            from PIL import Image  # type: ignore
+        except Exception:
+            self.skipTest("Pillow not available")
+
+        sha = "e" * 64
+        source_pdf = self.store_dir / "originals" / "scan" / f"{sha}.pdf"
+        source_pdf.parent.mkdir(parents=True, exist_ok=True)
+        source_pdf_bytes = b"%PDF-1.4\n%big-doc-source\n%%EOF\n"
+        source_pdf.write_bytes(source_pdf_bytes)
+
+        pages_dir = self.store_dir / "pages" / "scan" / sha
+        pages_dir.mkdir(parents=True, exist_ok=True)
+
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            for idx in range(1, 8):
+                page = pages_dir / f"page-{idx:03d}.jpg"
+                Image.new("RGB", (40, 40), (20 * idx, 30 * idx, 40 * idx)).save(page, format="JPEG")
+                db.exec(
+                    """
+                    insert into assets
+                      (id, source, source_ref, title, imported_at, stored_path, thumb_path)
+                    values (?, ?, ?, ?, datetime('now'), ?, ?)
+                    """,
+                    (
+                        f"s_big_{idx}",
+                        "scan",
+                        f"scan://{sha}#p{idx}",
+                        f"Big doc sample - doc 77 p{idx}",
+                        str(page),
+                        str(page),
+                    ),
+                )
+
+        status, body = self._request("/api/assets?source=scan&limit=20&include_hidden=1")
+        self.assertEqual(status, 200)
+        ids = [a["id"] for a in body.get("assets", [])]
+        for idx in range(1, 8):
+            self.assertIn(f"s_big_{idx}", ids)
+
+        with urllib.request.urlopen(
+            urllib.request.Request(f"{self.base_url}/media/s_big_1?kind=pdf", method="GET"),
+            timeout=5,
+        ) as resp1:
+            body1 = resp1.read()
+            self.assertEqual(resp1.status, 200)
+            self.assertTrue(body1.startswith(b"%PDF"))
+            self.assertNotEqual(body1, source_pdf_bytes)
+        with urllib.request.urlopen(
+            urllib.request.Request(f"{self.base_url}/media/s_big_7?kind=pdf", method="GET"),
+            timeout=5,
+        ) as resp2:
+            body2 = resp2.read()
+            self.assertEqual(resp2.status, 200)
+            self.assertTrue(body2.startswith(b"%PDF"))
+            self.assertNotEqual(body2, source_pdf_bytes)
+        self.assertNotEqual(body1, body2)
 
     def test_cluster_review_endpoint_exports_collection_payload(self):
         with Db(self.db_path) as db:
@@ -358,7 +969,7 @@ class TestServerApi(unittest.TestCase):
         self.assertIn("pin", all_kinds)
         self.assertEqual(context_kinds, {"pin"})
 
-    def test_server_disables_caching_for_app_and_api(self):
+    def test_server_cache_policy_for_app_and_api(self):
         status, body, headers = self._request("/api/collections", return_headers=True)
         self.assertEqual(status, 200)
         self.assertIn("collections", body)
@@ -367,7 +978,25 @@ class TestServerApi(unittest.TestCase):
         req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
             self.assertEqual(resp.status, 200)
-            self.assertEqual(resp.headers.get("Cache-Control"), "no-store")
+            self.assertEqual(resp.headers.get("Cache-Control"), "public, max-age=300")
+
+        req = urllib.request.Request(f"{self.base_url}/app/app.js?v=6", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.headers.get("Cache-Control"), "public, max-age=31536000, immutable")
+
+    def test_head_requests_supported_for_api_and_static_assets(self):
+        status, body, headers = self._request("/api/assets?limit=1", method="HEAD", return_headers=True)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {})
+        self.assertEqual(headers.get("Cache-Control"), "no-store")
+        self.assertEqual(headers.get("Content-Type"), "application/json")
+
+        status, body, headers = self._request("/app/app.js", method="HEAD", return_headers=True)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {})
+        self.assertEqual(headers.get("Cache-Control"), "public, max-age=300")
+        self.assertEqual(headers.get("Content-Type"), "application/javascript")
 
     def test_store_files_route_serves_media(self):
         req = urllib.request.Request(f"{self.base_url}/store/originals/pinterest/a1.jpg", method="GET")
@@ -375,6 +1004,83 @@ class TestServerApi(unittest.TestCase):
             data = resp.read()
             self.assertEqual(resp.status, 200)
             self.assertEqual(data, b"img")
+
+    def test_triage_rollback_requires_owner_and_restores_cutoff_state(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-rb-1", "Owner", "owner-rb-token-1", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-rb-1", "Collab", "collab-rb-token-1", "collaborator"),
+            )
+
+        status, body = self._request(
+            "/api/assets/triage/bulk",
+            method="POST",
+            payload={"ids": ["a1", "a2"], "status": "hidden"},
+            headers={"X-Actor-Token": "owner-rb-token-1"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body.get("updated"), 2)
+
+        status, _ = self._request(
+            "/api/triage/rollback",
+            method="POST",
+            payload={"days_ago": 2},
+            headers={"X-Actor-Token": "collab-rb-token-1"},
+        )
+        self.assertEqual(status, 403)
+
+        status, body = self._request(
+            "/api/triage/rollback",
+            method="POST",
+            payload={"days_ago": 2},
+            headers={"X-Actor-Token": "owner-rb-token-1"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body.get("updated"), 2)
+
+        with Db(self.db_path) as db:
+            rows = db.query("select id, triage_status from assets where id in ('a1','a2') order by id")
+        self.assertEqual([(r["id"], r["triage_status"]) for r in rows], [("a1", None), ("a2", None)])
+
+    def test_run_server_uses_threaded_runtime_server(self):
+        created: list[object] = []
+
+        class FakeServer:
+            def __init__(self, address, handler_cls):
+                self.address = address
+                self.handler_cls = handler_cls
+                self.serve_forever_called = False
+                created.append(self)
+
+            def serve_forever(self):
+                self.serve_forever_called = True
+
+        with mock.patch("inspirations.server.InspirationsHTTPServer", FakeServer), \
+             mock.patch("inspirations.server._seed_default_actors") as seed:
+            run_server(
+                host="127.0.0.1",
+                port=9999,
+                db_path=self.db_path,
+                app_dir=self.app_dir,
+                store_dir=self.store_dir,
+            )
+
+        self.assertEqual(len(created), 1)
+        srv = created[0]
+        self.assertEqual(srv.address, ("127.0.0.1", 9999))
+        self.assertIs(srv.handler_cls, ApiHandler)
+        self.assertEqual(srv.db_path, self.db_path)
+        self.assertEqual(srv.app_dir, self.app_dir)
+        self.assertEqual(srv.store_dir, self.store_dir)
+        self.assertEqual(srv.imports_dir, self.app_dir.resolve().parent / "imports")
+        self.assertEqual(srv.admin_tokens, {})
+        self.assertTrue(srv.serve_forever_called)
+        seed.assert_called_once_with(self.db_path, "127.0.0.1", 9999)
 
     def test_scan_pdf_upload_runs_import_and_thumbs(self):
         boundary = "----insp-test-boundary"

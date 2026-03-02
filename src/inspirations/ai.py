@@ -51,6 +51,11 @@ KEYWORDS = [
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 DEFAULT_GEMINI_RECITATION_FALLBACK_MODEL = "gemini-2.0-flash"
 DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001"
+_FACEBOOK_ENGAGEMENT_PREFIX_RE = re.compile(
+    r"^\s*(?:(?:\d[\d.,]*\s*[kmb]?)\s*"
+    r"(?:views?|reactions?|shares?|comments?|likes?|saves?)\s*(?:[·•]\s*)?){1,5}\|\s*",
+    re.IGNORECASE,
+)
 _SCAN_DOC_SUFFIX_RE = re.compile(r"(\s-\sdoc\s+\d+(?:\s+p\d+)?)\s*$", re.IGNORECASE)
 _SCAN_GENERIC_PREFIX_RE = re.compile(
     r"^(?:a|an|the|this)\s+(?:scanned?\s+)?(?:magazine\s+page|image|photo|scan|page|document)"
@@ -561,6 +566,7 @@ def _gemini_embed_text(
 
 
 def _build_embedding_input_text(row: dict[str, Any]) -> str:
+    source = str(row.get("source") or "").strip().lower()
     parts: list[str] = []
     field_order = [
         ("title", "title"),
@@ -571,6 +577,10 @@ def _build_embedding_input_text(row: dict[str, Any]) -> str:
     ]
     for key, label in field_order:
         value = str(row.get(key) or "").strip()
+        if key == "title" and source == "facebook":
+            cleaned = _FACEBOOK_ENGAGEMENT_PREFIX_RE.sub("", value).strip()
+            if cleaned:
+                value = cleaned
         if value:
             parts.append(f"{label}: {value}")
     labels_csv = str(row.get("labels_csv") or "").strip()

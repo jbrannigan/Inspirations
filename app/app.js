@@ -2,10 +2,16 @@
 const state = {
   // Navigation
   view: "browse",               // "browse" | "review"
+  sidebarHidden: false,         // side panel collapsed state
   currentBoard: null,           // board filter (null = all)
   currentSource: null,          // source filter (null = all)
   currentCollection: null,      // collection ID filter
+  currentCollectionIds: [],     // recursive collection scope
+  currentCollectionLabel: "",   // display label for collection scope
   currentCatalogFile: null,     // catalog dimension file (e.g. "room/bathroom.md")
+  currentCatalogFiles: [],      // recursive catalog scope
+  currentCatalogLabel: "",      // display label for catalog scope
+  currentTreeNodeId: null,      // active sidebar tree node ID
   triageFilter: "",             // "" | "pending" | "keeper" | "hidden" | "needs-comment"
 
   // Assets
@@ -40,6 +46,7 @@ const state = {
   noteTimers: {},
   modalScanPages: null,
   modalScanPageIndex: 0,
+  modalScanStartPage: 1,         // absolute page number in master scan PDF for group index 0
 
   // Imports
   scanImportBusy: false,
@@ -55,20 +62,43 @@ const state = {
   actor: null,                  // { id, name, role, token } or null
   hiddenTree: null,             // hidden items tree for sidebar (owners only)
   expandedTreeNodes: new Set(), // track which tree nodes are expanded by user
+  allItemsTreeCollapsed: null,  // collaborator default: collapse browse tree under "All Items"
   openQuestions: [],             // open question annotations (owners only)
   questionPollTimer: null,
 };
 
-const ASSETS_PAGE_SIZE = 240;
+const DESKTOP_ASSETS_PAGE_SIZE = 240;
+const TABLET_ASSETS_PAGE_SIZE = 120;
+const PHONE_ASSETS_PAGE_SIZE = 80;
+
+function _detectAssetsPageSize() {
+  const vw = Math.max(0, window.innerWidth || 0);
+  const vh = Math.max(0, window.innerHeight || 0);
+  const shortest = Math.min(vw || Infinity, vh || Infinity);
+  const ua = navigator.userAgent || "";
+  const isTouchMac = /Macintosh/i.test(ua) && Number(navigator.maxTouchPoints || 0) > 1;
+  const isIpad = /iPad/i.test(ua) || isTouchMac;
+  if (shortest <= 520) return PHONE_ASSETS_PAGE_SIZE;
+  if (isIpad || shortest <= 980) return TABLET_ASSETS_PAGE_SIZE;
+  return DESKTOP_ASSETS_PAGE_SIZE;
+}
+
+const ASSETS_PAGE_SIZE = _detectAssetsPageSize();
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 const escapeHtml = Shared.escapeHtml;
 const api = Shared.api;
 const formatApiError = Shared.formatApiError;
+const SIDEBAR_VISIBILITY_KEY = "inspirations.ui.sidebar.hidden.v1";
+const VIEW_MODE_KEY = "inspirations.ui.view.mode.v1";
+const CONTEXT_LINK_BANNER_DEFAULT = "Use this shared context link to review the referenced item.";
 
 const IMAGE_SUFFIX_RE = /\.(jpg|jpeg|png|webp|gif|bmp|svg)(\?.*)?$/i;
 const PDF_FILE_EXT_RE = /\.pdf$/i;
 const IMAGE_FILE_EXT_RE = /\.(jpg|jpeg|png|webp|gif|bmp|heic|heif|tif|tiff)$/i;
+const TITLE_DYNAMIC_SEGMENT_RE = /^(?:home|index|main|blog|news|latest|feed|explore|discover|topics?|category|categories|tag|tags|shop|products?|wirecutter)$/i;
+const TITLE_DYNAMIC_QUERY_KEY_RE = /^(?:page|p|offset|start|sort|view)$/i;
+const TITLE_GENERIC_PREVIEW_RE = /(?:og[_-]?(?:image|default|general)|default(?:[_-]?image)?|site[_-]?icon|logo|placeholder)/i;
 
 async function apiUpload(path, formData) {
   const res = await fetch(path, { method: "POST", body: formData });
@@ -94,22 +124,339 @@ function previewForAsset(a) {
   return "";
 }
 
+const FB_SAVED_LINK_TITLE_RE = /^\s*[^.]+ saved a link from (.+?)'s post\.?\s*$/i;
+
+function _titleCaseWords(text) {
+  return String(text || "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => (w.length <= 2 ? w.toUpperCase() : (w[0].toUpperCase() + w.slice(1).toLowerCase())))
+    .join(" ");
+}
+
+function _fallbackTitleFromSourceRef(asset) {
+  const sourceRef = String(asset?.source_ref || "").trim();
+  if (!sourceRef) return "";
+  const title = String(asset?.title || "").trim();
+  const m = FB_SAVED_LINK_TITLE_RE.exec(title);
+  const sourceName = m ? String(m[1] || "").trim() : "";
+  try {
+    const u = new URL(sourceRef);
+    const host = (u.hostname || "").replace(/^www\./i, "");
+    const parts = decodeURIComponent((u.pathname || "").replace(/\/+/g, "/"))
+      .split("/")
+      .filter(Boolean);
+    let slug = parts.length ? parts[parts.length - 1] : "";
+    slug = slug.replace(/\.[a-z0-9]{2,5}$/i, "");
+    slug = slug
+      .replace(/[-_+]+/g, " ")
+      .replace(/[^a-z0-9 ]+/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (slug && !/^\d+$/.test(slug)) {
+      const prettySlug = _titleCaseWords(slug);
+      if (sourceName) return `${sourceName}: ${prettySlug}`;
+      return prettySlug;
+    }
+    if (sourceName) return `${sourceName} link`;
+    if (host) return _titleCaseWords(host.replace(/\./g, " "));
+    return "";
+  } catch (_) {
+    return sourceName ? `${sourceName} link` : "";
+  }
+}
+
 function displayTitle(a) {
   const title = (a.title || "").trim();
   const ai = (a.ai_summary || "").trim();
   const alt = (a.seo_alt_text || "").trim().replace(/^This may contain:\s*/i, "");
+  const isGenericSavedLink = FB_SAVED_LINK_TITLE_RE.test(title);
+  const sourceRefTitle = isGenericSavedLink ? _fallbackTitleFromSourceRef(a) : "";
   // Junk titles: bare domains, parking pages, etc.
   const isJunk = title && /^(https?:\/\/|www\.)|\.(com|org|net|co)\b/i.test(title)
     && title.length < 40;
-  const bestTitle = (!title || isJunk) ? (ai || alt || title) : title;
+  const bestTitle = sourceRefTitle || ((!title || isJunk) ? (ai || alt || title) : title);
   return bestTitle
     || (a.board || "").trim()
     || (a.creator_name ? `via ${a.creator_name}` : "")
     || "(untitled)";
 }
 
+function titleQualityForAsset(asset) {
+  const source = normalizeSourceKey(asset?.source);
+  const title = String(asset?.title || "").trim();
+  const sourceRef = String(asset?.source_ref || "").trim();
+  const imageUrl = String(asset?.image_url || "").trim();
+  const isGenericSavedLink = source === "facebook" && FB_SAVED_LINK_TITLE_RE.test(title);
+  if (!isGenericSavedLink) {
+    return { kind: "", label: "", tooltip: "" };
+  }
+
+  let host = "";
+  let rootLikePath = false;
+  let dynamicPath = false;
+  let dynamicQuery = false;
+  try {
+    const u = new URL(sourceRef);
+    host = (u.hostname || "").replace(/^www\./i, "");
+    const parts = decodeURIComponent((u.pathname || "").replace(/\/+/g, "/"))
+      .split("/")
+      .filter(Boolean);
+    rootLikePath = parts.length <= 1;
+    const last = (parts[parts.length - 1] || "").trim();
+    dynamicPath = rootLikePath || TITLE_DYNAMIC_SEGMENT_RE.test(last.toLowerCase());
+    for (const key of u.searchParams.keys()) {
+      if (TITLE_DYNAMIC_QUERY_KEY_RE.test(String(key || "").toLowerCase())) {
+        dynamicQuery = true;
+        break;
+      }
+    }
+  } catch (_) {
+    // Leave host/path signals empty when source_ref is not a URL.
+  }
+  const genericPreview = TITLE_GENERIC_PREVIEW_RE.test(imageUrl.toLowerCase());
+  const dynamic = dynamicPath || dynamicQuery || genericPreview;
+  if (dynamic) {
+    const hostSuffix = host ? ` (${host})` : "";
+    return {
+      kind: "dynamic-link",
+      label: "Dynamic Link",
+      tooltip: `Title may drift over time because this source looks dynamic${hostSuffix}.`,
+    };
+  }
+
+  return {
+    kind: "title-check",
+    label: "Title Check",
+    tooltip: "Saved-link title was auto-generated. Verify before sharing.",
+  };
+}
+
 function sourceHost(url) {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; }
+}
+
+function sourceDisplayName(source) {
+  const key = normalizeSourceKey(source);
+  if (key === "scan") return "Clips";
+  if (!key) return "";
+  return key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+function normalizeSourceKey(source) {
+  const key = String(source || "").trim().toLowerCase();
+  if (key === "clip" || key === "clips" || key === "magazine clip" || key === "magazine clips") {
+    return "scan";
+  }
+  return key;
+}
+
+function setContextLinkBanner(message, { error = false } = {}) {
+  const banner = $("#contextLinkBanner");
+  if (!banner) return;
+  banner.textContent = String(message || CONTEXT_LINK_BANNER_DEFAULT);
+  banner.hidden = false;
+  banner.classList.toggle("context-link-banner-error", !!error);
+}
+
+function clearContextLinkBanner() {
+  const banner = $("#contextLinkBanner");
+  if (!banner) return;
+  banner.hidden = true;
+  banner.textContent = "";
+  banner.classList.remove("context-link-banner-error");
+}
+
+function _contextLinkPayloadFromUrl() {
+  const params = new URLSearchParams(window.location.search || "");
+  const collectionId = (params.get("collection_id") || "").trim();
+  const itemId = (params.get("item_id") || "").trim();
+  if (!collectionId || !itemId) return null;
+  const openRaw = (params.get("open") || "").trim().toLowerCase();
+  const shouldAutoOpen = openRaw === "1" || openRaw === "true" || openRaw === "yes";
+  return { collectionId, itemId, shouldAutoOpen };
+}
+
+function _contextLinkMessageForReason(reason) {
+  const key = String(reason || "").trim();
+  if (key === "item_not_in_collection") return "This item is no longer in this collection.";
+  if (key === "collection_not_found") return "This shared collection no longer exists.";
+  if (key === "item_hidden_for_role") return "This shared item is hidden for your role.";
+  if (key === "item_missing") return "This shared item is no longer available.";
+  return "This shared context could not be resolved.";
+}
+
+function _contextCollectionIdForModal() {
+  const ids = getCollectionFilterIds();
+  if (ids.length === 1) return ids[0];
+  return "";
+}
+
+function _buildContextLink(collectionId, itemId) {
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("collection_id", collectionId);
+  url.searchParams.set("item_id", itemId);
+  url.searchParams.set("open", "1");
+  return url.toString();
+}
+
+async function _copyText(value) {
+  const text = String(value || "");
+  if (!text) return;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+  } catch (_) {
+    // fallback below
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.left = "-1000px";
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand("copy"); } finally { ta.remove(); }
+}
+
+function _setShareButtonsDisabled(disabled, title = "") {
+  for (const id of ["modalShareLinkBtn", "modalShareEmailBtn", "modalShareMessageBtn"]) {
+    const btn = document.getElementById(id);
+    if (!btn) continue;
+    btn.disabled = !!disabled;
+    btn.title = title ? String(title) : "";
+  }
+}
+
+function wireModalShareActions(asset) {
+  const copyBtn = $("#modalShareLinkBtn");
+  const emailBtn = $("#modalShareEmailBtn");
+  const messageBtn = $("#modalShareMessageBtn");
+  if (!copyBtn && !emailBtn && !messageBtn) return;
+
+  if (!state.actor) {
+    _setShareButtonsDisabled(true, "Sign in to share context links.");
+    return;
+  }
+
+  const collectionId = _contextCollectionIdForModal();
+  const itemId = String(asset?.id || "").trim();
+  if (!collectionId || !itemId) {
+    _setShareButtonsDisabled(true, "Select one collection before sharing context.");
+    return;
+  }
+
+  _setShareButtonsDisabled(false);
+  const link = _buildContextLink(collectionId, itemId);
+  const title = displayTitle(asset);
+  const summary = title ? `Please review: ${title}` : "Please review this item";
+
+  if (copyBtn) {
+    copyBtn.onclick = async (e) => {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
+      await _copyText(link);
+      Shared.showToast("Context link copied", { type: "success", duration: 1800 });
+    };
+  }
+  if (emailBtn) {
+    emailBtn.onclick = (e) => {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
+      const subject = encodeURIComponent(title ? `Review item: ${title}` : "Review this item");
+      const body = encodeURIComponent(`${summary}\n\n${link}`);
+      window.location.href = `mailto:?subject=${subject}&body=${body}`;
+    };
+  }
+  if (messageBtn) {
+    messageBtn.onclick = async (e) => {
+      if (e) { e.preventDefault(); e.stopPropagation(); }
+      if (navigator.share) {
+        try {
+          await navigator.share({ title: title || "Shared item", text: summary, url: link });
+          return;
+        } catch (err) {
+          if (err && err.name === "AbortError") return;
+        }
+      }
+      const smsSep = /iphone|ipad|ipod/i.test(navigator.userAgent || "") ? "&" : "?";
+      const smsBody = encodeURIComponent(`${summary}\n${link}`);
+      window.location.href = `sms:${smsSep}body=${smsBody}`;
+    };
+  }
+}
+
+async function restoreContextLinkFromUrl() {
+  const payload = _contextLinkPayloadFromUrl();
+  if (!payload) return;
+  if (!state.actor) {
+    setContextLinkBanner("Please sign in to open this shared context link.", { error: true });
+    return;
+  }
+  let report = null;
+  try {
+    report = await api(
+      `/api/context/resolve?collection_id=${encodeURIComponent(payload.collectionId)}&item_id=${encodeURIComponent(payload.itemId)}`
+    );
+  } catch (e) {
+    setContextLinkBanner(`Unable to resolve shared context: ${formatApiError(e)}`, { error: true });
+    return;
+  }
+
+  const collectionName = String(
+    report?.collection_name
+    || (state.collections.find((c) => c.id === payload.collectionId)?.name || "")
+  );
+  if (String(report?.reason || "") !== "collection_not_found") {
+    state.currentSource = null;
+    state.currentBoard = null;
+    clearCatalogFilter();
+    setCollectionFilterIds([payload.collectionId], { label: collectionName, nodeId: null });
+    state.offset = 0;
+    renderCatalogTree();
+    await loadAssets();
+  }
+
+  if (!report || !report.found) {
+    setContextLinkBanner(_contextLinkMessageForReason(report?.reason), { error: true });
+    return;
+  }
+
+  clearContextLinkBanner();
+  if (!payload.shouldAutoOpen) return;
+  let asset = state.assets.find((a) => a.id === payload.itemId);
+  if (!asset) asset = await fetchAssetForModal(payload.itemId);
+  if (!asset) {
+    setContextLinkBanner("Shared item could not be opened in this session.", { error: true });
+    return;
+  }
+  await openModal(asset);
+}
+
+function sourceKeyFromNode(node) {
+  const id = String(node?.id || "");
+  if (id.startsWith("source:")) return normalizeSourceKey(id.slice("source:".length));
+  return normalizeSourceKey(node?.source || node?.label || "");
+}
+
+async function fetchAssetForModal(assetId) {
+  if (!assetId) return null;
+  const includeHidden = isOwner() ? "?include_hidden=1" : "";
+  try {
+    const data = await api(`/api/assets/${encodeURIComponent(assetId)}${includeHidden}`);
+    if (data && data.asset) return data.asset;
+  } catch (_) {
+    // Fall through to legacy prefix lookup for compatibility.
+  }
+  try {
+    const data = await api(`/api/assets?ids=${encodeURIComponent(String(assetId).slice(0, 8))}&limit=1${isOwner() ? "&include_hidden=1" : ""}`);
+    const assets = data.assets || [];
+    const exact = assets.find((a) => a.id === assetId);
+    return exact || assets[0] || null;
+  } catch (_) {
+    return null;
+  }
 }
 
 function isPdfFile(file) {
@@ -145,6 +492,328 @@ function wireSingleFileDropZone(options) {
     setSingleFileSelection(input, file, options.stateKey);
     if (typeof options.onSelected === "function") options.onSelected(file);
   });
+}
+
+function _uniqNonEmpty(values) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of (values || [])) {
+    const v = `${raw || ""}`.trim();
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
+
+function getCatalogFilterFiles() {
+  return _uniqNonEmpty([...(state.currentCatalogFiles || []), state.currentCatalogFile || ""]);
+}
+
+function hasCatalogFilter() {
+  return getCatalogFilterFiles().length > 0;
+}
+
+function clearCatalogFilter() {
+  state.currentCatalogFile = null;
+  state.currentCatalogFiles = [];
+  state.currentCatalogLabel = "";
+}
+
+function setCatalogFilter(files, { label = "", nodeId = null } = {}) {
+  const uniq = _uniqNonEmpty(files);
+  if (!uniq.length) {
+    clearCatalogFilter();
+    state.currentTreeNodeId = null;
+  } else {
+    state.currentCatalogFile = uniq[0];
+    state.currentCatalogFiles = uniq;
+    state.currentCatalogLabel = label || "";
+    state.currentTreeNodeId = nodeId;
+  }
+}
+
+function getCollectionFilterIds() {
+  return _uniqNonEmpty([...(state.currentCollectionIds || []), state.currentCollection || ""]);
+}
+
+function isExplorerViewActive() {
+  const explorerView = $("#explorerView");
+  return !!(explorerView && !explorerView.hidden);
+}
+
+function getReviewScopeInfo() {
+  const collectionIds = getCollectionFilterIds();
+  if (!collectionIds.length) {
+    return {
+      hasCollectionScope: false,
+      collectionIds: [],
+      label: "Entire library",
+    };
+  }
+  if (collectionIds.length === 1) {
+    const onlyId = collectionIds[0];
+    const col = state.collections.find((c) => c.id === onlyId);
+    return {
+      hasCollectionScope: true,
+      collectionIds,
+      label: col?.name || state.currentCollectionLabel || onlyId.slice(0, 8),
+    };
+  }
+  return {
+    hasCollectionScope: true,
+    collectionIds,
+    label: state.currentCollectionLabel || `${collectionIds.length} collections`,
+  };
+}
+
+function updateReviewScopeChips() {
+  const scope = getReviewScopeInfo();
+  const chipText = `Scope: ${scope.label}`;
+  const headerChip = $("#reviewScopeChip");
+  if (headerChip) headerChip.textContent = chipText;
+  const modalChip = $("#modalReviewScope");
+  if (modalChip) modalChip.textContent = chipText;
+  const modalLocalHideBtn = $("#modalHideLocalBtn");
+  if (modalLocalHideBtn) modalLocalHideBtn.disabled = !scope.hasCollectionScope;
+}
+
+function confirmGlobalHideBulk(count) {
+  const total = Math.max(0, Number(count || 0));
+  const noun = total === 1 ? "item" : "items";
+  return window.confirm(
+    `Hide ${total} ${noun} globally?\n\n`
+    + "This applies to the entire library, not just the active collection.\n"
+    + "You can restore items later from Hidden."
+  );
+}
+
+function hasCollectionFilter() {
+  return getCollectionFilterIds().length > 0;
+}
+
+function clearCollectionFilter() {
+  state.currentCollection = null;
+  state.currentCollectionIds = [];
+  state.currentCollectionLabel = "";
+}
+
+function isAllItemsScopeActive() {
+  return !state.currentSource && !state.currentBoard && !hasCollectionFilter() && !hasCatalogFilter();
+}
+
+function setCollectionFilterIds(ids, { label = "", nodeId = null } = {}) {
+  const uniq = _uniqNonEmpty(ids);
+  if (!uniq.length) {
+    clearCollectionFilter();
+    state.currentTreeNodeId = null;
+  } else {
+    state.currentCollection = uniq.length === 1 ? uniq[0] : null;
+    state.currentCollectionIds = uniq;
+    state.currentCollectionLabel = label || "";
+    state.currentTreeNodeId = nodeId;
+  }
+}
+
+function collectDescendantCatalogFiles(node) {
+  const files = [];
+  const stack = [node];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur || typeof cur !== "object") continue;
+    if (cur.file) files.push(cur.file);
+    const children = Array.isArray(cur.children) ? cur.children : [];
+    for (const child of children) stack.push(child);
+  }
+  return _uniqNonEmpty(files);
+}
+
+function collectDescendantCollectionIds(node) {
+  const ids = [];
+  const stack = [node];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur || typeof cur !== "object") continue;
+    if (cur.collection_id) ids.push(cur.collection_id);
+    const children = Array.isArray(cur.children) ? cur.children : [];
+    for (const child of children) stack.push(child);
+  }
+  return _uniqNonEmpty(ids);
+}
+
+function _setTreeNodeExpanded(nodeKey, toggleEl, childrenEl, open) {
+  if (open) {
+    childrenEl.classList.add("open");
+    toggleEl.classList.add("expanded");
+    state.expandedTreeNodes.add(nodeKey);
+  } else {
+    childrenEl.classList.remove("open");
+    toggleEl.classList.remove("expanded");
+    state.expandedTreeNodes.delete(nodeKey);
+  }
+}
+
+function _toggleTreeNodeExpanded(nodeKey, toggleEl, childrenEl) {
+  _setTreeNodeExpanded(nodeKey, toggleEl, childrenEl, !childrenEl.classList.contains("open"));
+}
+
+function _wireTreeArrowToggle(toggleEl, nodeKey, childrenEl) {
+  const arrow = toggleEl.querySelector(".tree-arrow");
+  if (!arrow) return;
+  arrow.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    _toggleTreeNodeExpanded(nodeKey, toggleEl, childrenEl);
+  });
+}
+
+function _scanPageFromRef(sourceRef) {
+  const m = String(sourceRef || "").match(/#p(\d+)$/i);
+  if (!m) return null;
+  const page = parseInt(m[1], 10);
+  return Number.isFinite(page) && page > 0 ? page : null;
+}
+
+function _scanPdfHrefForAsset(asset) {
+  if (!asset || !asset.id) return "#";
+  let page = 1;
+  if (Array.isArray(state.modalScanPages) && state.modalScanPages.length) {
+    const idx = state.modalScanPages.indexOf(asset.id);
+    if (idx >= 0) page = idx + 1;
+  }
+  return `/api/scan/doc-pdf?asset_id=${encodeURIComponent(asset.id)}#page=${page}`;
+}
+
+function renderModalSourceLinks(asset) {
+  if (!asset) return;
+  const ref = asset.source_ref || "";
+  const isHttpRef = ref.startsWith("http://") || ref.startsWith("https://");
+  const siteUrl = asset.source_url || "";
+  const isHttpSite = siteUrl.startsWith("http://") || siteUrl.startsWith("https://");
+
+  const sourceLink = $("#sourceLink");
+  if (sourceLink) {
+    if (asset.source === "scan" && ref) {
+      sourceLink.href = _scanPdfHrefForAsset(asset);
+      sourceLink.textContent = "Open PDF";
+      sourceLink.hidden = false;
+    } else if (isHttpRef) {
+      sourceLink.href = ref;
+      sourceLink.textContent = `Open ${asset.source || "original"}`;
+      sourceLink.hidden = false;
+    } else if (isHttpSite) {
+      sourceLink.href = siteUrl;
+      sourceLink.textContent = `Open ${asset.source || "original"}`;
+      sourceLink.hidden = false;
+    } else {
+      sourceLink.hidden = true;
+    }
+  }
+
+  // Source site link — only show when primary link used source_ref (not source_url)
+  const sourceSiteRow = $("#sourceSiteRow");
+  const sourceSiteLink = $("#sourceSiteLink");
+  const showSiteLink = sourceSiteRow && sourceSiteLink && isHttpSite && isHttpRef;
+  if (showSiteLink) {
+    sourceSiteLink.href = siteUrl;
+    sourceSiteLink.textContent = `Original site (${sourceHost(siteUrl) || siteUrl}) ↗`;
+    sourceSiteRow.hidden = false;
+  } else if (sourceSiteRow) {
+    sourceSiteRow.hidden = true;
+  }
+
+}
+
+function _readSidebarHiddenPref() {
+  try {
+    return localStorage.getItem(SIDEBAR_VISIBILITY_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function _writeSidebarHiddenPref(hidden) {
+  try {
+    localStorage.setItem(SIDEBAR_VISIBILITY_KEY, hidden ? "1" : "0");
+  } catch {
+    // no-op
+  }
+}
+
+function _readViewModePref() {
+  try {
+    const raw = (localStorage.getItem(VIEW_MODE_KEY) || "").trim().toLowerCase();
+    return raw === "explorer" ? "explorer" : "grid";
+  } catch {
+    return "grid";
+  }
+}
+
+function _writeViewModePref(mode) {
+  try {
+    localStorage.setItem(VIEW_MODE_KEY, mode === "explorer" ? "explorer" : "grid");
+  } catch {
+    // no-op
+  }
+}
+
+function _readViewModeFromUrl() {
+  try {
+    const params = new URLSearchParams(window.location.search || "");
+    const raw = (params.get("view") || "").trim().toLowerCase();
+    if (raw === "explorer") return "explorer";
+    if (raw === "grid") return "grid";
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+function _writeViewModeToUrl(mode) {
+  try {
+    const url = new URL(window.location.href);
+    if (mode === "explorer") {
+      url.searchParams.set("view", "explorer");
+    } else {
+      url.searchParams.delete("view");
+    }
+    window.history.replaceState({}, "", url.toString());
+  } catch {
+    // no-op
+  }
+}
+
+function applySidebarVisibility() {
+  const layout = $(".layout");
+  const sidebar = $("aside.sidebar");
+  const collapseBtn = $("#sidebarCollapseHandle");
+  const expandBtn = $("#sidebarExpandHandle");
+  if (layout) layout.classList.toggle("sidebar-hidden", state.sidebarHidden);
+  if (sidebar) sidebar.hidden = !!state.sidebarHidden;
+  if (collapseBtn) collapseBtn.hidden = !!state.sidebarHidden;
+  if (expandBtn) expandBtn.hidden = !state.sidebarHidden;
+}
+
+function setSidebarHidden(hidden, { persist = true } = {}) {
+  state.sidebarHidden = !!hidden;
+  applySidebarVisibility();
+  if (persist) _writeSidebarHiddenPref(state.sidebarHidden);
+}
+
+function wireSidebarToggle() {
+  const collapseBtn = $("#sidebarCollapseHandle");
+  const expandBtn = $("#sidebarExpandHandle");
+  setSidebarHidden(_readSidebarHiddenPref(), { persist: false });
+  if (collapseBtn) {
+    collapseBtn.addEventListener("click", () => {
+      setSidebarHidden(true);
+    });
+  }
+  if (expandBtn) {
+    expandBtn.addEventListener("click", () => {
+      setSidebarHidden(false);
+    });
+  }
 }
 
 // ─── Asset loading ─────────────────────────────────────────────────────────────
@@ -195,10 +864,11 @@ async function loadAssets(opts = {}) {
 
   try {
     let data;
-    if (state.currentCatalogFile) {
-      // Dimension browsing: load items from catalog file
+    const catalogFiles = getCatalogFilterFiles();
+    if (catalogFiles.length) {
+      // Catalog browsing: load items from one or more catalog files
       const catParams = new URLSearchParams();
-      catParams.set("file", state.currentCatalogFile);
+      for (const file of catalogFiles) catParams.append("file", file);
       catParams.set("limit", ASSETS_PAGE_SIZE);
       catParams.set("offset", state.offset);
       data = await api(`/api/catalog/items?${catParams}`);
@@ -207,6 +877,8 @@ async function loadAssets(opts = {}) {
       if (!res.ok) throw new Error(await res.text());
       data = await res.json();
     } else {
+      const collectionIds = getCollectionFilterIds();
+      if (collectionIds.length) params.set("collection_id", collectionIds.join(","));
       data = await api(`/api/assets?${params}`);
     }
 
@@ -333,7 +1005,11 @@ function buildCard(a) {
     </div>`;
   }
 
-  const sourceLabel = { pinterest: "Pin", facebook: "FB", scan: "Scan", photo: "Photo" }[a.source] || a.source || "";
+  const sourceLabel = { pinterest: "Pin", facebook: "FB", scan: "Clip", photo: "Photo" }[a.source] || a.source || "";
+  const titleQuality = titleQualityForAsset(a);
+  const titleQualityHtml = titleQuality.label
+    ? `<span class="title-quality-badge ${escapeHtml(titleQuality.kind)}" title="${escapeHtml(titleQuality.tooltip)}">${escapeHtml(titleQuality.label)}</span>`
+    : "";
   const quickTagHtml = state.actor
     ? `<button class="card-quick-tag${tagged ? " tagged" : ""}" title="${tagged ? "Remove tag" : "Tag for diagnosis"}" type="button">🏷️</button>`
     : "";
@@ -358,7 +1034,10 @@ function buildCard(a) {
       ${scanNavHtml}
     </div>
     <div class="card-footer">
-      <span class="card-title">${escapeHtml(displayTitle(a))}</span>
+      <div class="card-title-row">
+        <span class="card-title">${escapeHtml(displayTitle(a))}</span>
+        ${titleQualityHtml}
+      </div>
       <span class="card-source">${escapeHtml([a.board, a.creator_name].filter(Boolean).join(" · "))}</span>
     </div>
   `;
@@ -509,82 +1188,93 @@ function renderCatalogTree() {
     return;
   }
 
-  // "All items" node at top
+  const allItemsActive = isAllItemsScopeActive();
+  const collapseRest = allItemsActive && !!state.allItemsTreeCollapsed;
+
+  // "All items" node at top with collapse/expand for the rest of Browse tree
   const allBtn = document.createElement("button");
-  allBtn.className = `tree-leaf${!state.currentSource && !state.currentBoard && !state.currentCollection && !state.currentCatalogFile ? " active" : ""}`;
-  allBtn.innerHTML = `<span>All Items</span>`;
+  allBtn.className = `tree-toggle${allItemsActive ? " active" : ""}${!collapseRest ? " expanded" : ""}`;
+  allBtn.innerHTML = `<span class="tree-arrow">&#9654;</span><span>All Items</span>`;
   allBtn.onclick = () => {
+    const wasAllItemsActive = isAllItemsScopeActive();
+    if (wasAllItemsActive) {
+      state.allItemsTreeCollapsed = !state.allItemsTreeCollapsed;
+      renderCatalogTree();
+      return;
+    }
     resetTriageFilter();
     state.currentSource = null;
     state.currentBoard = null;
-    state.currentCollection = null;
-    state.currentCatalogFile = null;
+    clearCollectionFilter();
+    clearCatalogFilter();
+    state.currentTreeNodeId = null;
     state.offset = 0;
     renderCatalogTree();
     loadAssets();
   };
   wrap.appendChild(allBtn);
 
-  for (const node of tree) {
-    if (node.type === "source") {
-      wrap.appendChild(buildSourceNode(node));
-    } else if (node.type === "dimension") {
-      wrap.appendChild(buildDimensionNode(node));
-    } else if (node.type === "collections_group") {
-      wrap.appendChild(buildCollectionsGroupNode(node));
+  // Collections are a peer of "All Items" and stay visible even when
+  // the rest of the browse tree is collapsed.
+  const collectionsNodes = tree.filter((n) => n.type === "collections_group");
+  for (const node of collectionsNodes) {
+    wrap.appendChild(buildCollectionsGroupNode(node));
+  }
+
+  if (!collapseRest) {
+    for (const node of tree) {
+      if (node.type === "source") {
+        wrap.appendChild(buildSourceNode(node));
+      } else if (node.type === "dimension") {
+        wrap.appendChild(buildDimensionNode(node));
+      }
     }
   }
 
   // Re-append hidden tree (owner-only) — it lives inside catalogTree
   // and gets wiped by innerHTML="" above
-  if (isOwner() && state.hiddenTree) renderHiddenTree();
+  if (!collapseRest && isOwner() && state.hiddenTree) renderHiddenTree();
 }
 
 function buildSourceNode(node) {
   const el = document.createElement("div");
   el.className = "tree-node";
 
-  const isActiveSource = state.currentSource === node.label.toLowerCase() && !state.currentBoard;
+  const nodeKey = node.id;
+  const sourceKey = sourceKeyFromNode(node);
+  const sourceLabel = sourceDisplayName(sourceKey) || node.label;
+  const selectedCatalogFiles = getCatalogFilterFiles();
+  const selectedCatalogSet = new Set(selectedCatalogFiles);
+  const isActiveSource = state.currentTreeNodeId === node.id
+    || (state.currentSource === sourceKey && !state.currentBoard && !hasCatalogFilter() && !hasCollectionFilter());
   const toggle = document.createElement("button");
   toggle.className = `tree-toggle${isActiveSource ? " active" : ""}`;
-  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span>${escapeHtml(node.label)}</span><span class="tree-count">${node.count}</span>`;
+  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span>${escapeHtml(sourceLabel)}</span><span class="tree-count">${node.count}</span>`;
 
   const children = document.createElement("div");
   children.className = "tree-children";
 
   // Check if any child is active — auto-expand
   const hasActiveChild = (node.children || []).some(
-    (c) => state.currentBoard === (c.label || "").toLowerCase().replace(/ /g, "-") || state.currentBoard === c.label
-  );
-  const nodeKey = node.id;
-  if (hasActiveChild || isActiveSource) {
-    state.expandedTreeNodes.add(nodeKey);
-  }
-  if (state.expandedTreeNodes.has(nodeKey)) {
-    toggle.classList.add("expanded");
-    children.classList.add("open");
-  }
-
-  toggle.onclick = () => {
-    const isOpen = children.classList.contains("open");
-    if (isOpen) {
-      children.classList.remove("open");
-      toggle.classList.remove("expanded");
-      state.expandedTreeNodes.delete(nodeKey);
-    } else {
-      children.classList.add("open");
-      toggle.classList.add("expanded");
-      state.expandedTreeNodes.add(nodeKey);
+    (c) => {
+      const boardName = c.board_name || "";
+      const isCatchAll = boardName.startsWith("(");
+      if (isCatchAll) return !!c.file && selectedCatalogSet.has(c.file);
+      return state.currentSource === sourceKey && state.currentBoard && state.currentBoard.toLowerCase() === boardName.toLowerCase();
     }
-  };
+  );
+  if (hasActiveChild || isActiveSource) state.expandedTreeNodes.add(nodeKey);
+  _setTreeNodeExpanded(nodeKey, toggle, children, state.expandedTreeNodes.has(nodeKey));
+  _wireTreeArrowToggle(toggle, nodeKey, children);
 
-  // Double-click filters to just the source
-  toggle.ondblclick = () => {
+  // Header click filters to the full source scope (all descendant folders).
+  toggle.onclick = () => {
     resetTriageFilter();
-    state.currentSource = node.label.toLowerCase();
+    state.currentSource = sourceKey;
     state.currentBoard = null;
-    state.currentCollection = null;
-    state.currentCatalogFile = null;
+    clearCollectionFilter();
+    clearCatalogFilter();
+    state.currentTreeNodeId = node.id;
     state.offset = 0;
     renderCatalogTree();
     loadAssets();
@@ -598,8 +1288,8 @@ function buildSourceNode(node) {
 
     // For catch-all entries, use catalog file mode; for regular boards, filter by source+board
     const isActive = isCatchAll
-      ? state.currentCatalogFile === child.file
-      : (state.currentSource === node.label.toLowerCase()
+      ? selectedCatalogFiles.length === 1 && selectedCatalogFiles[0] === child.file
+      : (state.currentSource === sourceKey
         && state.currentBoard
         && state.currentBoard.toLowerCase() === boardDbName.toLowerCase());
 
@@ -611,14 +1301,15 @@ function buildSourceNode(node) {
         // Use catalog file mode for catch-all entries
         state.currentSource = null;
         state.currentBoard = null;
-        state.currentCollection = null;
-        state.currentCatalogFile = child.file;
+        clearCollectionFilter();
+        setCatalogFilter([child.file], { label: child.label, nodeId: child.id });
       } else {
         // Direct source+board filter for named boards
-        state.currentSource = node.label.toLowerCase();
+        state.currentSource = sourceKey;
         state.currentBoard = boardDbName;
-        state.currentCollection = null;
-        state.currentCatalogFile = null;
+        clearCollectionFilter();
+        clearCatalogFilter();
+        state.currentTreeNodeId = child.id;
       }
       state.offset = 0;
       renderCatalogTree();
@@ -626,7 +1317,7 @@ function buildSourceNode(node) {
     };
     // Context menu for bulk triage (owner-only)
     if (!isCatchAll) {
-      const _src = node.label.toLowerCase();
+      const _src = sourceKey;
       const _brd = boardDbName;
       addTreeHideToggle(leaf, () => ({ source: _src, board: _brd }));
     }
@@ -634,7 +1325,7 @@ function buildSourceNode(node) {
   }
 
   // Context menu for the entire source (owner-only)
-  addTreeHideToggle(toggle, () => ({ source: node.label.toLowerCase() }));
+  addTreeHideToggle(toggle, () => ({ source: sourceKey }));
 
   el.appendChild(toggle);
   el.appendChild(children);
@@ -645,8 +1336,12 @@ function buildDimensionNode(node) {
   const el = document.createElement("div");
   el.className = "tree-node";
 
+  const nodeKey = node.id;
+  const selectedCatalogFiles = getCatalogFilterFiles();
+  const selectedCatalogSet = new Set(selectedCatalogFiles);
+  const isActiveHeader = state.currentTreeNodeId === node.id;
   const toggle = document.createElement("button");
-  toggle.className = "tree-toggle";
+  toggle.className = `tree-toggle${isActiveHeader ? " active" : ""}`;
   toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span>${escapeHtml(node.label)}</span><span class="tree-count">${node.count}</span>`;
 
   const children = document.createElement("div");
@@ -654,41 +1349,35 @@ function buildDimensionNode(node) {
 
   // Check if any child is active — auto-expand
   const hasActiveChild = (node.children || []).some(
-    (c) => state.currentCatalogFile === c.file
+    (c) => selectedCatalogSet.has(c.file)
   );
-  const nodeKey = node.id;
-  if (hasActiveChild) {
-    state.expandedTreeNodes.add(nodeKey);
-  }
-  if (state.expandedTreeNodes.has(nodeKey)) {
-    toggle.classList.add("expanded");
-    children.classList.add("open");
-  }
+  if (hasActiveChild || isActiveHeader) state.expandedTreeNodes.add(nodeKey);
+  _setTreeNodeExpanded(nodeKey, toggle, children, state.expandedTreeNodes.has(nodeKey));
+  _wireTreeArrowToggle(toggle, nodeKey, children);
 
+  // Header click filters to all descendant catalog files.
   toggle.onclick = () => {
-    const isOpen = children.classList.contains("open");
-    if (isOpen) {
-      children.classList.remove("open");
-      toggle.classList.remove("expanded");
-      state.expandedTreeNodes.delete(nodeKey);
-    } else {
-      children.classList.add("open");
-      toggle.classList.add("expanded");
-      state.expandedTreeNodes.add(nodeKey);
-    }
+    resetTriageFilter();
+    state.currentSource = null;
+    state.currentBoard = null;
+    clearCollectionFilter();
+    setCatalogFilter(collectDescendantCatalogFiles(node), { label: node.label, nodeId: node.id });
+    state.offset = 0;
+    renderCatalogTree();
+    loadAssets();
   };
 
   for (const child of (node.children || [])) {
     const leaf = document.createElement("button");
-    const isActive = state.currentCatalogFile === child.file;
+    const isActive = selectedCatalogFiles.length === 1 && selectedCatalogFiles[0] === child.file;
     leaf.className = `tree-leaf${isActive ? " active" : ""}`;
     leaf.innerHTML = `<span>${escapeHtml(child.label)}</span><span class="tree-count">${child.count}</span>`;
     leaf.onclick = () => {
       resetTriageFilter();
       state.currentSource = null;
       state.currentBoard = null;
-      state.currentCollection = null;
-      state.currentCatalogFile = child.file;
+      clearCollectionFilter();
+      setCatalogFilter([child.file], { label: child.label, nodeId: child.id });
       state.offset = 0;
       renderCatalogTree();
       loadAssets();
@@ -705,47 +1394,45 @@ function buildCollectionsGroupNode(node) {
   const el = document.createElement("div");
   el.className = "tree-node";
 
+  const nodeKey = "collections";
+  const selectedCollectionIds = getCollectionFilterIds();
+  const selectedCollectionSet = new Set(selectedCollectionIds);
+  const isActiveHeader = state.currentTreeNodeId === node.id;
   const toggle = document.createElement("button");
-  toggle.className = "tree-toggle";
+  toggle.className = `tree-toggle${isActiveHeader ? " active" : ""}`;
   toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span>Collections</span><span class="tree-count">${node.count}</span>`;
 
   const children = document.createElement("div");
   children.className = "tree-children";
 
-  const hasActiveChild = (node.children || []).some((c) => state.currentCollection === c.collection_id);
-  const nodeKey = "collections";
-  if (hasActiveChild) {
-    state.expandedTreeNodes.add(nodeKey);
-  }
-  if (state.expandedTreeNodes.has(nodeKey)) {
-    toggle.classList.add("expanded");
-    children.classList.add("open");
-  }
+  const hasActiveChild = (node.children || []).some((c) => selectedCollectionSet.has(c.collection_id));
+  if (hasActiveChild || isActiveHeader) state.expandedTreeNodes.add(nodeKey);
+  _setTreeNodeExpanded(nodeKey, toggle, children, state.expandedTreeNodes.has(nodeKey));
+  _wireTreeArrowToggle(toggle, nodeKey, children);
 
+  // Header click filters to all descendant collections.
   toggle.onclick = () => {
-    const isOpen = children.classList.contains("open");
-    if (isOpen) {
-      children.classList.remove("open");
-      toggle.classList.remove("expanded");
-      state.expandedTreeNodes.delete(nodeKey);
-    } else {
-      children.classList.add("open");
-      toggle.classList.add("expanded");
-      state.expandedTreeNodes.add(nodeKey);
-    }
+    resetTriageFilter();
+    state.currentSource = null;
+    state.currentBoard = null;
+    clearCatalogFilter();
+    setCollectionFilterIds(collectDescendantCollectionIds(node), { label: "All Collections", nodeId: node.id });
+    state.offset = 0;
+    renderCatalogTree();
+    loadAssets();
   };
 
   for (const child of (node.children || [])) {
     const leaf = document.createElement("button");
-    const isActive = state.currentCollection === child.collection_id;
+    const isActive = selectedCollectionIds.length === 1 && selectedCollectionIds[0] === child.collection_id;
     leaf.className = `tree-leaf${isActive ? " active" : ""}`;
     leaf.innerHTML = `<span>${escapeHtml(child.label)}</span><span class="tree-count">${child.count}</span>`;
     leaf.onclick = () => {
       resetTriageFilter();
       state.currentSource = null;
       state.currentBoard = null;
-      state.currentCollection = child.collection_id;
-      state.currentCatalogFile = null;
+      clearCatalogFilter();
+      setCollectionFilterIds([child.collection_id], { label: child.label, nodeId: child.id });
       state.offset = 0;
       renderCatalogTree();
       loadAssets();
@@ -818,6 +1505,10 @@ async function bulkTriageFromTree(status, filterParams, nodeKey) {
       Shared.showToast("No items in this folder.", { type: "info" });
       return;
     }
+    if (isHiding && !confirmGlobalHideBulk(ids.length)) {
+      Shared.showToast("Global hide canceled.", { type: "info" });
+      return;
+    }
     await api("/api/assets/triage/bulk", {
       method: "POST",
       body: JSON.stringify({ ids, status }),
@@ -842,9 +1533,11 @@ async function bulkTriageFromTree(status, filterParams, nodeKey) {
 
 function setSourceFilter(source) {
   resetTriageFilter();
-  state.currentSource = source || null;
+  state.currentSource = normalizeSourceKey(source) || null;
   state.currentBoard = null;
-  state.currentCatalogFile = null;
+  clearCollectionFilter();
+  clearCatalogFilter();
+  state.currentTreeNodeId = null;
   state.offset = 0;
   renderCatalogTree();
   loadAssets();
@@ -853,7 +1546,9 @@ function setSourceFilter(source) {
 function setBoardFilter(board) {
   resetTriageFilter();
   state.currentBoard = board || null;
-  state.currentCatalogFile = null;
+  clearCollectionFilter();
+  clearCatalogFilter();
+  state.currentTreeNodeId = null;
   state.offset = 0;
   renderCatalogTree();
   loadAssets();
@@ -899,50 +1594,60 @@ function renderHiddenTree() {
   const tree = state.hiddenTree;
   if (!tree.total) return;
 
+  // Keep a single hidden section even when multiple render paths run.
+  wrap.querySelectorAll(".tree-hidden-section").forEach((n) => n.remove());
+
   const el = document.createElement("div");
   el.className = "tree-node tree-hidden-section";
 
   const toggle = document.createElement("button");
-  toggle.className = "tree-toggle";
+  const allHidden = state.triageFilter === "hidden"
+    && !state.currentSource
+    && !state.currentBoard
+    && !hasCollectionFilter()
+    && !hasCatalogFilter();
+  toggle.className = `tree-toggle${allHidden ? " active" : ""}`;
   toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-hidden-label">&#128065;&#xFE0E; Hidden</span><span class="tree-count">${tree.total}</span>`;
 
   const children = document.createElement("div");
   children.className = "tree-children";
 
   // "All Hidden" leaf
-  const allHidden = state.triageFilter === "hidden" && !state.currentSource && !state.currentBoard;
   const allLeaf = document.createElement("button");
   allLeaf.className = `tree-leaf tree-hidden-folder${allHidden ? " active" : ""}`;
   allLeaf.innerHTML = `<span>All Hidden</span><span class="tree-count">${tree.total}</span>`;
   allLeaf.onclick = () => {
     state.currentSource = null;
     state.currentBoard = null;
-    state.currentCollection = null;
-    state.currentCatalogFile = null;
+    clearCollectionFilter();
+    clearCatalogFilter();
+    state.currentTreeNodeId = null;
     state.triageFilter = "hidden";
     state.offset = 0;
     renderCatalogTree();
-    renderHiddenTree();
     loadAssets();
+    syncExplorerFilter();
   };
   children.appendChild(allLeaf);
 
   for (const src of (tree.sources || [])) {
     for (const b of (src.boards || [])) {
       const leaf = document.createElement("button");
-      const isActive = state.triageFilter === "hidden" && state.currentSource === src.source && state.currentBoard === b.board;
+      const hiddenSource = normalizeSourceKey(src.source);
+      const isActive = state.triageFilter === "hidden" && state.currentSource === hiddenSource && state.currentBoard === b.board;
       leaf.className = `tree-leaf tree-hidden-folder${isActive ? " active" : ""}`;
-      leaf.innerHTML = `<span>${escapeHtml(src.source)} / ${escapeHtml(b.board)}</span><span class="tree-count">${b.count}</span>`;
+      leaf.innerHTML = `<span>${escapeHtml(sourceDisplayName(src.source) || src.source)} / ${escapeHtml(b.board)}</span><span class="tree-count">${b.count}</span>`;
       leaf.onclick = () => {
-        state.currentSource = src.source;
+        state.currentSource = hiddenSource;
         state.currentBoard = b.board;
-        state.currentCollection = null;
-        state.currentCatalogFile = null;
+        clearCollectionFilter();
+        clearCatalogFilter();
+        state.currentTreeNodeId = null;
         state.triageFilter = "hidden";
         state.offset = 0;
         renderCatalogTree();
-        renderHiddenTree();
         loadAssets();
+        syncExplorerFilter();
       };
       children.appendChild(leaf);
     }
@@ -952,20 +1657,21 @@ function renderHiddenTree() {
   if (allHidden || state.triageFilter === "hidden") {
     state.expandedTreeNodes.add(nodeKey);
   }
-  if (state.expandedTreeNodes.has(nodeKey)) {
-    toggle.classList.add("expanded");
-    children.classList.add("open");
-  }
+  _setTreeNodeExpanded(nodeKey, toggle, children, state.expandedTreeNodes.has(nodeKey));
+  _wireTreeArrowToggle(toggle, nodeKey, children);
 
+  // Hidden root header click applies "all hidden" filter.
   toggle.onclick = () => {
-    const isOpen = children.classList.contains("open");
-    if (isOpen) {
-      state.expandedTreeNodes.delete(nodeKey);
-    } else {
-      state.expandedTreeNodes.add(nodeKey);
-    }
-    children.classList.toggle("open");
-    toggle.classList.toggle("expanded");
+    state.currentSource = null;
+    state.currentBoard = null;
+    clearCollectionFilter();
+    clearCatalogFilter();
+    state.currentTreeNodeId = null;
+    state.triageFilter = "hidden";
+    state.offset = 0;
+    renderCatalogTree();
+    loadAssets();
+    syncExplorerFilter();
   };
 
   el.appendChild(toggle);
@@ -1077,11 +1783,15 @@ async function loadCollections() {
 }
 
 function setCollectionFilter(collectionId) {
-  state.currentCollection = collectionId || null;
   if (collectionId) {
     state.currentSource = null;
     state.currentBoard = null;
-    state.currentCatalogFile = null;
+    clearCatalogFilter();
+    const col = state.collections.find((c) => c.id === collectionId);
+    setCollectionFilterIds([collectionId], { label: col ? col.name : "", nodeId: null });
+  } else {
+    clearCollectionFilter();
+    state.currentTreeNodeId = null;
   }
   state.offset = 0;
   renderCatalogTree();
@@ -1113,7 +1823,42 @@ async function openModal(asset) {
   if (asset.created_at) metaParts.push(asset.created_at.slice(0, 10));
 
   $("#modalTitle").textContent = title;
+  const titleQualityEl = $("#modalTitleQuality");
+  if (titleQualityEl) {
+    const q = titleQualityForAsset(asset);
+    if (q.label) {
+      titleQualityEl.className = `title-quality-badge modal-title-quality ${q.kind}`;
+      titleQualityEl.textContent = q.label;
+      titleQualityEl.title = q.tooltip || q.label;
+      titleQualityEl.hidden = false;
+    } else {
+      titleQualityEl.hidden = true;
+      titleQualityEl.textContent = "";
+      titleQualityEl.title = "";
+      titleQualityEl.className = "title-quality-badge modal-title-quality";
+    }
+  }
   $("#modalMeta").textContent = metaParts.filter(Boolean).join(" · ");
+  const copyAssetIdBtn = $("#copyAssetIdBtn");
+  if (copyAssetIdBtn) {
+    copyAssetIdBtn.onclick = async () => {
+      const idText = String(asset.id || "").trim();
+      if (!idText) return;
+      try {
+        await navigator.clipboard.writeText(idText);
+      } catch (_) {
+        const ta = document.createElement("textarea");
+        ta.value = idText;
+        ta.style.position = "fixed";
+        ta.style.left = "-1000px";
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand("copy"); } catch {}
+        ta.remove();
+      }
+      Shared.showToast("Item ID copied", { type: "success", duration: 1500 });
+    };
+  }
 
   const img = $("#modalImage");
   if (img) {
@@ -1128,7 +1873,7 @@ async function openModal(asset) {
   const badgeWrap = $("#modalBadge");
   if (badgeWrap) {
     const kind = (asset.content_kind || "").trim();
-    const kindLabels = { pin: "Pin", reel: "Reel", video: "Video", photo: "Photo", scan: "Scan", link: "Link", post: "Post" };
+    const kindLabels = { pin: "Pin", reel: "Reel", video: "Video", photo: "Photo", scan: "Clip", link: "Link", post: "Post" };
     if (kind) {
       badgeWrap.textContent = kindLabels[kind.toLowerCase()] || kind;
       badgeWrap.hidden = false;
@@ -1235,60 +1980,10 @@ async function openModal(asset) {
     }
   }
 
-  // Source link — use source_ref only if it's a valid HTTP URL;
-  // otherwise fall back to source_url (fixes Houzz houzz:// URIs etc.)
-  const ref = asset.source_ref || "";
-  const isHttpRef = ref.startsWith("http://") || ref.startsWith("https://");
-  const siteUrl = asset.source_url || "";
-  const isHttpSite = siteUrl.startsWith("http://") || siteUrl.startsWith("https://");
-
-  const sourceLink = $("#sourceLink");
-  if (sourceLink) {
-    if (asset.source === "scan" && ref) {
-      sourceLink.href = `/media/${asset.id}?kind=pdf`;
-      sourceLink.textContent = "Open PDF";
-      sourceLink.hidden = false;
-    } else if (isHttpRef) {
-      sourceLink.href = ref;
-      sourceLink.textContent = `Open ${asset.source || "original"}`;
-      sourceLink.hidden = false;
-    } else if (isHttpSite) {
-      sourceLink.href = siteUrl;
-      sourceLink.textContent = `Open ${asset.source || "original"}`;
-      sourceLink.hidden = false;
-    } else {
-      sourceLink.hidden = true;
-    }
-  }
-
-  // Source site link — only show when primary link used source_ref (not source_url)
-  const sourceSiteRow = $("#sourceSiteRow");
-  const sourceSiteLink = $("#sourceSiteLink");
-  const showSiteLink = sourceSiteRow && sourceSiteLink && isHttpSite && isHttpRef;
-  if (showSiteLink) {
-    sourceSiteLink.href = siteUrl;
-    sourceSiteLink.textContent = `Original site (${sourceHost(siteUrl) || siteUrl}) ↗`;
-    sourceSiteRow.hidden = false;
-  } else if (sourceSiteRow) {
-    sourceSiteRow.hidden = true;
-  }
-
-  // View source button — scans: show page image (not the full combined PDF)
-  const viewSourceBtn = $("#viewSourceBtn");
-  if (viewSourceBtn) {
-    if (asset.source === "scan" && asset.source_ref) {
-      viewSourceBtn.textContent = "View Page";
-      viewSourceBtn.onclick = () => { window.open(`/media/${asset.id}?kind=original`, "_blank", "noopener"); };
-      viewSourceBtn.disabled = false;
-      viewSourceBtn.hidden = false;
-    } else {
-      viewSourceBtn.hidden = true;
-    }
-  }
-
   // Print button
   const printBtn = $("#printAssetBtn");
   if (printBtn) printBtn.onclick = () => printModalAsset(asset);
+  wireModalShareActions(asset);
 
   // Notes
   const notesArea = $("#assetNotes");
@@ -1302,11 +1997,14 @@ async function openModal(asset) {
   if (keeperStar) keeperStar.hidden = asset.triage_status !== "keeper";
 
   // Triage buttons
+  updateReviewScopeChips();
   updateModalTriageButtons(asset.triage_status);
   const keepBtn = $("#modalKeepBtn");
-  const hideBtn = $("#modalHideBtn");
+  const hideLocalBtn = $("#modalHideLocalBtn");
+  const hideGlobalBtn = $("#modalHideGlobalBtn");
   if (keepBtn) keepBtn.onclick = async () => { await setTriageFromModal(asset, "keeper"); };
-  if (hideBtn) hideBtn.onclick = async () => { await setTriageFromModal(asset, "hidden"); };
+  if (hideLocalBtn) hideLocalBtn.onclick = async () => { await hideFromModalCollectionScope(asset); };
+  if (hideGlobalBtn) hideGlobalBtn.onclick = async () => { await setTriageFromModal(asset, "hidden"); };
 
   // Flag button
   const flagBtn = $("#modalFlagBtn");
@@ -1342,6 +2040,47 @@ async function openModal(asset) {
     };
   }
 
+  // Tag button (diagnosis marker)
+  const tagBtn = $("#modalTagBtn");
+  if (tagBtn) {
+    tagBtn.classList.toggle("active", !!asset.tagged);
+    tagBtn.textContent = asset.tagged ? "🏷️ Tagged" : "🏷️ Tag";
+    tagBtn.onclick = async () => {
+      const newTagged = asset.tagged ? 0 : 1;
+      try {
+        await api(`/api/assets/${encodeURIComponent(asset.id)}/tag`, {
+          method: "POST",
+          body: JSON.stringify({ tagged: newTagged }),
+        });
+        asset.tagged = newTagged;
+        tagBtn.classList.toggle("active", !!newTagged);
+        tagBtn.textContent = newTagged ? "🏷️ Tagged" : "🏷️ Tag";
+
+        const card = $(`[data-id="${asset.id}"]`);
+        if (card) {
+          const cardImg = card.querySelector(".card-image");
+          const oldBadge = card.querySelector(".triage-badge.tagged");
+          if (oldBadge) oldBadge.remove();
+          if (newTagged && cardImg) {
+            const badge = document.createElement("span");
+            badge.className = "triage-badge tagged";
+            badge.title = "Tagged for diagnosis";
+            cardImg.prepend(badge);
+          }
+          const quickTagBtn = card.querySelector(".card-quick-tag");
+          if (quickTagBtn) {
+            quickTagBtn.classList.toggle("tagged", !!newTagged);
+            quickTagBtn.title = newTagged ? "Remove tag" : "Tag for diagnosis";
+          }
+        }
+
+        Shared.showToast(newTagged ? "Tagged for diagnosis" : "Tag removed", { type: "success", duration: 2000 });
+      } catch (e) {
+        Shared.showToast(`Tag failed: ${formatApiError(e)}`, { type: "error" });
+      }
+    };
+  }
+
   // Scan page nav
   const imageStage = $("#imageStage");
   const existingNav = imageStage && imageStage.querySelector(".modalScanNav");
@@ -1350,8 +2089,10 @@ async function openModal(asset) {
   if (asset.source === "scan" && (asset.scan_group_member_ids || []).length > 1) {
     const pages = asset.scan_group_member_ids;
     state.modalScanPages = pages;
-    const refMatch = (asset.source_ref || "").match(/#p(\d+)$/);
-    state.modalScanPageIndex = refMatch ? parseInt(refMatch[1], 10) - 1 : 0;
+    const currentIdx = Math.max(0, pages.indexOf(asset.id));
+    state.modalScanPageIndex = currentIdx;
+    const absolutePage = _scanPageFromRef(asset.source_ref || "") || 1;
+    state.modalScanStartPage = Math.max(1, absolutePage - currentIdx);
     const navEl = document.createElement("div");
     navEl.className = "modalScanNav";
     navEl.innerHTML = `
@@ -1365,7 +2106,10 @@ async function openModal(asset) {
   } else {
     state.modalScanPages = null;
     state.modalScanPageIndex = 0;
+    state.modalScanStartPage = _scanPageFromRef(asset.source_ref || "") || 1;
   }
+
+  renderModalSourceLinks(state.modalAsset || asset);
 
   $("#modal").classList.remove("hidden");
   await loadAnnotations(asset.id);
@@ -1375,9 +2119,58 @@ async function openModal(asset) {
 
 function updateModalTriageButtons(triageStatus) {
   const keepBtn = $("#modalKeepBtn");
-  const hideBtn = $("#modalHideBtn");
+  const hideBtn = $("#modalHideGlobalBtn");
   if (keepBtn) keepBtn.classList.toggle("active", triageStatus === "keeper");
   if (hideBtn) hideBtn.classList.toggle("active", triageStatus === "hidden");
+}
+
+async function removeAssetsFromCollections(assetIds, collectionIds) {
+  const ids = _uniqNonEmpty(assetIds);
+  const targetCollections = _uniqNonEmpty(collectionIds);
+  const out = [];
+  for (const collectionId of targetCollections) {
+    const data = await api(`/api/collections/${encodeURIComponent(collectionId)}/items/remove`, {
+      method: "POST",
+      body: JSON.stringify({ asset_ids: ids }),
+    });
+    out.push({ collectionId, removed: Number(data?.removed || 0) });
+  }
+  return out;
+}
+
+async function addAssetsToCollections(assetIds, collectionIds) {
+  const ids = _uniqNonEmpty(assetIds);
+  const targetCollections = _uniqNonEmpty(collectionIds);
+  for (const collectionId of targetCollections) {
+    await api(`/api/collections/${encodeURIComponent(collectionId)}/items`, {
+      method: "POST",
+      body: JSON.stringify({ asset_ids: ids }),
+    });
+  }
+}
+
+async function hideFromModalCollectionScope(asset) {
+  const scope = getReviewScopeInfo();
+  if (!scope.hasCollectionScope) {
+    Shared.showToast("No active collection scope. Use Hide globally for library-wide hide.", { type: "info" });
+    return;
+  }
+  try {
+    const results = await removeAssetsFromCollections([asset.id], scope.collectionIds);
+    const removedCollections = results.filter((r) => r.removed > 0).length;
+    if (!removedCollections) {
+      Shared.showToast("Item is not in the active collection scope.", { type: "info" });
+      return;
+    }
+    Shared.showToast(
+      `Removed from ${removedCollections} collection${removedCollections === 1 ? "" : "s"}.`,
+      { type: "success" }
+    );
+    closeModal();
+    await Promise.all([loadAssets(), loadCatalogTree()]);
+  } catch (e) {
+    Shared.showToast(`Collection hide failed: ${formatApiError(e)}`, { type: "error" });
+  }
 }
 
 async function setTriageFromModal(asset, status) {
@@ -1409,7 +2202,7 @@ async function setTriageFromModal(asset, status) {
         card.querySelector(".card-image").prepend(badge);
       }
     }
-    const msg = newStatus === "keeper" ? "Marked as keeper" : newStatus === "hidden" ? "Hidden" : "Reset to pending";
+    const msg = newStatus === "keeper" ? "Marked as keeper" : newStatus === "hidden" ? "Hidden globally" : "Reset to pending";
     Shared.showToast(msg, { type: "success" });
     // Refresh tree counts (they depend on hidden status)
     loadCatalogTree();
@@ -1434,7 +2227,9 @@ async function _navModalScan(delta) {
   state.modalScanPageIndex = newIdx;
   const siblingId = state.modalScanPages[newIdx];
   const curAsset = state.modalAsset;
-  const siblingSourceRef = (curAsset.source_ref || "").replace(/#p\d+$/, "") + `#p${newIdx + 1}`;
+  const absolutePage = Math.max(1, (state.modalScanStartPage || 1) + newIdx);
+  const sourceBase = (curAsset.source_ref || "").replace(/#p\d+$/i, "");
+  const siblingSourceRef = sourceBase ? `${sourceBase}#p${absolutePage}` : (curAsset.source_ref || "");
   state.modalAsset = { ...curAsset, id: siblingId, source_ref: siblingSourceRef };
   const modalImage = $("#modalImage");
   if (modalImage) modalImage.src = `/media/${siblingId}?kind=thumb`;
@@ -1444,9 +2239,8 @@ async function _navModalScan(delta) {
   const nextBtn = document.querySelector(".modalScanNext");
   if (prevBtn) prevBtn.disabled = newIdx === 0;
   if (nextBtn) nextBtn.disabled = newIdx === state.modalScanPages.length - 1;
-  const sourceLink = $("#sourceLink");
-  const pdfUrl = `/media/${siblingId}?kind=pdf#page=${newIdx + 1}`;
-  if (sourceLink) { sourceLink.href = pdfUrl; sourceLink.textContent = "Open PDF"; }
+  renderModalSourceLinks(state.modalAsset);
+  wireModalShareActions(state.modalAsset);
   await loadAnnotations(siblingId);
   renderAnnotations();
   renderMarkers();
@@ -1473,6 +2267,27 @@ async function loadAnnotations(assetId) {
   } catch { state.annotations = []; }
 }
 
+function canManageAnnotation(ann) {
+  if (!ann) return false;
+  if (state.actor && state.actor.role === "owner") return true;
+  const actorId = String(state.actor?.id || "").trim();
+  const annActorId = String(ann.actor_id || "").trim();
+  return !!actorId && !!annActorId && actorId === annActorId;
+}
+
+function annotationActorClass(ann) {
+  if (!ann || !ann.actor_name) return "";
+  const actorId = String(state.actor?.id || "").trim();
+  const annActorId = String(ann.actor_id || "").trim();
+  if (state.actor?.role === "owner" && actorId && annActorId && actorId === annActorId) {
+    return "ann-actor-owner";
+  }
+  if (actorId && annActorId && actorId === annActorId) {
+    return "ann-actor-self";
+  }
+  return "ann-actor-other";
+}
+
 function renderAnnotations() {
   const wrap = $("#annList");
   if (!wrap) return;
@@ -1480,33 +2295,47 @@ function renderAnnotations() {
   state.annotations.forEach((ann, idx) => {
     const isQuestion = ann.annotation_type === "question";
     const isResolved = isQuestion && ann.resolved;
+    const canManage = canManageAnnotation(ann);
     const el = document.createElement("div");
-    el.className = `listItem annItem${state.activeAnnotationId === ann.id ? " active" : ""}${isQuestion ? " ann-question" : ""}${isResolved ? " ann-resolved" : ""}`;
+    el.className = `listItem annItem${state.activeAnnotationId === ann.id ? " active" : ""}${isQuestion ? " ann-question" : ""}${isResolved ? " ann-resolved" : ""}${canManage ? "" : " ann-readonly"}`;
 
     const marker = isQuestion ? "?" : `#${idx + 1}`;
-    const actorLabel = ann.actor_name ? `<span class="ann-actor">${escapeHtml(ann.actor_name)}</span>` : "";
+    const actorCls = annotationActorClass(ann);
+    const actorLabel = ann.actor_name ? `<span class="ann-actor ${actorCls}">${escapeHtml(ann.actor_name)}</span>` : "";
     const resolveBtn = isQuestion && state.actor && state.actor.role === "owner"
       ? `<button class="iconBtn ann-resolve" data-resolve="${ann.id}" title="${isResolved ? "Unresolve" : "Resolve"}" type="button">${isResolved ? "&#9745;" : "&#9744;"}</button>`
       : "";
+    const deleteBtn = canManage
+      ? `<button class="iconBtn danger" data-del="${ann.id}" type="button">\u00d7</button>`
+      : "";
+    const readonlyHint = canManage
+      ? ""
+      : `<div class="ann-readonly-note">Read-only: only the author or owner can edit.</div>`;
 
     el.innerHTML = `
       <div class="annHeader">
         <strong>${marker}</strong>${actorLabel}${resolveBtn}
-        <button class="iconBtn danger" data-del="${ann.id}" type="button">\u00d7</button>
+        ${deleteBtn}
       </div>
-      <textarea data-ann="${ann.id}">${escapeHtml(ann.text || "")}</textarea>
+      <textarea data-ann="${ann.id}" ${canManage ? "" : "readonly"}>${escapeHtml(ann.text || "")}</textarea>
+      ${readonlyHint}
     `;
     el.onclick = () => setActiveAnnotation(ann.id);
     const ta = el.querySelector("textarea");
-    ta.addEventListener("input", async () => {
-      ann.text = ta.value;
-      syncFloatingText(ann.id, ta.value);
-      scheduleAnnotationUpdate(ann.id, { text: ta.value });
-    });
-    el.querySelector("[data-del]").onclick = async (e) => {
-      e.stopPropagation();
-      await deleteAnnotationWithUndo(ann);
-    };
+    if (ta && canManage) {
+      ta.addEventListener("input", async () => {
+        ann.text = ta.value;
+        syncFloatingText(ann.id, ta.value);
+        scheduleAnnotationUpdate(ann.id, { text: ta.value });
+      });
+    }
+    const delEl = el.querySelector("[data-del]");
+    if (delEl) {
+      delEl.onclick = async (e) => {
+        e.stopPropagation();
+        await deleteAnnotationWithUndo(ann);
+      };
+    }
     const resolveEl = el.querySelector("[data-resolve]");
     if (resolveEl) {
       resolveEl.onclick = async (e) => {
@@ -1621,6 +2450,7 @@ function renderMarkers() {
   state.annotations.forEach((ann, idx) => {
     const isQuestion = ann.annotation_type === "question";
     const isResolved = isQuestion && ann.resolved;
+    const canManage = canManageAnnotation(ann);
     const m = document.createElement("div");
     m.className = `marker${isQuestion ? " marker-question" : ""}${isResolved ? " marker-resolved" : ""}`;
     const pt = normalizedToStagePoint(ann.x, ann.y);
@@ -1629,8 +2459,8 @@ function renderMarkers() {
     m.dataset.id = ann.id;
     m.style.background = isQuestion ? "#e67e22" : markerColor(idx);
     const markerLabel = isQuestion ? "?" : `${idx + 1}`;
-    m.innerHTML = `
-      <span style="color:#F2F2F6">${markerLabel}</span>
+    const markerActions = canManage
+      ? `
       <div class="badgeIcons">
         <button class="ok" data-ok="${ann.id}" aria-label="Done" type="button">
           <svg viewBox="0 0 16 16" width="12" height="12"><path d="M3.2 8.4l2.3 2.3L12.8 3.6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -1639,17 +2469,30 @@ function renderMarkers() {
           <svg viewBox="0 0 16 16" width="12" height="12"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         </button>
       </div>
+      `
+      : "";
+    m.innerHTML = `
+      <span style="color:#F2F2F6">${markerLabel}</span>
+      ${markerActions}
     `;
-    m.onpointerdown = (e) => {
-      if (e.target.closest(".badgeIcons")) return;
-      e.stopPropagation();
-      m.setPointerCapture(e.pointerId);
-      state.dragging = { id: ann.id, pointerId: e.pointerId, moved: false };
-    };
+    if (canManage) {
+      m.onpointerdown = (e) => {
+        if (e.target.closest(".badgeIcons")) return;
+        e.stopPropagation();
+        m.setPointerCapture(e.pointerId);
+        state.dragging = { id: ann.id, pointerId: e.pointerId, moved: false };
+      };
+    }
     m.onclick = (e) => { e.stopPropagation(); setActiveAnnotation(ann.id); };
     if (state.activeAnnotationId === ann.id) m.classList.add("active");
-    m.querySelector("[data-ok]").onclick = (e) => { e.stopPropagation(); state.activeAnnotationId = null; renderAnnotations(); renderMarkers(); renderFloatingNote(); };
-    m.querySelector("[data-del]").onclick = async (e) => { e.stopPropagation(); await deleteAnnotationWithUndo(ann); };
+    const okBtn = m.querySelector("[data-ok]");
+    if (okBtn) {
+      okBtn.onclick = (e) => { e.stopPropagation(); state.activeAnnotationId = null; renderAnnotations(); renderMarkers(); renderFloatingNote(); };
+    }
+    const delBtn = m.querySelector("[data-del]");
+    if (delBtn) {
+      delBtn.onclick = async (e) => { e.stopPropagation(); await deleteAnnotationWithUndo(ann); };
+    }
     stage.appendChild(m);
   });
 }
@@ -1659,6 +2502,14 @@ const imageStageEl = document.getElementById("imageStage");
 if (imageStageEl) {
   imageStageEl.addEventListener("click", async (e) => {
     if (!state.modalAsset) return;
+    if (!state.actor) {
+      Shared.showToast("Sign in to add annotations.", { type: "warning", duration: 2200 });
+      return;
+    }
+    const modalImage = $("#modalImage");
+    // Only create annotations from direct clicks on the rendered image.
+    // This avoids accidental note creation from unrelated modal controls.
+    if (!modalImage || modalImage.style.display === "none" || e.target !== modalImage) return;
     if (e.target.closest(".marker") || e.target.closest(".floatingNote")) return;
     const point = stagePointToNormalized(e.clientX, e.clientY);
     if (!point) return;
@@ -1704,12 +2555,69 @@ if (modalEl) modalEl.onclick = (e) => { if (e.target.id === "modal") closeModal(
 // ─── Print ──────────────────────────────────────────────────────────────────────
 
 function printModalAsset(asset) {
-  const url = asset.stored_path ? `/media/${asset.id}?kind=original` : asset.image_url || "";
-  if (!url) return;
+  const url = asset?.id ? `/media/${asset.id}?kind=original` : (asset?.image_url || "");
+  if (!url) {
+    Shared.showToast("Nothing to print for this item.", { type: "info" });
+    return;
+  }
   const win = window.open("", "_blank");
-  win.document.write(`<!doctype html><html><body style="margin:0"><img src="${escapeHtml(url)}" style="max-width:100%" /></body></html>`);
+  if (!win) {
+    Shared.showToast("Pop-up blocked. Allow pop-ups to print.", { type: "error" });
+    return;
+  }
+
+  const safeUrl = escapeHtml(url);
+  const safeTitle = escapeHtml(displayTitle(asset));
+  win.document.open();
+  win.document.write(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>${safeTitle || "Print"}</title>
+    <style>
+      html, body { margin: 0; padding: 0; background: #fff; }
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .toolbar { position: fixed; top: 8px; right: 8px; z-index: 2; }
+      .toolbar button {
+        border: 1px solid #bbb; background: #fff; color: #333;
+        border-radius: 8px; padding: 6px 10px; cursor: pointer;
+      }
+      .frame {
+        min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      }
+      .frame img {
+        display: block; max-width: 100%; max-height: 100vh; object-fit: contain;
+      }
+      @media print {
+        .toolbar { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="toolbar"><button type="button" onclick="window.print()">Print</button></div>
+    <div class="frame">
+      <img id="printImage" src="${safeUrl}" alt="Print item" />
+    </div>
+    <script>
+      (function () {
+        let printed = false;
+        function tryPrint() {
+          if (printed) return;
+          printed = true;
+          try {
+            window.focus();
+            window.print();
+          } catch (_) {}
+        }
+        window.addEventListener("load", function () { setTimeout(tryPrint, 60); });
+        const img = document.getElementById("printImage");
+        if (img) img.addEventListener("load", function () { setTimeout(tryPrint, 30); });
+        setTimeout(tryPrint, 500);
+      })();
+    </script>
+  </body>
+</html>`);
   win.document.close();
-  win.onload = () => { win.print(); };
 }
 
 // ─── Review mode ────────────────────────────────────────────────────────────────
@@ -1809,6 +2717,16 @@ function renderReviewCard() {
     link.textContent = ref ? `View on ${item.source || "source"} ↗` : "";
   }
 
+  const scope = getReviewScopeInfo();
+  const hideBtn = $("#reviewHideBtn");
+  if (hideBtn) {
+    const hideLabel = hideBtn.querySelector(".review-btn-label");
+    if (hideLabel) hideLabel.textContent = scope.hasCollectionScope ? "Hide in scope" : "Hide";
+    const hideIcon = hideBtn.querySelector(".review-btn-icon");
+    if (hideIcon) hideIcon.textContent = scope.hasCollectionScope ? "↘" : "✗";
+    hideBtn.title = scope.hasCollectionScope ? "Hide from active collection scope (← or S)" : "Hide globally (← or S)";
+  }
+
   // Reset checkbox
   const cb = $("#commentLater");
   if (cb) cb.checked = false;
@@ -1821,15 +2739,20 @@ function renderReviewCard() {
 async function reviewAction(action) {
   const item = state.reviewItems[state.reviewIndex];
   if (!item) return;
+  const scope = getReviewScopeInfo();
+  const hideMode = action === "hide" ? (scope.hasCollectionScope ? "local" : "global") : null;
 
   // Save undo entry
-  state.reviewHistory.push({
+  const historyEntry = {
     id: item.id,
     index: state.reviewIndex,
     previousStatus: item.triage_status || null,
     previousAnnotation: item.needs_annotation || 0,
     action,
-  });
+    hideMode,
+    removedFromCollections: [],
+  };
+  state.reviewHistory.push(historyEntry);
 
   if (action === "keep") {
     const commentLater = document.getElementById("commentLater")?.checked || false;
@@ -1846,15 +2769,26 @@ async function reviewAction(action) {
     }
     state.reviewKept++;
   } else if (action === "hide") {
-    try {
-      await api(`/api/assets/${encodeURIComponent(item.id)}/triage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "hidden" }),
-      });
-      item.triage_status = "hidden";
-    } catch (e) {
-      Shared.showToast(`Failed to save: ${formatApiError(e)}`, { type: "error" });
+    if (hideMode === "local") {
+      try {
+        const results = await removeAssetsFromCollections([item.id], scope.collectionIds);
+        historyEntry.removedFromCollections = results
+          .filter((r) => r.removed > 0)
+          .map((r) => r.collectionId);
+      } catch (e) {
+        Shared.showToast(`Failed to save: ${formatApiError(e)}`, { type: "error" });
+      }
+    } else {
+      try {
+        await api(`/api/assets/${encodeURIComponent(item.id)}/triage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "hidden" }),
+        });
+        item.triage_status = "hidden";
+      } catch (e) {
+        Shared.showToast(`Failed to save: ${formatApiError(e)}`, { type: "error" });
+      }
     }
     state.reviewHidden++;
   } else {
@@ -1881,12 +2815,19 @@ async function undoReview() {
 
   // Restore API
   try {
-    await api(`/api/assets/${encodeURIComponent(last.id)}/triage`, {
-      method: "POST",
-      body: JSON.stringify({ status: last.previousStatus, needs_annotation: last.previousAnnotation }),
-    });
-    const item = state.reviewItems.find((i) => i.id === last.id);
-    if (item) { item.triage_status = last.previousStatus; item.needs_annotation = last.previousAnnotation; }
+    if (last.action === "hide" && last.hideMode === "local") {
+      const restoreCollections = _uniqNonEmpty(last.removedFromCollections || []);
+      if (restoreCollections.length) {
+        await addAssetsToCollections([last.id], restoreCollections);
+      }
+    } else {
+      await api(`/api/assets/${encodeURIComponent(last.id)}/triage`, {
+        method: "POST",
+        body: JSON.stringify({ status: last.previousStatus, needs_annotation: last.previousAnnotation }),
+      });
+      const item = state.reviewItems.find((i) => i.id === last.id);
+      if (item) { item.triage_status = last.previousStatus; item.needs_annotation = last.previousAnnotation; }
+    }
   } catch (e) {
     Shared.showToast(`Undo failed: ${formatApiError(e)}`, { type: "error" });
   }
@@ -1938,6 +2879,11 @@ function enterCanvasReview() {
     Shared.showToast("No items to review.", { type: "info" });
     return;
   }
+  let switchedFromExplorer = false;
+  if (isExplorerViewActive()) {
+    setViewMode("grid", { persist: false });
+    switchedFromExplorer = true;
+  }
   state.canvasReview = true;
   state.canvasSelected.clear();
 
@@ -1951,8 +2897,14 @@ function enterCanvasReview() {
   const gridBtn = $("#viewGrid");
   if (gridBtn) gridBtn.classList.add("reviewing");
 
+  updateReviewScopeChips();
   updateCanvasSelectionCount();
-  Shared.showToast("Review mode — click cards to select, then act on selection.", { type: "info" });
+  Shared.showToast(
+    switchedFromExplorer
+      ? "Review actions are grid-only for safety. Switched to Grid review mode."
+      : "Review mode — click cards to select, then act on selection.",
+    { type: "info" }
+  );
 }
 
 function exitCanvasReview() {
@@ -2003,10 +2955,17 @@ function updateCanvasSelectionCount() {
   const el = $("#canvasSelectionCount");
   if (el) el.textContent = `${count} selected`;
   const hasSelection = count > 0;
-  ["#canvasKeep", "#canvasHide", "#canvasFlag"].forEach((sel) => {
-    const btn = $(sel);
-    if (btn) btn.disabled = !hasSelection;
-  });
+  const scope = getReviewScopeInfo();
+  const keepBtn = $("#canvasKeep");
+  if (keepBtn) keepBtn.disabled = !hasSelection;
+  const hideLocalBtn = $("#canvasHideLocal");
+  if (hideLocalBtn) hideLocalBtn.disabled = !(hasSelection && scope.hasCollectionScope);
+  const hideGlobalBtn = $("#canvasHideGlobal");
+  if (hideGlobalBtn) hideGlobalBtn.disabled = !hasSelection;
+  const flagBtn = $("#canvasFlag");
+  if (flagBtn) flagBtn.disabled = !hasSelection;
+  const tagBtn = $("#canvasTag");
+  if (tagBtn) tagBtn.disabled = !hasSelection;
 }
 
 async function canvasBulkKeep() {
@@ -2029,9 +2988,36 @@ async function canvasBulkKeep() {
   }
 }
 
-async function canvasBulkHide() {
+async function canvasBulkHideLocal() {
   const ids = Array.from(state.canvasSelected);
   if (!ids.length) return;
+  const scope = getReviewScopeInfo();
+  if (!scope.hasCollectionScope) {
+    Shared.showToast("No active collection scope. Use Hide globally for library-wide hide.", { type: "info" });
+    return;
+  }
+  try {
+    const results = await removeAssetsFromCollections(ids, scope.collectionIds);
+    const removed = results.reduce((sum, r) => sum + Number(r.removed || 0), 0);
+    if (!removed) {
+      Shared.showToast("Selected items were not in the active collection scope.", { type: "info" });
+      return;
+    }
+    Shared.showToast(
+      `Removed ${removed} item${removed === 1 ? "" : "s"} from active collection scope.`,
+      { type: "success" }
+    );
+    clearCanvasSelection();
+    await Promise.all([loadAssets(), loadCatalogTree()]);
+  } catch (e) {
+    Shared.showToast(`Collection hide failed: ${formatApiError(e)}`, { type: "error" });
+  }
+}
+
+async function canvasBulkHideGlobal() {
+  const ids = Array.from(state.canvasSelected);
+  if (!ids.length) return;
+  if (!confirmGlobalHideBulk(ids.length)) return;
   try {
     await api("/api/assets/triage/bulk", {
       method: "POST",
@@ -2065,13 +3051,37 @@ async function canvasBulkFlag() {
   }
 }
 
+async function canvasBulkTag() {
+  const ids = Array.from(state.canvasSelected);
+  if (!ids.length) return;
+  try {
+    await api("/api/assets/tag/bulk", {
+      method: "POST",
+      body: JSON.stringify({ ids, tagged: 1 }),
+    });
+    ids.forEach((id) => {
+      const a = state.assets.find((x) => x.id === id);
+      if (a) a.tagged = 1;
+    });
+    Shared.showToast(`${ids.length} item${ids.length === 1 ? "" : "s"} tagged for diagnosis.`, { type: "success" });
+    clearCanvasSelection();
+    renderGrid();
+  } catch (e) {
+    Shared.showToast(`Bulk tag failed: ${formatApiError(e)}`, { type: "error" });
+  }
+}
+
 // Canvas review action bar wiring
 const canvasKeepBtn = $("#canvasKeep");
 if (canvasKeepBtn) canvasKeepBtn.addEventListener("click", canvasBulkKeep);
-const canvasHideBtn = $("#canvasHide");
-if (canvasHideBtn) canvasHideBtn.addEventListener("click", canvasBulkHide);
+const canvasHideLocalBtn = $("#canvasHideLocal");
+if (canvasHideLocalBtn) canvasHideLocalBtn.addEventListener("click", canvasBulkHideLocal);
+const canvasHideGlobalBtn = $("#canvasHideGlobal");
+if (canvasHideGlobalBtn) canvasHideGlobalBtn.addEventListener("click", canvasBulkHideGlobal);
 const canvasFlagBtn = $("#canvasFlag");
 if (canvasFlagBtn) canvasFlagBtn.addEventListener("click", canvasBulkFlag);
+const canvasTagBtn = $("#canvasTag");
+if (canvasTagBtn) canvasTagBtn.addEventListener("click", canvasBulkTag);
 const canvasClearBtn = $("#canvasClear");
 if (canvasClearBtn) canvasClearBtn.addEventListener("click", clearCanvasSelection);
 const canvasToOneByOneBtn = $("#canvasToOneByOne");
@@ -2237,9 +3247,59 @@ function _chatKeywords(text) {
     .join(" ");
 }
 
+function _parseRollbackDaysCommand(text) {
+  const raw = String(text || "").trim().toLowerCase();
+  if (!raw) return null;
+  if (!/^\/?rollback\b/.test(raw)) return null;
+  if (/\bday\s+before\s+yesterday\b/.test(raw)) return 2;
+  if (/\byesterday\b/.test(raw)) return 1;
+  const explicitDays = raw.match(/\b(\d+)\s*d(?:ays?)?\b/) || raw.match(/^\/?rollback\s+(\d+)\b/);
+  if (explicitDays) {
+    const days = Number(explicitDays[1]);
+    if (Number.isFinite(days) && days >= 0) return days;
+  }
+  return 2;
+}
+
+async function _runOwnerTriageRollback(daysAgo) {
+  if (!isOwner()) {
+    addChatResponse("Rollback is owner-only.", 5000);
+    return;
+  }
+  const days = Math.max(0, Math.min(3650, Number(daysAgo || 0)));
+  showChatSpinner(`Rolling back triage changes from the last ${days} day${days === 1 ? "" : "s"}…`);
+  try {
+    const report = await api("/api/triage/rollback", {
+      method: "POST",
+      body: JSON.stringify({ days_ago: days }),
+    });
+    await Promise.all([loadAssets(), loadCatalogTree()]);
+    if (isOwner()) await loadHiddenTree();
+    hideChatSpinner();
+    const updated = Number(report?.updated || 0);
+    if (!updated) {
+      addChatResponse(`No triage changes found in the last ${days} day${days === 1 ? "" : "s"}.`, 7000);
+      return;
+    }
+    addChatResponse(
+      `Rolled back ${updated} item${updated === 1 ? "" : "s"} to their pre-cutoff triage state.`,
+      9000
+    );
+  } catch (e) {
+    hideChatSpinner();
+    addChatResponse(`Rollback failed: ${formatApiError(e)}`, 8000);
+  }
+}
+
 async function processChat(text) {
   const trimmed = (text || "").trim();
   if (!trimmed) return;
+
+  const rollbackDays = _parseRollbackDaysCommand(trimmed);
+  if (rollbackDays != null) {
+    await _runOwnerTriageRollback(rollbackDays);
+    return;
+  }
 
   showChatSpinner("Thinking\u2026");
 
@@ -2298,8 +3358,9 @@ async function executeChatAction(action, params) {
         state.q = "";
         state.currentSource = null;
         state.currentBoard = null;
-        state.currentCollection = null;
-        state.currentCatalogFile = null;
+        clearCollectionFilter();
+        clearCatalogFilter();
+        state.currentTreeNodeId = null;
         state.triageFilter = "";
         const data = await api(`/api/assets?ids=${encodeURIComponent(ids)}&include_hidden=1&limit=200`);
         state.assets = data.assets || [];
@@ -2328,21 +3389,33 @@ async function executeChatAction(action, params) {
           onclick: () => { setCollectionFilter(c.id); hideDynamicSidebar(); },
         })));
       } else if (type === "boards") {
-        const sourceFilter = (params.source || "").toLowerCase();
+        const sourceFilter = normalizeSourceKey(params.source || "");
         // Build board list from catalog tree
         const boards = [];
         for (const node of (state.catalogTree || [])) {
           if (node.type !== "source") continue;
-          if (sourceFilter && node.label.toLowerCase() !== sourceFilter) continue;
+          const sourceKey = sourceKeyFromNode(node);
+          const sourceLabel = sourceDisplayName(sourceKey) || node.label;
+          if (sourceFilter && sourceKey !== sourceFilter) continue;
           for (const child of (node.children || [])) {
             boards.push({
-              label: `${child.label} (${node.label})`,
+              label: `${child.label} (${sourceLabel})`,
               count: child.count,
               onclick: () => {
-                state.currentSource = node.label.toLowerCase();
-                const boardFilter = child.file ? child.file.split("/").pop().replace(".md", "").replace(/_/g, " ") : child.label.toLowerCase();
-                state.currentBoard = boardFilter;
-                state.currentCollection = null;
+                const boardDbName = child.board_name || "";
+                const isCatchAll = boardDbName.startsWith("(");
+                if (isCatchAll && child.file) {
+                  state.currentSource = null;
+                  state.currentBoard = null;
+                  clearCollectionFilter();
+                  setCatalogFilter([child.file], { label: child.label, nodeId: null });
+                } else {
+                  state.currentSource = sourceKey;
+                  state.currentBoard = boardDbName || child.label;
+                  clearCollectionFilter();
+                  clearCatalogFilter();
+                }
+                state.currentTreeNodeId = null;
                 state.offset = 0;
                 renderCatalogTree();
                 loadAssets();
@@ -2351,17 +3424,19 @@ async function executeChatAction(action, params) {
             });
           }
         }
-        showDynamicSidebar(sourceFilter ? `${sourceFilter} Boards` : "All Boards", boards);
+        showDynamicSidebar(sourceFilter ? `${sourceDisplayName(sourceFilter) || sourceFilter} Boards` : "All Boards", boards);
       } else if (type === "sources") {
         const sources = (state.catalogTree || [])
           .filter((n) => n.type === "source")
           .map((n) => ({
-            label: n.label,
+            label: sourceDisplayName(sourceKeyFromNode(n)) || n.label,
             count: n.count,
             onclick: () => {
-              state.currentSource = n.label.toLowerCase();
+              state.currentSource = sourceKeyFromNode(n);
               state.currentBoard = null;
-              state.currentCollection = null;
+              clearCollectionFilter();
+              clearCatalogFilter();
+              state.currentTreeNodeId = null;
               state.offset = 0;
               renderCatalogTree();
               loadAssets();
@@ -2374,11 +3449,20 @@ async function executeChatAction(action, params) {
     }
     case "filter": {
       state.chatItemIds = null;
+      state.currentTreeNodeId = null;
       if (params.source !== undefined) {
-        state.currentSource = params.source || null;
+        state.currentSource = normalizeSourceKey(params.source) || null;
+        if (params.source) {
+          clearCatalogFilter();
+          if (!params.board) clearCollectionFilter();
+        }
       }
       if (params.board !== undefined) {
         state.currentBoard = params.board || null;
+        if (params.board) {
+          clearCollectionFilter();
+          clearCatalogFilter();
+        }
       }
       if (params.triage_status !== undefined) {
         state.triageFilter = params.triage_status || "";
@@ -2390,7 +3474,15 @@ async function executeChatAction(action, params) {
         state.q = params.q || "";
       }
       if (params.collection_id !== undefined) {
-        state.currentCollection = params.collection_id || null;
+        if (params.collection_id) {
+          state.currentSource = null;
+          state.currentBoard = null;
+          clearCatalogFilter();
+          const col = state.collections.find((c) => c.id === params.collection_id);
+          setCollectionFilterIds([params.collection_id], { label: col ? col.name : "", nodeId: null });
+        } else {
+          clearCollectionFilter();
+        }
       }
       renderCatalogTree();
       await loadAssets();
@@ -2442,8 +3534,9 @@ async function executeChatAction(action, params) {
     case "clear_filters": {
       state.currentSource = null;
       state.currentBoard = null;
-      state.currentCollection = null;
-      state.currentCatalogFile = null;
+      clearCollectionFilter();
+      clearCatalogFilter();
+      state.currentTreeNodeId = null;
       state.triageFilter = "";
       state.q = "";
       $$("[data-triage]").forEach((c) => {
@@ -2464,10 +3557,17 @@ async function executeChatAction(action, params) {
         break;
       }
       try {
-        await api("/api/assets/triage/bulk", {
-          method: "POST",
-          body: JSON.stringify({ ids, status }),
-        });
+        const scope = getReviewScopeInfo();
+        const shouldUseCollectionHide = status === "hidden" && scope.hasCollectionScope;
+        if (shouldUseCollectionHide) {
+          await removeAssetsFromCollections(ids, scope.collectionIds);
+          await loadCatalogTree();
+        } else {
+          await api("/api/assets/triage/bulk", {
+            method: "POST",
+            body: JSON.stringify({ ids, status }),
+          });
+        }
         if (state.canvasReview) clearCanvasSelection();
         await loadAssets();
       } catch (e) {
@@ -2527,14 +3627,79 @@ let explorerData = null;
 
 const viewGridBtn = $("#viewGrid");
 const viewExplorerBtn = $("#viewExplorer");
+const explorerBusyOverlay = $("#explorerBusyOverlay");
+const explorerBusyText = $("#explorerBusyText");
 
-// Explorer implementations: 2D (default) and 3D (opt-in via module)
-const _Explorer2D = window.AttractorExplorer || null;
-let _explorerMode = "2d";   // "2d" | "3d"
-let _ExplorerImpl = _Explorer2D || window.Explorer || null;
-function _getExplorer3D() { return window.AttractorExplorer3D || null; }
+// Explorer implementations: 3D primary, with 2D fallback when unavailable.
+const _Explorer2D = window.AttractorExplorer || window.Explorer || null;
+let _explorerMode = "3d";   // "2d" | "3d"
+let _ExplorerImpl = null;
+let _disable3DForSession = false;
+let _explorer3DLoadPromise = null;
+const EXPLORER_3D_MODULE_URL = "/app/attractor-explorer-3d.js?v=32";
+// Hard refresh in Safari can cold-load Three.js from CDN; allow enough
+// headroom so we do not incorrectly drop into 2D fallback.
+const EXPLORER_3D_READY_WAIT_MS = 12000;
+const EXPLORER_3D_READY_POLL_MS = 50;
+function _getExplorer3D() {
+  const impl = window.AttractorExplorer3D || null;
+  if (!impl || impl.__unavailable) return null;
+  return impl;
+}
+
+async function _waitForExplorer3DReady(timeoutMs = EXPLORER_3D_READY_WAIT_MS) {
+  if (_disable3DForSession) return;
+  const start = performance.now();
+  while ((performance.now() - start) < timeoutMs) {
+    const marker = window.AttractorExplorer3D;
+    if (marker) return;
+    await new Promise((resolve) => setTimeout(resolve, EXPLORER_3D_READY_POLL_MS));
+  }
+}
+
+async function _ensureExplorer3DLoaded() {
+  if (_disable3DForSession) return null;
+  const existing = _getExplorer3D();
+  if (existing) return existing;
+
+  if (!_explorer3DLoadPromise) {
+    const marker = document.querySelector('script[data-explorer3d="1"]');
+    if (marker) {
+      _explorer3DLoadPromise = Promise.resolve();
+    } else {
+      _explorer3DLoadPromise = new Promise((resolve) => {
+        const script = document.createElement("script");
+        script.type = "module";
+        script.src = EXPLORER_3D_MODULE_URL;
+        script.dataset.explorer3d = "1";
+        script.onload = () => resolve();
+        script.onerror = (err) => {
+          console.warn("[Explorer] 3D module load failed", err);
+          resolve();
+        };
+        document.head.appendChild(script);
+      });
+    }
+  }
+
+  await _explorer3DLoadPromise;
+  await _waitForExplorer3DReady();
+  return _getExplorer3D();
+}
+
+function _resolveExplorerImpl() {
+  if (!_disable3DForSession) {
+    const e3d = _getExplorer3D();
+    if (e3d) return { impl: e3d, mode: "3d" };
+  }
+  return { impl: _Explorer2D, mode: "2d" };
+}
 let _cachedExplorerAttractorData = null;
+let _cachedExplorerAttractorDataIncludesHidden = false;
+let _explorerPayloadIncludesHidden = false;
+let _explorerScopeReloading = false;
 let _busyCursorDepth = 0;
+let _explorerBusyDepth = 0;
 
 function _setGlobalBusyCursor(cursor) {
   if (document.body) document.body.style.cursor = cursor;
@@ -2551,6 +3716,34 @@ function _pushBusyCursor() {
 function _popBusyCursor() {
   _busyCursorDepth = Math.max(0, _busyCursorDepth - 1);
   if (_busyCursorDepth === 0) _setGlobalBusyCursor("");
+}
+
+function _nextPaint() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
+function _setExplorerBusyOverlay(visible, text = "") {
+  if (!explorerBusyOverlay) return;
+  if (explorerBusyText && text) explorerBusyText.textContent = text;
+  explorerBusyOverlay.hidden = !visible;
+}
+
+function _beginExplorerBusy(message) {
+  _explorerBusyDepth += 1;
+  _pushBusyCursor();
+  _setExplorerBusyOverlay(true, message);
+  if (viewExplorerBtn) viewExplorerBtn.disabled = true;
+}
+
+function _endExplorerBusy() {
+  _explorerBusyDepth = Math.max(0, _explorerBusyDepth - 1);
+  if (_explorerBusyDepth === 0) {
+    _setExplorerBusyOverlay(false);
+    if (viewExplorerBtn) viewExplorerBtn.disabled = false;
+  }
+  _popBusyCursor();
 }
 
 function _isAttractorPayload(data) {
@@ -2599,17 +3792,35 @@ function _merge3DExplorerData(layoutData, attractorData) {
   };
 }
 
-async function _loadExplorerPayload(mode) {
+function _shouldExplorerIncludeHiddenData() {
+  return isOwner() && state.triageFilter === "hidden";
+}
+
+async function _loadExplorerPayload(mode, includeHidden) {
+  const hiddenQs = includeHidden ? "include_hidden=1" : "";
+  const attractorUrl = `/api/explorer/attractor-data?dims=2${hiddenQs ? `&${hiddenQs}` : ""}`;
+  const layoutUrl = `/api/explorer/layout${hiddenQs ? `?${hiddenQs}` : ""}`;
+
   if (mode === "3d") {
-    // Keep 3D switches fast: reuse attractor metadata (vectors/chips) already
-    // loaded for 2D, and only fetch layout coords for the mode switch.
-    const layoutPromise = api("/api/explorer/layout");
+    // Keep 3D loads fast: reuse attractor metadata (vectors/chips) already
+    // loaded for 2D, and only fetch layout coords for the current refresh.
+    const layoutPromise = api(layoutUrl);
     let baseData =
-      _isAttractorPayload(explorerData) ? explorerData : _cachedExplorerAttractorData;
+      (_isAttractorPayload(explorerData) && _explorerPayloadIncludesHidden === includeHidden)
+        ? explorerData
+        : null;
     if (!_isAttractorPayload(baseData)) {
-      baseData = await api("/api/explorer/attractor-data?dims=2");
+      baseData =
+        (_isAttractorPayload(_cachedExplorerAttractorData)
+          && _cachedExplorerAttractorDataIncludesHidden === includeHidden)
+          ? _cachedExplorerAttractorData
+          : null;
+    }
+    if (!_isAttractorPayload(baseData)) {
+      baseData = await api(attractorUrl);
     }
     _cachedExplorerAttractorData = baseData;
+    _cachedExplorerAttractorDataIncludesHidden = includeHidden;
     try {
       const layoutData = await layoutPromise;
       return _merge3DExplorerData(layoutData, baseData);
@@ -2618,12 +3829,25 @@ async function _loadExplorerPayload(mode) {
       return baseData;
     }
   }
-  const data = await api("/api/explorer/attractor-data?dims=2");
+  const data = await api(attractorUrl);
   _cachedExplorerAttractorData = data;
+  _cachedExplorerAttractorDataIncludesHidden = includeHidden;
   return data;
 }
 
-function setViewMode(mode) {
+function _resetExplorerViewInstance() {
+  if (_ExplorerImpl && explorerLoaded && typeof _ExplorerImpl.destroy === "function") {
+    _ExplorerImpl.destroy();
+  }
+  const container = document.getElementById("explorerContainer");
+  if (container) container.innerHTML = "";
+  explorerLoaded = false;
+  explorerData = null;
+  _explorerPayloadIncludesHidden = false;
+}
+
+function setViewMode(mode, options = {}) {
+  const { persist = true } = options;
   if (state.canvasReview) exitCanvasReview();
   const browseView = $("#browseView");
   const explorerView = $("#explorerView");
@@ -2636,6 +3860,8 @@ function setViewMode(mode) {
     if (layoutEl) layoutEl.classList.add("explorer-active");
     if (viewGridBtn) viewGridBtn.classList.remove("active");
     if (viewExplorerBtn) viewExplorerBtn.classList.add("active");
+    _writeViewModeToUrl("explorer");
+    if (persist) _writeViewModePref("explorer");
     loadExplorerView();
   } else {
     if (browseView) browseView.hidden = false;
@@ -2643,41 +3869,26 @@ function setViewMode(mode) {
     if (layoutEl) layoutEl.classList.remove("explorer-active");
     if (viewGridBtn) viewGridBtn.classList.add("active");
     if (viewExplorerBtn) viewExplorerBtn.classList.remove("active");
+    _writeViewModeToUrl("grid");
+    if (persist) _writeViewModePref("grid");
     if (_ExplorerImpl && explorerLoaded) {
       _ExplorerImpl.pause();
     }
   }
 }
 
-/** Switch between 2D and 3D explorer implementations. */
-async function switchExplorerMode(newMode) {
-  if (newMode === _explorerMode && explorerLoaded) return;
-  // Tear down current
-  if (_ExplorerImpl && explorerLoaded) {
-    _ExplorerImpl.destroy();
-  }
-  const container = document.getElementById("explorerContainer");
-  if (container) container.innerHTML = "";
-  explorerLoaded = false;
-  explorerData = null;
+async function loadExplorerView({ allow2DFallback = true } = {}) {
+  // Load 3D code lazily when explorer is opened.
+  // This avoids paying Three.js startup cost when the user stays in grid mode.
+  await _ensureExplorer3DLoaded();
 
-  _explorerMode = newMode;
-  const e3d = _getExplorer3D();
-  if (newMode === "3d" && e3d) {
-    _ExplorerImpl = e3d;
-  } else {
-    _ExplorerImpl = _Explorer2D || window.Explorer || null;
-    _explorerMode = "2d";
-  }
-  _pushBusyCursor();
-  try {
-    await loadExplorerView();
-  } finally {
-    _popBusyCursor();
-  }
-}
+  const nextExplorer = _resolveExplorerImpl();
+  const nextImpl = nextExplorer.impl;
+  const implChanged = explorerLoaded && _ExplorerImpl && _ExplorerImpl !== nextImpl;
+  _ExplorerImpl = nextImpl;
+  _explorerMode = nextExplorer.mode;
 
-async function loadExplorerView() {
+  if (implChanged) _resetExplorerViewInstance();
   if (!_ExplorerImpl || typeof _ExplorerImpl.init !== "function") {
     Shared.showToast("Explorer not available", { type: "error", duration: 3000 });
     return;
@@ -2689,48 +3900,54 @@ async function loadExplorerView() {
       // Try local cache first, then fetch from server
       let asset = state.assets.find((a) => a.id === nodeId);
       if (!asset) {
-        try {
-          const data = await api(`/api/assets?ids=${nodeId.slice(0,8)}&limit=1`);
-          asset = (data.assets || [])[0];
-        } catch (_) { /* ignore */ }
+        asset = await fetchAssetForModal(nodeId);
       }
       if (asset) openModal(asset);
     });
-    // Wire 3D toggle from control panel checkbox
-    if (_ExplorerImpl.on3DToggle) {
-      _ExplorerImpl.on3DToggle((wants3D) => {
-        const newMode = wants3D ? "3d" : "2d";
-        if (newMode === "3d" && !_getExplorer3D()) {
-          Shared.showToast("3D explorer loading…", { type: "info", duration: 2000 });
-          return;
-        }
-        switchExplorerMode(newMode);
-      });
-    }
     explorerLoaded = true;
   } else {
     _ExplorerImpl.resume();
   }
 
   // Load data from appropriate endpoint
-  _pushBusyCursor();
+  const busyMessage = _explorerMode === "3d"
+    ? "Building your 3D map…"
+    : "Loading your map…";
+  _beginExplorerBusy(busyMessage);
   try {
+    await _nextPaint();
+    const includeHidden = _shouldExplorerIncludeHiddenData();
+    _setExplorerBusyOverlay(true, _explorerMode === "3d" ? "Fetching your 3D map…" : "Fetching your map…");
     Shared.showToast(`Loading ${_explorerMode.toUpperCase()} attractor map…`, { type: "info", duration: 2000 });
-    const data = await _loadExplorerPayload(_explorerMode);
+    const data = await _loadExplorerPayload(_explorerMode, includeHidden);
+    _setExplorerBusyOverlay(true, _explorerMode === "3d" ? "Arranging your 3D tiles…" : "Arranging your map…");
+    await _nextPaint();
     explorerData = data;
-    _ExplorerImpl.loadData(data);
+    _explorerPayloadIncludesHidden = includeHidden;
+    _ExplorerImpl.loadData(data, { deferSettle: _explorerMode === "3d" });
     syncExplorerFilter();   // apply any active grid filters as dim
   } catch (e) {
+    const canFallbackTo2D =
+      allow2DFallback &&
+      _explorerMode === "3d" &&
+      !!_Explorer2D &&
+      _Explorer2D !== _ExplorerImpl;
+    if (canFallbackTo2D) {
+      console.warn("[Explorer] 3D failed; switching to 2D fallback", e);
+      _disable3DForSession = true;
+      Shared.showToast("3D unavailable, switched to 2D fallback.", { type: "warning", duration: 3000 });
+      _resetExplorerViewInstance();
+      await loadExplorerView({ allow2DFallback: false });
+      return;
+    }
     Shared.showToast(`Explorer: ${formatApiError(e)}`, { type: "error" });
   } finally {
-    _popBusyCursor();
+    _endExplorerBusy();
   }
 }
 
-if (viewGridBtn) viewGridBtn.addEventListener("click", () => setViewMode("grid"));
-if (viewExplorerBtn) viewExplorerBtn.addEventListener("click", () => setViewMode("explorer"));
-
-// 3D toggle is now inside the control panel — wired in loadExplorerView()
+if (viewGridBtn) viewGridBtn.addEventListener("click", () => setViewMode("grid", { persist: true }));
+if (viewExplorerBtn) viewExplorerBtn.addEventListener("click", () => setViewMode("explorer", { persist: true }));
 
 // ─── Explorer ↔ filter sync ──────────────────────────────────────────────────────
 
@@ -2741,8 +3958,8 @@ function _hasActiveFilters() {
     state.triageFilter ||
     state.currentSource ||
     state.currentBoard ||
-    state.currentCollection ||
-    state.currentCatalogFile ||
+    hasCollectionFilter() ||
+    hasCatalogFilter() ||
     state.chatItemIds ||
     (state.q && state.q.trim())
   );
@@ -2754,6 +3971,19 @@ async function syncExplorerFilter() {
   // Sync header search text into explorer's local title search
   if (typeof _ExplorerImpl.setSearch === "function") {
     _ExplorerImpl.setSearch(state.q || "");
+  }
+
+  // Hidden data is loaded only for owner hidden view.
+  const wantsHiddenPayload = _shouldExplorerIncludeHiddenData();
+  if (_explorerPayloadIncludesHidden !== wantsHiddenPayload) {
+    if (_explorerScopeReloading) return;
+    _explorerScopeReloading = true;
+    try {
+      await loadExplorerView();
+    } finally {
+      _explorerScopeReloading = false;
+    }
+    return;
   }
 
   // No filters → show everything
@@ -2768,10 +3998,18 @@ async function syncExplorerFilter() {
     return;
   }
 
-  // Catalog file: use the asset IDs already loaded in the grid
-  if (state.currentCatalogFile) {
-    const ids = state.assets.map((a) => a.id);
-    _ExplorerImpl.setFilter(ids);
+  const catalogFiles = getCatalogFilterFiles();
+  if (catalogFiles.length) {
+    const catalogParams = new URLSearchParams();
+    for (const file of catalogFiles) catalogParams.append("file", file);
+    const seq = ++_explorerFilterSeq;
+    try {
+      const data = await api(`/api/catalog/asset-ids?${catalogParams}`);
+      if (seq !== _explorerFilterSeq) return; // stale
+      _ExplorerImpl.setFilter(data.ids || []);
+    } catch (e) {
+      // Silently ignore — filter dim is a nice-to-have
+    }
     return;
   }
 
@@ -2780,16 +4018,17 @@ async function syncExplorerFilter() {
   if (state.q && state.q.trim()) params.set("q", state.q.trim());
   if (state.currentSource) params.set("source", state.currentSource);
   if (state.currentBoard) params.set("board", state.currentBoard);
-  if (state.currentCollection) params.set("collection_id", state.currentCollection);
+  const collectionIds = getCollectionFilterIds();
+  if (collectionIds.length) params.set("collection_id", collectionIds.join(","));
   if (state.triageFilter === "needs-comment") {
     params.set("needs_annotation", "1");
-    params.set("include_hidden", "1");
+    if (isOwner()) params.set("include_hidden", "1");
   } else if (state.triageFilter === "hidden") {
     params.set("triage_status", "hidden");
-    params.set("include_hidden", "1");
+    if (_shouldExplorerIncludeHiddenData()) params.set("include_hidden", "1");
   } else if (state.triageFilter === "flagged") {
     params.set("flagged", "1");
-    params.set("include_hidden", "1");
+    if (isOwner()) params.set("include_hidden", "1");
   } else if (state.triageFilter) {
     params.set("triage_status", state.triageFilter);
   }
@@ -2812,6 +4051,8 @@ function updateFilterIndicator() {
   if (!bar || !text) return;
 
   const parts = [];
+  const catalogFiles = getCatalogFilterFiles();
+  const collectionIds = getCollectionFilterIds();
 
   // When a chat prompt is active, show it as the primary context;
   // skip the raw search text since it's just the extracted keyword from the prompt.
@@ -2823,25 +4064,36 @@ function updateFilterIndicator() {
   } else if (state.q && state.q.trim()) {
     parts.push(`"${state.q.trim()}"`);
   }
-  if (state.currentSource && !state.currentCatalogFile) {
-    parts.push(`Source: ${state.currentSource}`);
+  if (state.currentSource && !catalogFiles.length && !collectionIds.length) {
+    parts.push(`Source: ${sourceDisplayName(state.currentSource) || state.currentSource}`);
   }
-  if (state.currentBoard && !state.currentCatalogFile) {
+  if (state.currentBoard && !catalogFiles.length && !collectionIds.length) {
     parts.push(`Board: ${state.currentBoard}`);
   }
-  if (state.currentCatalogFile) {
-    const name = state.currentCatalogFile.split("/").pop().replace(".md", "").replace(/_/g, " ");
-    parts.push(`Catalog: ${name}`);
+  if (catalogFiles.length) {
+    let catalogLabel = state.currentCatalogLabel || "";
+    if (!catalogLabel && catalogFiles.length === 1) {
+      catalogLabel = catalogFiles[0].split("/").pop().replace(".md", "").replace(/_/g, " ");
+    } else if (!catalogLabel) {
+      catalogLabel = `${catalogFiles.length} folders`;
+    }
+    parts.push(`Catalog: ${catalogLabel}`);
   }
-  if (state.currentCollection) {
-    const col = state.collections.find((c) => c.id === state.currentCollection);
-    parts.push(`Collection: ${col ? col.name : state.currentCollection.slice(0, 8)}`);
+  if (collectionIds.length) {
+    if (collectionIds.length === 1) {
+      const cid = collectionIds[0];
+      const col = state.collections.find((c) => c.id === cid);
+      parts.push(`Collection: ${col ? col.name : cid.slice(0, 8)}`);
+    } else {
+      parts.push(`Collections: ${state.currentCollectionLabel || `${collectionIds.length} folders`}`);
+    }
   }
   if (state.triageFilter) {
     const labels = { pending: "Pending", keeper: "Keepers", hidden: "Hidden", "needs-comment": "Needs comment", flagged: "🚩 Flagged" };
     parts.push(`Status: ${labels[state.triageFilter] || state.triageFilter}`);
   }
 
+  updateReviewScopeChips();
   if (parts.length === 0) {
     bar.hidden = true;
     return;
@@ -2854,8 +4106,9 @@ const clearFilterBtn = $("#clearFilterIndicator");
 if (clearFilterBtn) clearFilterBtn.addEventListener("click", () => {
   state.currentSource = null;
   state.currentBoard = null;
-  state.currentCollection = null;
-  state.currentCatalogFile = null;
+  clearCollectionFilter();
+  clearCatalogFilter();
+  state.currentTreeNodeId = null;
   state.triageFilter = "";
   state.q = "";
   state.chatPrompt = "";
@@ -2887,7 +4140,7 @@ function currentScanImportFile() {
 
 function setScanImportButtonState() {
   const btn = $("#addScanPdf");
-  if (btn) { btn.disabled = !!state.scanImportBusy; btn.textContent = state.scanImportBusy ? "Importing…" : "Add Scan"; }
+  if (btn) { btn.disabled = !!state.scanImportBusy; btn.textContent = state.scanImportBusy ? "Importing…" : "Add Clip"; }
   const runBtn = $("#runScanImport");
   if (runBtn) runBtn.disabled = !!state.scanImportBusy || !currentScanImportFile();
 }
@@ -2924,10 +4177,10 @@ async function importScanPdf(file, opts = {}) {
     const created = Number(report.created_assets || 0);
     await loadFacets();
     await loadAssets();
-    Shared.showToast(`Imported ${created} scan page${created === 1 ? "" : "s"} from "${name}".`, { type: "success" });
+    Shared.showToast(`Imported ${created} clip page${created === 1 ? "" : "s"} from "${name}".`, { type: "success" });
     closeScanImportModal();
   } catch (e) {
-    Shared.showToast(`Scan import failed: ${formatApiError(e)}`, { type: "error", duration: 8000 });
+    Shared.showToast(`Clip import failed: ${formatApiError(e)}`, { type: "error", duration: 8000 });
   } finally {
     state.scanImportBusy = false;
     setScanImportButtonState();
@@ -3075,6 +4328,7 @@ setPhotoImportButtonState();
 // ─── Init ─────────────────────────────────────────────────────────────────────────
 
 wireStatusChips();
+wireSidebarToggle();
 
 function isOwner() {
   return state.actor && state.actor.role === "owner";
@@ -3082,6 +4336,9 @@ function isOwner() {
 
 function applyRoleVisibility() {
   const owner = isOwner();
+  if (state.allItemsTreeCollapsed === null) {
+    state.allItemsTreeCollapsed = !!(state.actor && !owner);
+  }
 
   // Status chips: hide triage-specific chips for collaborators
   const statusSection = $("#statusChips")?.closest(".sidebar-section");
@@ -3099,13 +4356,27 @@ function applyRoleVisibility() {
 
   // Modal triage buttons — owner-only
   const keepBtnEl = $("#modalKeepBtn");
-  const hideBtnEl = $("#modalHideBtn");
+  const hideLocalBtnEl = $("#modalHideLocalBtn");
+  const hideGlobalBtnEl = $("#modalHideGlobalBtn");
   if (keepBtnEl) keepBtnEl.hidden = !owner;
-  if (hideBtnEl) hideBtnEl.hidden = !owner;
+  if (hideLocalBtnEl) hideLocalBtnEl.hidden = !owner;
+  if (hideGlobalBtnEl) hideGlobalBtnEl.hidden = !owner;
+
+  // Share context actions — available to authenticated actors only
+  for (const id of ["modalShareLinkBtn", "modalShareEmailBtn", "modalShareMessageBtn"]) {
+    const btn = document.getElementById(id);
+    if (btn) btn.hidden = !state.actor;
+  }
+  const shareGroup = $("#modalShareGroup");
+  if (shareGroup) shareGroup.hidden = !state.actor;
+  const reviewGroup = $("#modalReviewGroup");
+  if (reviewGroup) reviewGroup.hidden = !state.actor;
 
   // Modal flag button — visible to all logged-in actors
   const flagBtnEl = $("#modalFlagBtn");
   if (flagBtnEl) flagBtnEl.hidden = !state.actor;
+  const tagBtnEl = $("#modalTagBtn");
+  if (tagBtnEl) tagBtnEl.hidden = !state.actor;
 
   // Annotation question toggle — available to all (collaborators ask questions)
   // Notes textarea — available to all
@@ -3113,6 +4384,7 @@ function applyRoleVisibility() {
   // New collection button — available to all logged-in actors
   const newCollBtn = $("#newCollection");
   if (newCollBtn) newCollBtn.hidden = !state.actor;
+  updateReviewScopeChips();
 }
 
 async function checkFlaggedCount() {
@@ -3137,6 +4409,11 @@ async function checkFlaggedCount() {
 
     await Promise.all([loadCollections(), loadFacets(), loadCatalogTree()]);
     await loadAssets();
+    const preferredView = _readViewModeFromUrl() || _readViewModePref();
+    if (preferredView === "explorer") {
+      setViewMode("explorer", { persist: false });
+    }
+    await restoreContextLinkFromUrl();
 
     // Owner-only features: hidden tree + question polling + flagged check
     if (isOwner()) {

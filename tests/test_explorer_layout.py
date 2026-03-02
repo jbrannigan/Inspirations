@@ -164,9 +164,29 @@ class TestComputeLayout(unittest.TestCase):
         cache_file = self.data_dir / f"{_cache_key(ids)}.json"
         self.assertTrue(cache_file.exists(), "Cache file should be created")
 
-        cache_file.write_text(json.dumps({"nodes": [{"id": "sentinel"}], "clusters": []}))
+        cached_id = ids[0]
+        cache_file.write_text(
+            json.dumps(
+                {
+                    "nodes": [
+                        {
+                            "id": cached_id,
+                            "x": 1.0,
+                            "y": 2.0,
+                            "z": 3.0,
+                            "cluster_id": 0,
+                            "thumb_url": "",
+                            "title": "sentinel",
+                        }
+                    ],
+                    "clusters": [],
+                }
+            )
+        )
         result2 = self._run(db_path, method="pca")
-        self.assertEqual(result2["nodes"][0]["id"], "sentinel", "Should return cached result")
+        self.assertEqual(len(result2["nodes"]), 1)
+        self.assertEqual(result2["nodes"][0]["id"], cached_id, "Should return cached result")
+        self.assertEqual(result2["nodes"][0]["title"], "sentinel", "Should return cached result")
 
     def test_refresh_bypasses_cache(self):
         db_path = _make_db(self.tmp.name)
@@ -174,11 +194,29 @@ class TestComputeLayout(unittest.TestCase):
 
         ids = [n["id"] for n in result1["nodes"]]
         cache_file = self.data_dir / f"{_cache_key(ids)}.json"
-        cache_file.write_text(json.dumps({"nodes": [{"id": "sentinel"}], "clusters": []}))
+        cached_id = ids[0]
+        cache_file.write_text(
+            json.dumps(
+                {
+                    "nodes": [
+                        {
+                            "id": cached_id,
+                            "x": 1.0,
+                            "y": 2.0,
+                            "z": 3.0,
+                            "cluster_id": 0,
+                            "thumb_url": "",
+                            "title": "sentinel",
+                        }
+                    ],
+                    "clusters": [],
+                }
+            )
+        )
 
         result2 = self._run(db_path, method="pca", refresh=True)
-        node_ids = [n["id"] for n in result2["nodes"]]
-        self.assertNotIn("sentinel", node_ids, "refresh=True should recompute")
+        node_titles = [n["title"] for n in result2["nodes"]]
+        self.assertNotIn("sentinel", node_titles, "refresh=True should recompute")
         self.assertEqual(len(result2["nodes"]), 20)
 
     def test_collection_id_filtering(self):

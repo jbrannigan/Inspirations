@@ -400,4 +400,82 @@ def ensure_schema(db: Db) -> None:
     db.exec("create index if not exists ix_triage_log_created on triage_log(created_at);")
     db.exec("create index if not exists ix_triage_log_actor on triage_log(actor);")
 
+    # Title-audit staging/apply workflow (CLI-first review queue).
+    db.exec(
+        """
+        create table if not exists title_audit_batches (
+          id text primary key,
+          created_at text not null,
+          source_filter text,
+          include_hidden integer not null default 1,
+          limit_requested integer not null default 0,
+          total_scanned integer not null default 0,
+          candidate_count integer not null default 0,
+          status text not null default 'staged',
+          actor text,
+          notes text,
+          applied_at text,
+          undone_at text
+        );
+        """
+    )
+    db.exec("create index if not exists ix_title_audit_batches_created on title_audit_batches(created_at);")
+    db.exec("create index if not exists ix_title_audit_batches_status on title_audit_batches(status);")
+
+    db.exec(
+        """
+        create table if not exists title_audit_candidates (
+          id integer primary key autoincrement,
+          batch_id text not null,
+          asset_id text not null,
+          old_title text,
+          proposed_title text not null,
+          technique_used text not null,
+          review_status text not null default 'pending',
+          review_note text,
+          reviewed_at text,
+          applied_at text,
+          foreign key(batch_id) references title_audit_batches(id) on delete cascade,
+          foreign key(asset_id) references assets(id) on delete cascade
+        );
+        """
+    )
+    db.exec(
+        """
+        create unique index if not exists ux_title_audit_candidates_batch_asset
+        on title_audit_candidates(batch_id, asset_id);
+        """
+    )
+    db.exec(
+        """
+        create index if not exists ix_title_audit_candidates_batch_status
+        on title_audit_candidates(batch_id, review_status);
+        """
+    )
+    db.exec(
+        """
+        create index if not exists ix_title_audit_candidates_batch_applied
+        on title_audit_candidates(batch_id, applied_at);
+        """
+    )
+
+    db.exec(
+        """
+        create table if not exists title_audit_applied (
+          id integer primary key autoincrement,
+          batch_id text not null,
+          asset_id text not null,
+          old_title text,
+          new_title text not null,
+          applied_at text not null,
+          undone_at text,
+          foreign key(batch_id) references title_audit_batches(id) on delete cascade,
+          foreign key(asset_id) references assets(id) on delete cascade,
+          unique(batch_id, asset_id)
+        );
+        """
+    )
+    db.exec("create index if not exists ix_title_audit_applied_batch on title_audit_applied(batch_id);")
+    db.exec("create index if not exists ix_title_audit_applied_undone on title_audit_applied(batch_id, undone_at);")
+
     _backfill_assets_metadata(db)

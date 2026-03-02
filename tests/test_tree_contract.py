@@ -26,6 +26,7 @@ import threading
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import HTTPServer
 from pathlib import Path
@@ -238,6 +239,31 @@ class TestTreeContract(unittest.TestCase):
 
         self.assertNotIn("scan", source_labels,
                          "Fully-hidden source should be removed from tree")
+
+    def test_catalog_endpoints_support_multi_file_scope(self):
+        """Catalog endpoints should union descendants when multiple files are selected."""
+        tree = self._get("/api/catalog/tree")["tree"]
+        dim = next(
+            (
+                n for n in tree
+                if n.get("type") == "dimension"
+                and len([c for c in n.get("children", []) if c.get("file")]) >= 2
+            ),
+            None,
+        )
+        self.assertIsNotNone(dim, "need a dimension with at least two file children")
+        files = [c["file"] for c in dim.get("children", []) if c.get("file")][:2]
+        f0 = urllib.parse.quote(files[0])
+        f1 = urllib.parse.quote(files[1])
+
+        ids0 = set(self._get(f"/api/catalog/asset-ids?file={f0}").get("ids", []))
+        ids1 = set(self._get(f"/api/catalog/asset-ids?file={f1}").get("ids", []))
+        ids_combined = set(self._get(f"/api/catalog/asset-ids?file={f0}&file={f1}").get("ids", []))
+        self.assertEqual(ids_combined, ids0 | ids1)
+        self.assertGreater(len(ids_combined), 0)
+
+        page = self._get(f"/api/catalog/items?file={f0}&file={f1}&limit=1")
+        self.assertEqual(len(page.get("assets", [])), 1)
 
 
 if __name__ == "__main__":

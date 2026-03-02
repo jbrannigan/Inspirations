@@ -27,29 +27,63 @@ CLUSTER_PALETTE = [
 ]
 
 
+def _table_exists(db: Db, table_name: str) -> bool:
+    row = db.query_value(
+        "select 1 from sqlite_master where type='table' and name=? limit 1",
+        (table_name,),
+    )
+    return bool(row)
+
+
+def _assets_has_column(db: Db, column_name: str) -> bool:
+    rows = db.query("pragma table_info(assets)")
+    return any(str(r["name"]) == column_name for r in rows)
+
+
 def _cache_key(asset_ids: list[str]) -> str:
     joined = ",".join(sorted(asset_ids))
     return hashlib.sha256(joined.encode()).hexdigest()[:16]
 
 
 def _load_embeddings(
-    db: Db, collection_id: str | None
+    db: Db,
+    collection_id: str | None,
+    *,
+    include_hidden: bool = False,
 ) -> tuple[list[str], list[list[float]]]:
+    joins: list[str] = ["join assets a on a.id = ae.asset_id"]
+    clauses: list[str] = []
+    params: list[str] = []
+
     if collection_id:
-        rows = db.query(
-            """
-            select ae.asset_id, ae.vector_json
-            from asset_embeddings ae
-            join collection_items ci on ci.asset_id = ae.asset_id
-            where ci.collection_id = ?
-            order by ae.asset_id
-            """,
-            (collection_id,),
-        )
-    else:
-        rows = db.query(
-            "select asset_id, vector_json from asset_embeddings order by asset_id"
-        )
+        joins.append("join collection_items ci on ci.asset_id = ae.asset_id")
+        clauses.append("ci.collection_id = ?")
+        params.append(collection_id)
+
+    if not include_hidden:
+        if _assets_has_column(db, "triage_status"):
+            clauses.append("(a.triage_status is null or a.triage_status != 'hidden')")
+        hidden_col_id = None
+        if _table_exists(db, "collections"):
+            hidden_col_id = db.query_value(
+                "select id from collections where lower(name)='hidden' limit 1"
+            )
+        if (
+            hidden_col_id
+            and collection_id != hidden_col_id
+            and _table_exists(db, "collection_items")
+        ):
+            clauses.append(
+                "a.id not in (select asset_id from collection_items where collection_id = ?)"
+            )
+            params.append(str(hidden_col_id))
+
+    where_sql = f"where {' and '.join(clauses)}" if clauses else ""
+    join_sql = " ".join(joins)
+    rows = db.query(
+        f"select ae.asset_id, ae.vector_json from asset_embeddings ae {join_sql} {where_sql} order by ae.asset_id",
+        tuple(params),
+    )
 
     ids: list[str] = []
     vectors: list[list[float]] = []
@@ -207,23 +241,85 @@ def _cluster_coords(coords: list[list[float]]) -> list[int]:
     return [int(lbl) for lbl in km.fit_predict(X)]
 
 
+def _filter_layout_result(result: dict, visible_ids: set[str]) -> dict:
+    if not visible_ids:
+        return {"nodes": [], "clusters": []}
+
+    nodes = [
+        dict(node)
+        for node in (result.get("nodes") or [])
+        if str(node.get("id") or "") in visible_ids
+    ]
+    if not nodes:
+        return {"nodes": [], "clusters": []}
+
+    base_clusters: dict[int, dict] = {}
+    for cluster in (result.get("clusters") or []):
+        try:
+            cid = int(cluster.get("id"))  # type: ignore[arg-type]
+        except Exception:
+            continue
+        base_clusters[cid] = dict(cluster)
+
+    cluster_counts: dict[int, int] = {}
+    cluster_sums: dict[int, list[float]] = {}
+    for node in nodes:
+        cid = int(node.get("cluster_id") or 0)
+        cluster_counts[cid] = cluster_counts.get(cid, 0) + 1
+        acc = cluster_sums.setdefault(cid, [0.0, 0.0, 0.0])
+        acc[0] += float(node.get("x") or 0.0)
+        acc[1] += float(node.get("y") or 0.0)
+        acc[2] += float(node.get("z") or 0.0)
+
+    clusters = []
+    for cid in sorted(cluster_counts):
+        count = cluster_counts[cid]
+        sx, sy, sz = cluster_sums[cid]
+        base = base_clusters.get(cid, {})
+        clusters.append(
+            {
+                "id": cid,
+                "label": base.get("label") or f"Cluster {cid}",
+                "centroid": [
+                    round(sx / count, 4),
+                    round(sy / count, 4),
+                    round(sz / count, 4),
+                ],
+                "color": base.get("color") or CLUSTER_PALETTE[cid % len(CLUSTER_PALETTE)],
+                "count": count,
+            }
+        )
+    return {"nodes": nodes, "clusters": clusters}
+
+
 def compute_layout(
     db: Db,
     data_dir: Path,
     collection_id: str | None = None,
     method: str = "umap",
     refresh: bool = False,
+    include_hidden: bool = False,
 ) -> dict:
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    ids, vectors = _load_embeddings(db, collection_id)
+    # Keep global layout coordinates stable by projecting against the full corpus
+    # for "all items", then filter hidden IDs from the response when needed.
+    layout_include_hidden = include_hidden or collection_id is None
+    ids, vectors = _load_embeddings(db, collection_id, include_hidden=layout_include_hidden)
     if not ids:
         return {"nodes": [], "clusters": []}
+
+    visible_ids: set[str] | None = None
+    if collection_id is None and not include_hidden:
+        visible_ids = set(_load_embeddings(db, None, include_hidden=False)[0])
+        if not visible_ids:
+            return {"nodes": [], "clusters": []}
 
     cache_file = data_dir / f"{_cache_key(ids)}.json"
     if not refresh and cache_file.exists():
         try:
-            return json.loads(cache_file.read_text())
+            cached = json.loads(cache_file.read_text())
+            return _filter_layout_result(cached, visible_ids) if visible_ids is not None else cached
         except Exception:
             pass
 
@@ -288,4 +384,4 @@ def compute_layout(
         cache_file.write_text(json.dumps(result))
     except Exception:
         pass
-    return result
+    return _filter_layout_result(result, visible_ids) if visible_ids is not None else result

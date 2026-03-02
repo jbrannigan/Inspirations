@@ -16,7 +16,7 @@
 ## Architecture Guardrails
 
 - **Backend:** Python standard library only. No Flask, Django, FastAPI, or similar.
-  The server is `http.server.HTTPServer` in `server.py`.
+  The server is `http.server.ThreadingHTTPServer` in `server.py`.
 - **Frontend:** Vanilla HTML/CSS/JS. No build tools, bundlers, or frameworks.
   No npm, no node_modules.
 - **Database:** SQLite via `db.py`. All schema changes go through the migration
@@ -38,6 +38,8 @@
   safe-URL checks.
 - **UX tone:** Friendly, not techy. The curator app should feel warm and approachable,
   not like a developer tool.
+- **Port coordination:** Inspirations runs on `8001`. Do not stop services on other
+  project ports (notably `8003`) unless explicitly requested and verified.
 
 ## File & Directory Conventions
 
@@ -50,4 +52,4 @@
 - Do not create top-level files without user approval.
 
 ---
-*Last updated: 2026-02-22*
+*Last updated: 2026-03-01*
