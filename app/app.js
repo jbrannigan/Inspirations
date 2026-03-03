@@ -802,6 +802,24 @@ function _findCollectionsGroupNode() {
   return tree.find((node) => node && node.type === "collections_group") || null;
 }
 
+function _setCollaboratorSharedCollectionsScope() {
+  if (!isCollaboratorActor()) return false;
+  const collectionsNode = _findCollectionsGroupNode();
+  if (!collectionsNode) return false;
+  const collectionIds = collectDescendantCollectionIds(collectionsNode);
+  if (!collectionIds.length) return false;
+
+  resetTriageFilter();
+  state.currentSource = null;
+  state.currentBoard = null;
+  state.currentContentKind = null;
+  clearCatalogFilter();
+  setCollectionFilterIds(collectionIds, { label: "Shared Collections", nodeId: collectionsNode.id });
+  state.currentTreeNodeId = collectionsNode.id;
+  state.expandedTreeNodes.add("collections");
+  return true;
+}
+
 function _applyCollaboratorCollectionsDefaultScope() {
   if (!isCollaboratorActor()) return;
   if (state.collaboratorDefaultScopeApplied) return;
@@ -813,18 +831,7 @@ function _applyCollaboratorCollectionsDefaultScope() {
     || !!(state.chatItemIds && state.chatItemIds.length);
   if (hasExistingScope) return;
 
-  const collectionsNode = _findCollectionsGroupNode();
-  if (!collectionsNode) return;
-  const collectionIds = collectDescendantCollectionIds(collectionsNode);
-  if (!collectionIds.length) return;
-
-  resetTriageFilter();
-  state.currentSource = null;
-  state.currentBoard = null;
-  state.currentContentKind = null;
-  clearCatalogFilter();
-  setCollectionFilterIds(collectionIds, { label: "Shared Collections", nodeId: collectionsNode.id });
-  state.expandedTreeNodes.add("collections");
+  if (!_setCollaboratorSharedCollectionsScope()) return;
   state.allItemsTreeCollapsed = true;
   state.collaboratorTreeUnlocked = false;
   renderCatalogTree();
@@ -1430,8 +1437,8 @@ function renderCatalogTree() {
 
   // "All items" node (root order differs for collaborator view)
   const allBtn = document.createElement("button");
-  allBtn.className = `tree-toggle${allItemsActive ? " active" : ""}${!collapseRest ? " expanded" : ""}`;
-  allBtn.innerHTML = `<span class="tree-arrow">&#9654;</span><span>All Items</span>`;
+  allBtn.className = `tree-toggle tree-toggle-root${allItemsActive ? " active" : ""}${!collapseRest ? " expanded" : ""}`;
+  allBtn.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label">All Items</span>`;
   allBtn.onclick = () => {
     if (shouldIgnorePostBrowseUnlockTreeClick()) return;
     const wasAllItemsActive = isAllItemsScopeActive();
@@ -1458,9 +1465,13 @@ function renderCatalogTree() {
   const appendAllItemsRoot = () => wrap.appendChild(allBtn);
   const collectionsNodes = tree.filter((n) => n.type === "collections_group");
   const appendCollectionsRoots = () => {
+    if (!collectionsNodes.length) return;
+    const collectionsBranch = document.createElement("div");
+    collectionsBranch.className = "collections-branch";
     for (const node of collectionsNodes) {
-      wrap.appendChild(buildCollectionsGroupNode(node));
+      collectionsBranch.appendChild(buildCollectionsGroupNode(node));
     }
+    wrap.appendChild(collectionsBranch);
   };
 
   // Collaborator IA: Collections first, then All Items.
@@ -1472,32 +1483,52 @@ function renderCatalogTree() {
     appendCollectionsRoots();
   }
 
-  if (collaboratorLockedTree) {
+  if (isCollaboratorActor()) {
     const browseBtn = document.createElement("button");
     browseBtn.type = "button";
     browseBtn.className = "browse-owner-tree-btn";
-    browseBtn.textContent = "Browse Leslie's collection";
+    browseBtn.textContent = collaboratorLockedTree
+      ? "Browse more from Leslie collection ..."
+      : "Hide extra folders";
     browseBtn.onclick = (e) => {
       if (e) {
         e.preventDefault();
         e.stopPropagation();
       }
-      state.collaboratorTreeUnlocked = true;
-      state.allItemsTreeCollapsed = false;
-      state.expandedTreeNodes.add("collections");
-      state.lastCollaboratorBrowseUnlockAt = Date.now();
+      if (collaboratorLockedTree) {
+        state.collaboratorTreeUnlocked = true;
+        state.allItemsTreeCollapsed = false;
+        state.expandedTreeNodes.add("collections");
+        state.lastCollaboratorBrowseUnlockAt = Date.now();
+        renderCatalogTree();
+        return;
+      }
+      const scopedToCollections = _setCollaboratorSharedCollectionsScope();
+      state.collaboratorTreeUnlocked = false;
+      state.allItemsTreeCollapsed = true;
+      state.lastCollaboratorBrowseUnlockAt = 0;
+      state.offset = 0;
       renderCatalogTree();
+      if (scopedToCollections) {
+        loadAssets();
+        syncExplorerFilter();
+      }
     };
     wrap.appendChild(browseBtn);
   }
 
   if (!collapseRest) {
+    const allItemsBranch = document.createElement("div");
+    allItemsBranch.className = "all-items-branch";
     for (const node of tree) {
       if (node.type === "source") {
-        wrap.appendChild(buildSourceNode(node));
+        allItemsBranch.appendChild(buildSourceNode(node));
       } else if (node.type === "dimension") {
-        wrap.appendChild(buildDimensionNode(node));
+        allItemsBranch.appendChild(buildDimensionNode(node));
       }
+    }
+    if (allItemsBranch.childElementCount) {
+      wrap.appendChild(allItemsBranch);
     }
   }
 
@@ -1525,7 +1556,7 @@ function buildSourceNode(node) {
     );
   const toggle = document.createElement("button");
   toggle.className = `tree-toggle${isActiveSource ? " active" : ""}`;
-  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span>${escapeHtml(sourceLabel)}</span><span class="tree-count">${node.count}</span>`;
+  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label">${escapeHtml(sourceLabel)}</span><span class="tree-count">${node.count}</span>`;
 
   const children = document.createElement("div");
   children.className = "tree-children";
@@ -1665,7 +1696,7 @@ function buildDimensionNode(node) {
   const isActiveHeader = state.currentTreeNodeId === node.id;
   const toggle = document.createElement("button");
   toggle.className = `tree-toggle${isActiveHeader ? " active" : ""}`;
-  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span>${escapeHtml(node.label)}</span><span class="tree-count">${node.count}</span>`;
+  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label">${escapeHtml(node.label)}</span><span class="tree-count">${node.count}</span>`;
 
   const children = document.createElement("div");
   children.className = "tree-children";
@@ -1727,7 +1758,7 @@ function buildCollectionsGroupNode(node) {
   const isActiveHeader = state.currentTreeNodeId === node.id;
   const toggle = document.createElement("button");
   toggle.className = `tree-toggle${isActiveHeader ? " active" : ""}`;
-  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span>Collections</span><span class="tree-count">${node.count}</span>`;
+  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label">Collections</span><span class="tree-count">${node.count}</span>`;
 
   const children = document.createElement("div");
   children.className = "tree-children";
@@ -1942,7 +1973,7 @@ function renderHiddenTree() {
     && !hasCollectionFilter()
     && !hasCatalogFilter();
   toggle.className = `tree-toggle${allHidden ? " active" : ""}`;
-  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-hidden-label">&#128065;&#xFE0E; Hidden</span><span class="tree-count">${tree.total}</span>`;
+  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label tree-hidden-label">&#128065;&#xFE0E; Hidden</span><span class="tree-count">${tree.total}</span>`;
 
   const children = document.createElement("div");
   children.className = "tree-children";

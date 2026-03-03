@@ -389,6 +389,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   height: calc(100vh - 57px);
   overflow: hidden;
   position: relative;
+  transition: grid-template-columns 180ms ease;
 }
 .layout.sidebar-hidden { grid-template-columns: 1fr; }
 .layout.explorer-active {
@@ -419,30 +420,31 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   position: relative;
 }
 .sidebar-handle {
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   padding: 0;
-  border-radius: 999px;
+  border-radius: 10px;
   border: 1px solid var(--border-hover);
-  background: var(--surface-subtle);
+  background: var(--panel);
   color: var(--text-secondary);
   display: grid;
   place-items: center;
   line-height: 1;
-  font-size: 15px;
-  font-weight: 700;
   box-shadow: var(--shadow-sm);
+  transition: color 0.12s, border-color 0.12s, background 0.12s, box-shadow 0.12s, transform 0.12s;
 }
+.sidebar-handle-icon { display: block; }
 .sidebar-handle[hidden] { display: none !important; }
 .sidebar-handle:hover {
   color: var(--text);
   border-color: var(--accent);
-  background: var(--panel);
+  background: var(--surface-subtle);
   box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
 }
 .sidebar-collapse-handle {
   position: sticky;
-  top: 6px;
+  top: 8px;
   margin-left: auto;
   margin-bottom: 8px;
   z-index: 2;
@@ -617,6 +619,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .sidebar-tree-section { flex: 1; min-height: 0; overflow-y: auto; }
 .catalog-tree { display: flex; flex-direction: column; gap: 2px; }
 .tree-node { user-select: none; }
+.all-items-branch,
+.collections-branch {
+  margin-left: 12px;
+  padding-left: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 .tree-toggle {
   width: 100%;
   text-align: left;
@@ -628,11 +638,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: var(--fs-sm);
   font-weight: 500;
   cursor: pointer;
-  display: flex;
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 6px;
+  column-gap: 6px;
   transition: background 0.12s;
 }
+.tree-toggle-root { margin-top: 1px; }
 .tree-toggle:hover { background: var(--surface-subtle); color: var(--text); }
 .tree-toggle .tree-arrow {
   display: inline-block;
@@ -641,6 +653,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: var(--muted);
   transition: transform 0.15s;
   flex-shrink: 0;
+}
+.tree-toggle .tree-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tree-toggle.expanded .tree-arrow { transform: rotate(90deg); }
 .tree-toggle .tree-count {
