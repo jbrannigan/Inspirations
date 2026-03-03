@@ -432,8 +432,10 @@ def generate_catalog(db: Db, catalog_dir: Path) -> dict[str, Any]:
             select c.id, c.name, c.description, count(ci.asset_id) as count
             from collections c
             left join collection_items ci on ci.collection_id = c.id
+            where lower(c.name) != 'hidden'
+              and coalesce(c.hidden, 0) = 0
             group by c.id
-            order by c.name
+            order by lower(c.name)
             """
         )
     ]

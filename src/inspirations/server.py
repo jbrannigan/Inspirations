@@ -20,13 +20,13 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .ai import DEFAULT_GEMINI_EMBEDDING_MODEL, run_similarity_search
+from .catalog import generate_catalog
 from .chat import process_chat_message
 from .db import Db, ensure_schema
 from .importers.scans import import_photos_inbox, import_scans_inbox, import_videos_inbox
 from .store import (
     add_items_to_collection,
     bulk_set_flag,
-    bulk_set_tag,
     bulk_set_triage_status,
     create_actor,
     create_annotation,
@@ -44,6 +44,7 @@ from .store import (
     list_collection_items,
     list_collections,
     delete_collection,
+    delete_hidden_collections,
     list_facets,
     list_open_questions,
     list_tray,
@@ -54,6 +55,7 @@ from .store import (
     remove_item_from_collection,
     remove_items_from_collection,
     rollback_triage_since,
+    set_collections_hidden,
     set_collection_order,
     set_triage_status,
     triage_stats,
@@ -205,17 +207,51 @@ def _send(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
 
 
 def _resolve_actor(handler: BaseHTTPRequestHandler) -> dict | None:
-    """Resolve actor from X-Actor-Token header or ?actor= query param."""
-    token = (handler.headers.get("X-Actor-Token") or "").strip()
+    """Resolve actor token, preferring explicit magic-link query over header."""
+    parsed = urlparse(handler.path)
+    q = parse_qs(parsed.query)
+    token = (q.get("actor", [""])[0] or "").strip()
     if not token:
-        parsed = urlparse(handler.path)
-        q = parse_qs(parsed.query)
-        token = (q.get("actor", [""])[0] or "").strip()
+        token = (handler.headers.get("X-Actor-Token") or "").strip()
     if not token:
         return None
     with Db(handler.server.db_path) as db:
         ensure_schema(db)
         return get_actor_by_token(db, token=token)
+
+
+def _actor_role(actor: dict | None) -> str:
+    return str((actor or {}).get("role") or "").strip().lower()
+
+
+def _can_flag_assets(actor: dict | None) -> bool:
+    # Product rule: flagging is owner-only.
+    return _actor_role(actor) == "owner"
+
+
+def _is_collaborator(actor: dict | None) -> bool:
+    role = _actor_role(actor)
+    return bool(role and role != "owner")
+
+
+def _is_non_home_catalog_file(rel_path: str) -> bool:
+    rel = str(rel_path or "").replace("\\", "/").strip().lstrip("./").lower()
+    return rel == "other" or rel.startswith("other/")
+
+
+def _is_non_home_tree_node(node: dict) -> bool:
+    if not isinstance(node, dict) or node.get("type") != "dimension":
+        return False
+    node_id = str(node.get("id") or "").strip().lower()
+    if node_id == "dimension:other":
+        return True
+    label = str(node.get("label") or "").strip().lower()
+    if "non-home" in label and "other" in label:
+        return True
+    for child in node.get("children") or []:
+        if _is_non_home_catalog_file(str((child or {}).get("file") or "")):
+            return True
+    return False
 
 
 class ApiHandler(BaseHTTPRequestHandler):
@@ -286,6 +322,11 @@ class ApiHandler(BaseHTTPRequestHandler):
             include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
             actor = _resolve_actor(self)
             include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
+            category = q.get("category", [""])[0]
+            # Collaborator default browse scope is home-design; collection scope
+            # remains unchanged because collection_id is explicit.
+            if _is_collaborator(actor) and not (q.get("collection_id", [""])[0] or "").strip():
+                category = "home_design"
             page_limit = int(q.get("limit", [str(DEFAULT_ASSETS_PAGE_SIZE)])[0])
             assets = self._with_db(
                 list_assets,
@@ -300,7 +341,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 creator=q.get("creator", [""])[0],
                 collection_id=q.get("collection_id", [""])[0],
                 triage_status=q.get("triage_status", [""])[0],
-                category=q.get("category", [""])[0],
+                category=category,
                 needs_annotation=_parse_bool_param(q.get("needs_annotation", [""])[0], default=False),
                 flagged_only=_parse_bool_param(q.get("flagged", [""])[0], default=False),
                 tagged_only=_parse_bool_param(q.get("tagged", [""])[0], default=False),
@@ -341,6 +382,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
             actor = _resolve_actor(self)
             include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
+            category = q.get("category", [""])[0]
+            if _is_collaborator(actor) and not (q.get("collection_id", [""])[0] or "").strip():
+                category = "home_design"
             ids = self._with_db(
                 list_asset_ids,
                 q=q.get("q", [""])[0],
@@ -348,6 +392,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 board=q.get("board", [""])[0],
                 collection_id=q.get("collection_id", [""])[0],
                 triage_status=q.get("triage_status", [""])[0],
+                category=category,
                 needs_annotation=_parse_bool_param(q.get("needs_annotation", [""])[0], default=False),
                 flagged_only=_parse_bool_param(q.get("flagged", [""])[0], default=False),
                 include_hidden=include_hidden,
@@ -404,7 +449,11 @@ class ApiHandler(BaseHTTPRequestHandler):
             return _send(self, 200, report)
 
         if parsed.path == "/api/collections":
-            cols = self._with_db(list_collections)
+            q = parse_qs(parsed.query)
+            include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
+            actor = _resolve_actor(self)
+            include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
+            cols = self._with_db(list_collections, include_hidden=include_hidden)
             return _send(self, 200, {"collections": cols})
 
         if parsed.path == "/api/facets":
@@ -506,6 +555,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             catalog_dir = getattr(self.server, "catalog_dir", None)
             if not catalog_dir:
                 return _send(self, 200, {"tree": []})
+            actor = _resolve_actor(self)
             try:
                 tree = self._build_catalog_tree(Path(catalog_dir))
             except Exception:
@@ -515,6 +565,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self._adjust_tree_counts_for_hidden(tree)
             except Exception:
                 pass
+            if _is_collaborator(actor):
+                tree = [node for node in tree if not _is_non_home_tree_node(node)]
             return _send(self, 200, {"tree": tree})
 
         if parsed.path == "/api/catalog/items":
@@ -524,9 +576,14 @@ class ApiHandler(BaseHTTPRequestHandler):
             actor = _resolve_actor(self)
             include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
             catalog_dir = getattr(self.server, "catalog_dir", None)
-            file_params = [str(v or "").strip() for v in q.get("file", []) if str(v or "").strip()]
-            if not catalog_dir or not file_params:
+            raw_file_params = [str(v or "").strip() for v in q.get("file", []) if str(v or "").strip()]
+            file_params = list(raw_file_params)
+            if _is_collaborator(actor):
+                file_params = [fp for fp in file_params if not _is_non_home_catalog_file(fp)]
+            if not catalog_dir or not raw_file_params:
                 return _send(self, 400, {"error": "file param required"})
+            if not file_params:
+                return _send(self, 200, {"assets": [], "has_more": False, "total": 0})
             short_ids, err_status, err_msg = self._catalog_short_ids_for_files(Path(catalog_dir), file_params)
             if err_status:
                 return _send(self, err_status, {"error": err_msg})
@@ -535,9 +592,13 @@ class ApiHandler(BaseHTTPRequestHandler):
             ids_str = ",".join(short_ids)
             limit = int(q.get("limit", ["500"])[0])
             offset = int(q.get("offset", ["0"])[0])
+            category = q.get("category", [""])[0]
+            if _is_collaborator(actor):
+                category = "home_design"
             assets = self._with_db(
                 list_assets,
                 ids=ids_str,
+                category=category,
                 include_hidden=include_hidden,
                 limit=limit + 1,
                 offset=offset,
@@ -559,15 +620,28 @@ class ApiHandler(BaseHTTPRequestHandler):
             actor = _resolve_actor(self)
             include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
             catalog_dir = getattr(self.server, "catalog_dir", None)
-            file_params = [str(v or "").strip() for v in q.get("file", []) if str(v or "").strip()]
-            if not catalog_dir or not file_params:
+            raw_file_params = [str(v or "").strip() for v in q.get("file", []) if str(v or "").strip()]
+            file_params = list(raw_file_params)
+            if _is_collaborator(actor):
+                file_params = [fp for fp in file_params if not _is_non_home_catalog_file(fp)]
+            if not catalog_dir or not raw_file_params:
                 return _send(self, 400, {"error": "file param required"})
+            if not file_params:
+                return _send(self, 200, {"ids": []})
             short_ids, err_status, err_msg = self._catalog_short_ids_for_files(Path(catalog_dir), file_params)
             if err_status:
                 return _send(self, err_status, {"error": err_msg})
             if not short_ids:
                 return _send(self, 200, {"ids": []})
-            ids = self._with_db(list_asset_ids, ids=",".join(short_ids), include_hidden=include_hidden)
+            category = q.get("category", [""])[0]
+            if _is_collaborator(actor):
+                category = "home_design"
+            ids = self._with_db(
+                list_asset_ids,
+                ids=",".join(short_ids),
+                category=category,
+                include_hidden=include_hidden,
+            )
             return _send(self, 200, {"ids": ids})
 
         if parsed.path == "/api/tray":
@@ -651,6 +725,27 @@ class ApiHandler(BaseHTTPRequestHandler):
             desc = (body.get("description") or "").strip()
             col = self._with_db(create_collection, name=name, description=desc)
             return _send(self, 201, {"collection": col})
+
+        if parsed.path == "/api/collections/bulk-hide":
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
+            collection_ids = body.get("collection_ids") or []
+            if not isinstance(collection_ids, list):
+                return _send(self, 400, {"error": "collection_ids must be list"})
+            hidden = bool(body.get("hidden"))
+            updated = self._with_db(set_collections_hidden, collection_ids=collection_ids, hidden=hidden)
+            return _send(self, 200, {"updated": updated, "hidden": 1 if hidden else 0})
+
+        if parsed.path == "/api/collections/bulk-delete":
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
+            collection_ids = body.get("collection_ids") or []
+            if not isinstance(collection_ids, list):
+                return _send(self, 400, {"error": "collection_ids must be list"})
+            report = self._with_db(delete_hidden_collections, collection_ids=collection_ids)
+            return _send(self, 200, report)
 
         if parsed.path == "/api/tray/add":
             asset_ids = body.get("asset_ids") or []
@@ -797,6 +892,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             if not isinstance(ids, list):
                 return _send(self, 400, {"error": "ids must be list"})
             actor = _resolve_actor(self)
+            if not _can_flag_assets(actor):
+                return _send(self, 403, {"error": "flagging is restricted to owners"})
             actor_name = actor.get("name", "") if actor else ""
             count = self._with_db(
                 bulk_set_flag,
@@ -828,6 +925,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             flagged = body.get("flagged", 1)
             note = body.get("note", "")
             actor = _resolve_actor(self)
+            if not _can_flag_assets(actor):
+                return _send(self, 403, {"error": "flagging is restricted to owners"})
             actor_name = actor.get("name", "") if actor else ""
             self._with_db(
                 lambda db: db.exec(
@@ -838,34 +937,11 @@ class ApiHandler(BaseHTTPRequestHandler):
             return _send(self, 200, {"ok": True})
 
         if parsed.path == "/api/assets/tag/bulk":
-            ids = body.get("ids") or []
-            tagged = body.get("tagged", 1)
-            if not isinstance(ids, list):
-                return _send(self, 400, {"error": "ids must be list"})
-            actor = _resolve_actor(self)
-            actor_name = actor.get("name", "") if actor else ""
-            count = self._with_db(
-                bulk_set_tag,
-                asset_ids=ids,
-                tagged=1 if tagged else 0,
-                tagged_by=actor_name,
-            )
-            return _send(self, 200, {"updated": count})
+            return _send(self, 410, {"error": "tag workflow retired"})
 
         m = re.match(r"^/api/assets/([^/]+)/tag$", parsed.path)
         if m:
-            asset_id = m.group(1)
-            tagged = body.get("tagged", 1)
-            note = body.get("note", "")
-            actor = _resolve_actor(self)
-            actor_name = actor.get("name", "") if actor else ""
-            self._with_db(
-                lambda db: db.exec(
-                    "update assets set tagged=?, tagged_by=?, tagged_note=? where id=?",
-                    (1 if tagged else 0, actor_name, note, asset_id),
-                )
-            )
-            return _send(self, 200, {"ok": True})
+            return _send(self, 410, {"error": "tag workflow retired"})
 
         m = re.match(r"^/api/assets/([^/]+)/hide$", parsed.path)
         if m:
@@ -894,10 +970,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             if not user_message:
                 return _send(self, 400, {"error": "message required"})
             api_key = _get_api_key("ANTHROPIC_API_KEY", "inspirations_anthropic_api_key")
-            if not api_key:
-                return _send(self, 503, {"error": "Chat requires an Anthropic API key. Set ANTHROPIC_API_KEY."})
             try:
-                catalog_dir = getattr(self.server, "catalog_dir", None)
+                catalog_dir = self._ensure_chat_catalog_fresh()
                 result = self._with_db(
                     process_chat_message,
                     api_key=api_key,
@@ -1372,6 +1446,39 @@ class ApiHandler(BaseHTTPRequestHandler):
             ensure_schema(db)
             return fn(db, **kwargs)
 
+    def _ensure_chat_catalog_fresh(self) -> Path | None:
+        """Ensure the markdown catalog used by chat is present and up to date with DB changes."""
+        db_path = Path(self.server.db_path).resolve()
+        catalog_dir = Path(getattr(self.server, "catalog_dir", db_path.parent / "catalog")).resolve()
+        index_path = catalog_dir / "_index.md"
+        manifest_path = catalog_dir / "_manifest.json"
+        current_db_mtime = 0.0
+        try:
+            current_db_mtime = float(db_path.stat().st_mtime)
+        except OSError:
+            current_db_mtime = 0.0
+
+        last_built_db_mtime = float(getattr(self.server, "catalog_last_built_db_mtime", 0.0) or 0.0)
+        has_catalog_files = index_path.exists() and manifest_path.exists()
+        needs_build = (not has_catalog_files) or (current_db_mtime > last_built_db_mtime + 1e-6)
+        if not needs_build:
+            self.server.catalog_dir = catalog_dir
+            return catalog_dir
+
+        try:
+            catalog_dir.mkdir(parents=True, exist_ok=True)
+            self._with_db(generate_catalog, catalog_dir=catalog_dir)
+            self.server.catalog_last_built_db_mtime = current_db_mtime
+            self.server.catalog_dir = catalog_dir
+            return catalog_dir
+        except Exception as e:
+            print(f"[chat] catalog refresh failed: {e}", file=sys.stderr)
+            if has_catalog_files:
+                self.server.catalog_dir = catalog_dir
+                return catalog_dir
+            self.server.catalog_dir = None
+            return None
+
     def _apply_ingest_metadata(
         self,
         db: Db,
@@ -1604,28 +1711,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
             # Collection item: - "Name" (N items, id=...)
             if in_collections and line.startswith("- \"") and "id=" in line:
-                name_match = re.match(r'^- "(.+?)"\s+\((\d+)\s+items?,\s+id=([^)]+)\)', line)
-                if name_match:
-                    cname = name_match.group(1)
-                    ccount = int(name_match.group(2))
-                    cid = name_match.group(3)
-                    if not tree or tree[-1].get("type") != "collections_group":
-                        tree.append({
-                            "id": "collections",
-                            "label": "Collections",
-                            "count": 0,
-                            "type": "collections_group",
-                            "children": [],
-                        })
-                    collections_node = tree[-1]
-                    collections_node["children"].append({
-                        "id": f"collection:{cid}",
-                        "label": cname,
-                        "count": ccount,
-                        "type": "collection",
-                        "collection_id": cid,
-                    })
-                    collections_node["count"] = len(collections_node["children"])
+                # Collections are injected from live DB state below so hide/
+                # restore/delete updates are reflected immediately.
                 continue
 
             # Section header: ## Facebook (1190 items) or ## By Room (5257 item-assignments)
@@ -1690,6 +1777,60 @@ class ApiHandler(BaseHTTPRequestHandler):
 
                 current_section["children"].append(child)
                 continue
+
+        # Replace catalog-file collection section with live DB-backed, visible collections.
+        tree = [node for node in tree if node.get("type") != "collections_group"]
+        try:
+            with Db(self.server.db_path) as db:
+                ensure_schema(db)
+                rows = db.query(
+                    """
+                    select c.id, c.name,
+                           (
+                             select count(*)
+                             from collection_items ci
+                             join assets a on a.id = ci.asset_id
+                             where ci.collection_id = c.id
+                               and (a.triage_status is null or a.triage_status != 'hidden')
+                               and a.id not in (
+                                 select h.asset_id
+                                 from collection_items h
+                                 where h.collection_id = (
+                                   select id from collections where lower(name)='hidden' limit 1
+                                 )
+                               )
+                           ) as item_count
+                    from collections c
+                    where lower(c.name) != 'hidden' and coalesce(c.hidden, 0) = 0
+                    order by c.name collate nocase asc, c.updated_at desc
+                    """
+                )
+            if rows:
+                collections_node = {
+                    "id": "collections",
+                    "label": "Collections",
+                    "count": len(rows),
+                    "type": "collections_group",
+                    "children": [],
+                }
+                for row in rows:
+                    cid = str(row["id"] or "")
+                    if not cid:
+                        continue
+                    collections_node["children"].append(
+                        {
+                            "id": f"collection:{cid}",
+                            "label": str(row["name"] or ""),
+                            "count": int(row["item_count"] or 0),
+                            "type": "collection",
+                            "collection_id": cid,
+                        }
+                    )
+                if collections_node["children"]:
+                    collections_node["count"] = len(collections_node["children"])
+                    tree.append(collections_node)
+        except Exception:
+            pass
 
         return tree
 
@@ -1812,9 +1953,9 @@ class ApiHandler(BaseHTTPRequestHandler):
         if rel_l.endswith(".html"):
             return "no-cache"
         if rel_l.endswith((".js", ".mjs", ".css", ".svg", ".woff", ".woff2", ".ttf", ".otf")):
-            q = parse_qs(query)
-            if "v" in q:
-                return "public, max-age=31536000, immutable"
+            # Keep app assets on short cache windows in local/dev workflows.
+            # Query-string versions still help bust caches, but should not lock
+            # clients to stale JS/CSS indefinitely when a version bump is missed.
             return "public, max-age=300"
         return "public, max-age=3600"
 
@@ -2253,14 +2394,23 @@ def run_server(*, host: str, port: int, db_path: Path, app_dir: Path, store_dir:
     server.imports_dir = app_dir.resolve().parent / "imports"
     server.admin_tokens = {}
 
-    # Catalog directory — look next to the database
+    # Catalog directory for chat "dictionary" data (auto-refreshed on chat requests).
     catalog_dir = Path(db_path).resolve().parent / "catalog"
-    if catalog_dir.is_dir() and (catalog_dir / "_index.md").exists():
-        server.catalog_dir = catalog_dir
-        print(f"Catalog loaded from {catalog_dir}")
+    server.catalog_dir = catalog_dir
+    server.catalog_last_built_db_mtime = 0.0
+    index_path = catalog_dir / "_index.md"
+    manifest_path = catalog_dir / "_manifest.json"
+    try:
+        db_mtime = float(Path(db_path).resolve().stat().st_mtime)
+    except OSError:
+        db_mtime = 0.0
+    if index_path.exists() and manifest_path.exists():
+        newest_catalog_mtime = max(float(index_path.stat().st_mtime), float(manifest_path.stat().st_mtime))
+        if newest_catalog_mtime >= db_mtime:
+            server.catalog_last_built_db_mtime = db_mtime
+        print(f"Catalog ready at {catalog_dir} (auto-refresh enabled)")
     else:
-        server.catalog_dir = None
-        print("No catalog found — chat will use routing-only mode")
+        print("No catalog found yet — chat will build one on first use")
 
     # Seed default actors (Jim + Leslie) and print magic link URLs
     print("\nMagic link URLs:")

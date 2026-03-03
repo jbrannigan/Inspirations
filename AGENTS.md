@@ -34,6 +34,9 @@
   side effects that break re-runnability.
 - **CLI output is JSON.** All CLI commands must produce JSON. Do not add
   human-readable-only output.
+- **Dave key lookup:** `/api/chat` reads `ANTHROPIC_API_KEY` first, then macOS
+  Keychain service `inspirations_anthropic_api_key`. Keep this service name stable.
+  Setup/runbook: `docs/LOCAL_DAVE_API_KEY.md`.
 - **Security:** Validate all external URLs through `security.py`. Never bypass
   safe-URL checks.
 - **UX tone:** Friendly, not techy. The curator app should feel warm and approachable,

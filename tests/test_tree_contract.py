@@ -273,6 +273,75 @@ class TestTreeContract(unittest.TestCase):
         self.assertNotIn("scan", source_labels,
                          "Fully-hidden source should be removed from tree")
 
+    def test_collections_group_is_alphabetized(self):
+        """Collections in the browse tree should be stable and alphabetical."""
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into collections (id, name, description, created_at, updated_at, hidden)
+                values (?, ?, ?, ?, ?, 0)
+                """,
+                ("c-zebra", "CB: Zebra", "", "2026-03-01T00:00:00+00:00", "2026-03-02T00:00:03+00:00"),
+            )
+            db.exec(
+                """
+                insert into collections (id, name, description, created_at, updated_at, hidden)
+                values (?, ?, ?, ?, ?, 0)
+                """,
+                ("c-alpha", "CB: Alpha", "", "2026-03-01T00:00:00+00:00", "2026-03-02T00:00:01+00:00"),
+            )
+            db.exec(
+                """
+                insert into collections (id, name, description, created_at, updated_at, hidden)
+                values (?, ?, ?, ?, ?, 0)
+                """,
+                ("c-bath", "Bathroom", "", "2026-03-01T00:00:00+00:00", "2026-03-02T00:00:02+00:00"),
+            )
+            db.exec(
+                """
+                insert into collections (id, name, description, created_at, updated_at, hidden)
+                values (?, ?, ?, ?, ?, 1)
+                """,
+                ("c-hidden", "CB: Hidden", "", "2026-03-01T00:00:00+00:00", "2026-03-02T00:00:04+00:00"),
+            )
+
+        tree = self._get("/api/catalog/tree")["tree"]
+        collections_node = next((n for n in tree if n.get("type") == "collections_group"), None)
+        self.assertIsNotNone(collections_node, "collections group should be present")
+        labels = [str(c.get("label") or "") for c in collections_node.get("children", [])]
+        self.assertEqual(labels, ["Bathroom", "CB: Alpha", "CB: Zebra"])
+
+    def test_collections_group_counts_only_visible_items(self):
+        """Collection counts should match visible items returned by /api/assets."""
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into collections (id, name, description, created_at, updated_at, hidden)
+                values (?, ?, ?, ?, ?, 0)
+                """,
+                ("c-visible-check", "Visible Count Check", "", "2026-03-01T00:00:00+00:00", "2026-03-02T00:00:00+00:00"),
+            )
+            db.exec(
+                "insert into collection_items (collection_id, asset_id, position) values (?, ?, ?)",
+                ("c-visible-check", "aa000000-1000-4000-a000-000000000000", 1),
+            )
+            db.exec(
+                "insert into collection_items (collection_id, asset_id, position) values (?, ?, ?)",
+                ("c-visible-check", "dd000000-1000-4000-a000-000000000000", 2),
+            )
+
+        tree = self._get("/api/catalog/tree")["tree"]
+        collections_node = next((n for n in tree if n.get("type") == "collections_group"), None)
+        self.assertIsNotNone(collections_node, "collections group should be present")
+        target = next(
+            (c for c in collections_node.get("children", []) if str(c.get("collection_id") or "") == "c-visible-check"),
+            None,
+        )
+        self.assertIsNotNone(target, "collection should appear in collections group")
+        self.assertEqual(int(target.get("count") or 0), 1)
+
     def test_scan_source_exposes_subtype_branches(self):
         tree = self._get("/api/catalog/tree")["tree"]
         scan = next((n for n in tree if n.get("type") == "source" and n.get("label", "").lower() == "scan"), None)

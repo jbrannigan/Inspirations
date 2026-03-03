@@ -213,6 +213,15 @@ def ensure_schema(db: Db) -> None:
         );
         """
     )
+    _ensure_columns(
+        db,
+        "collections",
+        {
+            "hidden": "integer default 0",
+            "hidden_at": "text",
+        },
+    )
+    db.exec("create index if not exists ix_collections_hidden on collections(hidden);")
     db.exec(
         """
         create table if not exists collection_items (

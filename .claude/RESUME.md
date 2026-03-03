@@ -569,3 +569,41 @@ Validation:
 - `python3 tools/run_bugfix_suite.py` → PASS
   - lint: PASS
   - full unit discover: PASS (`216` tests)
+
+## Session Update (Mar 2, 2026 — Bug-Fix Sprint Wrap + Reboot Handoff)
+
+Branch:
+- `codex/sprint6-jim4-video-poster`
+
+Key outcomes now in codebase:
+- Collaborator IA defaults and collection-first browse behavior were implemented and iterated.
+- Managed Collections workflow added for owners (bulk hide, restore, delete hidden).
+- Tag workflow retired in product/API paths (`/api/assets/*/tag` and bulk tag now return `410`).
+- Tree + contract hardening added (alphabetized collections, subtype branches, visible-node contract tests).
+- Dave chat resilience improved:
+  - timeout-aware Claude retries,
+  - local fallback router for common intents,
+  - fallback guard to avoid stranding users on empty keyword filters,
+  - auto-refresh of chat catalog when DB changes.
+- Dave key runbook added and linked in project docs:
+  - `docs/LOCAL_DAVE_API_KEY.md`
+  - `README.md`
+  - `AGENTS.md`
+
+Latest validation (final before reboot):
+- `PYTHONPATH=src python3 tools/run_bugfix_suite.py` → `PASS`
+  - lint: `PASS`
+  - unit tests: `PASS` (`232` tests)
+
+Reboot-safe startup checklist:
+1. Confirm branch and working tree:
+   - `git rev-parse --abbrev-ref HEAD`
+   - `git status --short`
+2. Verify Dave key availability:
+   - `security find-generic-password -s inspirations_anthropic_api_key >/dev/null && echo found`
+3. Start server for cross-device testing:
+   - `PYTHONPATH=src python3 -m inspirations serve --host 0.0.0.0 --port 8001 --reload`
+4. Quick sanity checks:
+   - Ask Dave a known intent (`show collections`).
+   - Try a timeout/fallback-style query and ensure view is not stranded empty.
+   - Verify managed collections modal actions (hide/restore/delete hidden).

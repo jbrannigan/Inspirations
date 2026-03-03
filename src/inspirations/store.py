@@ -904,15 +904,53 @@ def triage_stats(db: Db) -> dict[str, Any]:
     return {"overall": overall, "boards": boards}
 
 
-def list_collections(db: Db) -> list[dict[str, Any]]:
-    rows = db.query(
-        "select id, name, description, created_at, updated_at from collections order by updated_at desc"
+def list_collections(db: Db, *, include_hidden: bool = False) -> list[dict[str, Any]]:
+    hidden_collection_id = str(
+        db.query_value("select id from collections where lower(name)='hidden' limit 1") or ""
     )
+    params: list[Any] = [hidden_collection_id]
+    where: list[str] = []
+    if not include_hidden:
+        where.append("coalesce(hidden, 0) = 0")
+    sql = """
+        select
+            c.id,
+            c.name,
+            c.description,
+            c.created_at,
+            c.updated_at,
+            coalesce(c.hidden, 0) as hidden,
+            c.hidden_at,
+            (
+                select count(*)
+                from collection_items ci
+                where ci.collection_id = c.id
+            ) as count_total,
+            (
+                select count(*)
+                from collection_items ci
+                join assets a on a.id = ci.asset_id
+                where ci.collection_id = c.id
+                  and (a.triage_status is null or a.triage_status != 'hidden')
+                  and a.id not in (
+                    select h.asset_id
+                    from collection_items h
+                    where h.collection_id = ?
+                  )
+            ) as count_visible
+        from collections c
+    """
+    if where:
+        sql += " where " + " and ".join(where)
+    sql += " order by c.updated_at desc"
+    rows = db.query(sql, tuple(params))
     out = []
     for r in rows:
-        count = db.query_value("select count(*) from collection_items where collection_id=?", (r["id"],))
         d = dict(r)
-        d["count"] = count
+        d["count_total"] = int(d.get("count_total") or 0)
+        d["count_visible"] = int(d.get("count_visible") or 0)
+        d["count"] = d["count_visible"]
+        d["hidden"] = int(d.get("hidden") or 0)
         out.append(d)
     return out
 
@@ -984,6 +1022,63 @@ def remove_item_from_collection(db: Db, *, collection_id: str, asset_id: str) ->
 
 def delete_collection(db: Db, *, collection_id: str) -> None:
     db.exec("delete from collections where id=?", (collection_id,))
+
+
+def set_collections_hidden(db: Db, *, collection_ids: list[str], hidden: bool) -> int:
+    ids = _unique_ids(collection_ids)
+    if not ids:
+        return 0
+    placeholders = ",".join(["?"] * len(ids))
+    target_hidden = 1 if hidden else 0
+    params = [*ids, target_hidden]
+    changed = db.query_value(
+        (
+            "select count(*) from collections "
+            f"where id in ({placeholders}) and lower(name) != 'hidden' and coalesce(hidden, 0) != ?"
+        ),
+        tuple(params),
+    )
+    if not changed:
+        return 0
+    now = _now_iso()
+    if hidden:
+        db.exec(
+            (
+                "update collections set hidden=1, hidden_at=?, updated_at=? "
+                f"where id in ({placeholders}) and lower(name) != 'hidden'"
+            ),
+            (now, now, *ids),
+        )
+    else:
+        db.exec(
+            (
+                "update collections set hidden=0, hidden_at=null, updated_at=? "
+                f"where id in ({placeholders}) and lower(name) != 'hidden'"
+            ),
+            (now, *ids),
+        )
+    return int(changed or 0)
+
+
+def delete_hidden_collections(db: Db, *, collection_ids: list[str]) -> dict[str, int]:
+    ids = _unique_ids(collection_ids)
+    if not ids:
+        return {"deleted": 0, "skipped": 0}
+    placeholders = ",".join(["?"] * len(ids))
+    rows = db.query(
+        (
+            "select id from collections "
+            f"where id in ({placeholders}) and lower(name) != 'hidden' and coalesce(hidden, 0) = 1"
+        ),
+        tuple(ids),
+    )
+    deletable_ids = [str(r["id"]) for r in rows]
+    if deletable_ids:
+        del_placeholders = ",".join(["?"] * len(deletable_ids))
+        db.exec(f"delete from collections where id in ({del_placeholders})", tuple(deletable_ids))
+    deleted = len(deletable_ids)
+    skipped = len(ids) - deleted
+    return {"deleted": deleted, "skipped": skipped}
 
 
 def delete_assets(db: Db, *, asset_ids: list[str]) -> dict[str, Any]:

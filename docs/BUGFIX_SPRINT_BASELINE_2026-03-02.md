@@ -5,6 +5,9 @@
 - Focus on stabilization for iPad + desktop.
 - Keep phone-specific issues deferred unless a fix is trivial and low risk.
 
+## Operational Runbooks
+- Dave/Anthropic key setup and keychain service name: `docs/LOCAL_DAVE_API_KEY.md`.
+
 ## Known Features and Workflows (Current System)
 
 ### 1) Identity, roles, and authorization
@@ -90,7 +93,7 @@
 - Runner: `tools/run_bugfix_suite.py`
 - Result: `PASS`
 - Lint: `PASS`
-- Unit tests: `PASS` (`212` tests)
+- Unit tests: `PASS` (`232` tests)
 
 ## Clear Fixes Applied During Sprint Kickoff
 - Fixed CI lint failure in `src/inspirations/server.py` by importing `uuid` for ingest-label inserts.
@@ -118,4 +121,19 @@ Locked outcomes:
 Latest automated validation:
 - `tools/run_bugfix_suite.py` → `PASS`
 - lint: `PASS`
-- unit tests: `PASS` (`216` tests)
+- unit tests: `PASS` (`232` tests)
+
+## Technical Debt: Retired Tag Workflow (Mar 2, 2026)
+
+Decision: UI/UX tag workflow is retired and no longer exposed in product flows.
+
+Current stop-state (implemented):
+1. Tag actions are removed from modal and canvas-review UI.
+2. Quick-tag controls are no longer rendered on cards.
+3. Tag API write endpoints now return `410` (`tag workflow retired`).
+
+Remaining cleanup debt to remove in a follow-up refactor:
+1. Legacy DB fields on `assets` (`tagged`, `tagged_by`, `tagged_note`) are still present.
+2. Legacy store helpers for tag writes remain in `src/inspirations/store.py`.
+3. Legacy read-path fields/filters still include `tagged` metadata in some responses.
+4. Unused CSS selectors related to removed tag controls remain in `app/styles.css`.

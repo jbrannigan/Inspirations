@@ -422,6 +422,143 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(set(body.get("ids", [])), {"a1", "a2"})
 
+    def test_collections_include_hidden_requires_owner(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into collections (id, name, description, created_at, updated_at) values (?, ?, ?, datetime('now'), datetime('now'))",
+                ("c2", "Bathroom", ""),
+            )
+            db.exec("update collections set hidden=1, hidden_at=datetime('now') where id='c1'")
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-cols", "Owner", "owner-cols-token", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-cols", "Collab", "collab-cols-token", "collaborator"),
+            )
+
+        status, body = self._request("/api/collections?include_hidden=1")
+        self.assertEqual(status, 200)
+        self.assertEqual({c["id"] for c in body.get("collections", [])}, {"c2"})
+
+        status, body = self._request(
+            "/api/collections?include_hidden=1",
+            headers={"X-Actor-Token": "collab-cols-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual({c["id"] for c in body.get("collections", [])}, {"c2"})
+
+        status, body = self._request(
+            "/api/collections?include_hidden=1",
+            headers={"X-Actor-Token": "owner-cols-token"},
+        )
+        self.assertEqual(status, 200)
+        hidden_map = {c["id"]: int(c.get("hidden") or 0) for c in body.get("collections", [])}
+        self.assertEqual(set(hidden_map.keys()), {"c1", "c2"})
+        self.assertEqual(hidden_map["c1"], 1)
+        self.assertEqual(hidden_map["c2"], 0)
+
+    def test_collection_bulk_hide_restore_and_delete_require_owner(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into collections (id, name, description, created_at, updated_at) values (?, ?, ?, datetime('now'), datetime('now'))",
+                ("c2", "Bathroom", ""),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-bulk-cols", "Owner", "owner-bulk-cols-token", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-bulk-cols", "Collab", "collab-bulk-cols-token", "collaborator"),
+            )
+
+        status, body = self._request(
+            "/api/collections/bulk-hide",
+            method="POST",
+            payload={"collection_ids": ["c2"], "hidden": True},
+            headers={"X-Actor-Token": "collab-bulk-cols-token"},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(body.get("error"), "owner access required")
+
+        status, body = self._request(
+            "/api/collections/bulk-hide",
+            method="POST",
+            payload={"collection_ids": ["c2"], "hidden": True},
+            headers={"X-Actor-Token": "owner-bulk-cols-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body.get("updated"), 1)
+        self.assertEqual(body.get("hidden"), 1)
+
+        with Db(self.db_path) as db:
+            hidden_value = db.query_value("select coalesce(hidden, 0) from collections where id='c2'")
+        self.assertEqual(int(hidden_value or 0), 1)
+
+        status, body = self._request(
+            "/api/collections/bulk-hide",
+            method="POST",
+            payload={"collection_ids": ["c2"], "hidden": False},
+            headers={"X-Actor-Token": "owner-bulk-cols-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body.get("updated"), 1)
+        self.assertEqual(body.get("hidden"), 0)
+
+        with Db(self.db_path) as db:
+            hidden_value = db.query_value("select coalesce(hidden, 0) from collections where id='c2'")
+        self.assertEqual(int(hidden_value or 0), 0)
+
+        status, body = self._request(
+            "/api/collections/bulk-hide",
+            method="POST",
+            payload={"collection_ids": ["c2"], "hidden": True},
+            headers={"X-Actor-Token": "owner-bulk-cols-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body.get("updated"), 1)
+
+        status, body = self._request(
+            "/api/collections/bulk-delete",
+            method="POST",
+            payload={"collection_ids": ["c2", "c1"]},
+            headers={"X-Actor-Token": "owner-bulk-cols-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body.get("deleted"), 1)
+        self.assertEqual(body.get("skipped"), 1)
+
+        with Db(self.db_path) as db:
+            exists_c2 = db.query_value("select count(*) from collections where id='c2'")
+            exists_c1 = db.query_value("select count(*) from collections where id='c1'")
+        self.assertEqual(int(exists_c2 or 0), 0)
+        self.assertEqual(int(exists_c1 or 0), 1)
+
+    def test_collections_count_reflects_visible_items(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec("update assets set triage_status='hidden' where id='a2'")
+            db.exec(
+                "insert into collections (id, name, description, created_at, updated_at) values (?, ?, ?, datetime('now'), datetime('now'))",
+                ("hidden-col", "Hidden", "",),
+            )
+            db.exec(
+                "insert into collection_items (collection_id, asset_id, position) values (?, ?, ?)",
+                ("hidden-col", "a1", 1),
+            )
+
+        status, body = self._request("/api/collections")
+        self.assertEqual(status, 200)
+        c1 = next((c for c in body.get("collections", []) if c.get("id") == "c1"), None)
+        self.assertIsNotNone(c1)
+        self.assertEqual(int(c1.get("count") or 0), 0)
+        self.assertEqual(int(c1.get("count_visible") or 0), 0)
+        self.assertEqual(int(c1.get("count_total") or 0), 2)
+
     def test_catalog_endpoints_include_hidden_require_owner(self):
         visible_id = "feedface-0000-0000-0000-000000000000"
         hidden_id = "deadbeef-0000-0000-0000-000000000000"
@@ -496,6 +633,169 @@ class TestServerApi(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(set(body.get("ids", [])), {visible_id, hidden_id})
+
+    def test_collaborator_default_browse_scope_excludes_non_home_category(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec("update assets set category='other' where id='a2'")
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-scope-1", "Owner", "owner-scope-token-1", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-scope-1", "Collab", "collab-scope-token-1", "collaborator"),
+            )
+
+        status, body = self._request(
+            "/api/assets?limit=20",
+            headers={"X-Actor-Token": "collab-scope-token-1"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual({a["id"] for a in body.get("assets", [])}, {"a1"})
+
+        status, body = self._request(
+            "/api/asset-ids",
+            headers={"X-Actor-Token": "collab-scope-token-1"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(set(body.get("ids", [])), {"a1"})
+
+        status, body = self._request(
+            "/api/assets?collection_id=c1&limit=20",
+            headers={"X-Actor-Token": "collab-scope-token-1"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual({a["id"] for a in body.get("assets", [])}, {"a1", "a2"})
+
+    def test_collaborator_catalog_tree_hides_other_dimension(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-tree-1", "Owner", "owner-tree-token-1", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-tree-1", "Collab", "collab-tree-token-1", "collaborator"),
+            )
+
+        catalog_dir = self.tmp_path / "catalog-tree"
+        catalog_dir.mkdir(parents=True, exist_ok=True)
+        (catalog_dir / "room").mkdir(parents=True, exist_ok=True)
+        (catalog_dir / "other").mkdir(parents=True, exist_ok=True)
+        (catalog_dir / "_index.md").write_text(
+            "\n".join(
+                [
+                    "# Inspirations Catalog",
+                    "",
+                    "## By Room (1 item-assignments)",
+                    "",
+                    "| File | Category | Items | Topics |",
+                    "|------|----------|-------|--------|",
+                    "| room/kitchen.md | kitchen | 1 | kitchen |",
+                    "",
+                    "## Other / Non-Home-Design (1 items)",
+                    "",
+                    "| File | Category | Items | Topics |",
+                    "|------|----------|-------|--------|",
+                    "| other/exercise.md | exercise | 1 | exercise |",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        self.server.catalog_dir = catalog_dir
+
+        status, body = self._request(
+            "/api/catalog/tree",
+            headers={"X-Actor-Token": "owner-tree-token-1"},
+        )
+        self.assertEqual(status, 200)
+        owner_ids = {str(n.get("id") or "") for n in body.get("tree", [])}
+        self.assertIn("dimension:other", owner_ids)
+
+        status, body = self._request(
+            "/api/catalog/tree",
+            headers={"X-Actor-Token": "collab-tree-token-1"},
+        )
+        self.assertEqual(status, 200)
+        collab_ids = {str(n.get("id") or "") for n in body.get("tree", [])}
+        self.assertNotIn("dimension:other", collab_ids)
+
+    def test_collaborator_catalog_endpoints_hide_other_files(self):
+        other_id = "bead0001-0000-0000-0000-000000000000"
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into assets (id, source, source_ref, title, imported_at, category)
+                values (?, ?, ?, ?, datetime('now'), ?)
+                """,
+                (other_id, "pinterest", "pin://other", "Other Asset", "other"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-other-1", "Owner", "owner-other-token-1", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-other-1", "Collab", "collab-other-token-1", "collaborator"),
+            )
+
+        catalog_dir = self.tmp_path / "catalog-other"
+        other_dir = catalog_dir / "other"
+        other_dir.mkdir(parents=True, exist_ok=True)
+        rel_file = "other/exercise.md"
+        (catalog_dir / "_index.md").write_text(
+            "\n".join(
+                [
+                    "# Inspirations Catalog",
+                    "",
+                    "## Other / Non-Home-Design (1 items)",
+                    "",
+                    "| File | Category | Items | Topics |",
+                    "|------|----------|-------|--------|",
+                    "| other/exercise.md | exercise | 1 | exercise |",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (catalog_dir / rel_file).write_text(
+            "- bead0001 | other\n",
+            encoding="utf-8",
+        )
+        self.server.catalog_dir = catalog_dir
+        rel_q = urllib.parse.quote(rel_file, safe="/")
+
+        status, body = self._request(
+            f"/api/catalog/items?file={rel_q}&limit=100",
+            headers={"X-Actor-Token": "owner-other-token-1"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual({a["id"] for a in body.get("assets", [])}, {other_id})
+
+        status, body = self._request(
+            f"/api/catalog/items?file={rel_q}&limit=100",
+            headers={"X-Actor-Token": "collab-other-token-1"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body.get("assets", []), [])
+
+        status, body = self._request(
+            f"/api/catalog/asset-ids?file={rel_q}",
+            headers={"X-Actor-Token": "owner-other-token-1"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(set(body.get("ids", [])), {other_id})
+
+        status, body = self._request(
+            f"/api/catalog/asset-ids?file={rel_q}",
+            headers={"X-Actor-Token": "collab-other-token-1"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body.get("ids", []), [])
 
     def test_assets_endpoint_supports_media_status_filter(self):
         status, body = self._request("/api/assets?media_status=metadata_only")
@@ -630,6 +930,28 @@ class TestServerApi(unittest.TestCase):
         self.assertTrue(body.get("found"))
         self.assertTrue(body.get("item_hidden"))
 
+    def test_me_prefers_query_actor_over_header_token(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-me-1", "Owner", "owner-me-token", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-me-1", "Collab", "collab-me-token", "collaborator"),
+            )
+
+        status, body = self._request(
+            "/api/me?actor=owner-me-token",
+            headers={"X-Actor-Token": "collab-me-token"},
+        )
+        self.assertEqual(status, 200)
+        actor = body.get("actor") or {}
+        self.assertEqual(actor.get("name"), "Owner")
+        self.assertEqual(actor.get("role"), "owner")
+        self.assertEqual(actor.get("token"), "owner-me-token")
+
     def test_annotation_edit_and_delete_permissions(self):
         with Db(self.db_path) as db:
             ensure_schema(db)
@@ -709,6 +1031,34 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(own_text, "updated by self")
         self.assertEqual(remaining_other, 0)
 
+    def test_annotation_create_prefers_query_actor_over_header(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-ann-3", "Owner", "owner-ann-token-3", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-ann-4", "Collab", "collab-ann-token-4", "collaborator"),
+            )
+
+        status, body = self._request(
+            "/api/annotations?actor=owner-ann-token-3",
+            method="POST",
+            payload={"asset_id": "a1", "x": 0.25, "y": 0.45, "text": "query wins"},
+            headers={"X-Actor-Token": "collab-ann-token-4"},
+        )
+        self.assertEqual(status, 201)
+        ann = body.get("annotation") or {}
+        self.assertEqual(ann.get("actor_name"), "Owner")
+        self.assertEqual(ann.get("actor_id"), "owner-ann-3")
+
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            actor_name = db.query_value("select actor_name from annotations where id=?", (ann.get("id"),))
+        self.assertEqual(actor_name, "Owner")
+
     def test_annotation_resolve_requires_owner(self):
         with Db(self.db_path) as db:
             ensure_schema(db)
@@ -750,6 +1100,184 @@ class TestServerApi(unittest.TestCase):
             ensure_schema(db)
             resolved = db.query_value("select resolved from annotations where id='ann-q-1'")
         self.assertEqual(resolved, 1)
+
+    def test_questions_dashboard_owner_only_and_lists_open_questions(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-qdash-1", "Leslie", "owner-qdash-token-1", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-qdash-1", "Mark", "collab-qdash-token-1", "collaborator"),
+            )
+            db.exec(
+                """
+                insert into annotations
+                  (id, asset_id, x, y, text, created_at, updated_at, actor_id, actor_name, annotation_type, resolved)
+                values (?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?, ?, 'question', 0)
+                """,
+                ("ann-qdash-1", "a1", 0.12, 0.18, "Is this the right vanity?", "collab-qdash-1", "Mark"),
+            )
+            db.exec(
+                """
+                insert into annotations
+                  (id, asset_id, x, y, text, created_at, updated_at, actor_id, actor_name, annotation_type, resolved)
+                values (?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?, ?, 'question', 1)
+                """,
+                ("ann-qdash-2", "a1", 0.35, 0.41, "Resolved question", "collab-qdash-1", "Mark"),
+            )
+
+        status, body = self._request("/api/questions/dashboard")
+        self.assertEqual(status, 403)
+        self.assertEqual(body.get("error"), "owner access required")
+
+        status, body = self._request(
+            "/api/questions/dashboard",
+            headers={"X-Actor-Token": "collab-qdash-token-1"},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(body.get("error"), "owner access required")
+
+        status, body = self._request(
+            "/api/questions/dashboard",
+            headers={"X-Actor-Token": "owner-qdash-token-1"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(int(body.get("total") or 0), 1)
+        questions = body.get("questions") or []
+        self.assertEqual(len(questions), 1)
+        q = questions[0]
+        self.assertEqual(q.get("id"), "ann-qdash-1")
+        self.assertEqual(q.get("actor_name"), "Mark")
+        self.assertEqual(q.get("asset_id"), "a1")
+        self.assertEqual(q.get("annotation_type"), "question")
+        self.assertEqual(int(q.get("resolved") or 0), 0)
+
+    def test_flag_is_owner_only_and_tag_workflow_retired(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-leslie-1", "Leslie", "leslie-token-1", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-jim-1", "Jim", "jim-token-1", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("builder-mark-1", "Mark (Builder)", "mark-token-1", "builder"),
+            )
+
+        status, body = self._request(
+            "/api/assets/a1/flag",
+            method="POST",
+            payload={"flagged": 1},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(body.get("error"), "flagging is restricted to owners")
+
+        status, body = self._request(
+            "/api/assets/a1/flag",
+            method="POST",
+            payload={"flagged": 1},
+            headers={"X-Actor-Token": "jim-token-1"},
+        )
+        self.assertEqual(status, 200)
+
+        status, body = self._request(
+            "/api/assets/a1/flag",
+            method="POST",
+            payload={"flagged": 1},
+            headers={"X-Actor-Token": "mark-token-1"},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(body.get("error"), "flagging is restricted to owners")
+
+        status, _ = self._request(
+            "/api/assets/a1/flag",
+            method="POST",
+            payload={"flagged": 1},
+            headers={"X-Actor-Token": "leslie-token-1"},
+        )
+        self.assertEqual(status, 200)
+
+        status, body = self._request(
+            "/api/assets/a1/tag",
+            method="POST",
+            payload={"tagged": 1},
+        )
+        self.assertEqual(status, 410)
+        self.assertEqual(body.get("error"), "tag workflow retired")
+
+        status, body = self._request(
+            "/api/assets/a1/tag",
+            method="POST",
+            payload={"tagged": 1},
+            headers={"X-Actor-Token": "leslie-token-1"},
+        )
+        self.assertEqual(status, 410)
+        self.assertEqual(body.get("error"), "tag workflow retired")
+
+        status, body = self._request(
+            "/api/assets/a1/tag",
+            method="POST",
+            payload={"tagged": 1},
+            headers={"X-Actor-Token": "mark-token-1"},
+        )
+        self.assertEqual(status, 410)
+        self.assertEqual(body.get("error"), "tag workflow retired")
+
+        status, body = self._request(
+            "/api/assets/a1/tag",
+            method="POST",
+            payload={"tagged": 1},
+            headers={"X-Actor-Token": "jim-token-1"},
+        )
+        self.assertEqual(status, 410)
+        self.assertEqual(body.get("error"), "tag workflow retired")
+
+        status, body = self._request(
+            "/api/assets/flag/bulk",
+            method="POST",
+            payload={"ids": ["a1", "a2"], "flagged": 1},
+            headers={"X-Actor-Token": "mark-token-1"},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(body.get("error"), "flagging is restricted to owners")
+
+        status, body = self._request(
+            "/api/assets/tag/bulk",
+            method="POST",
+            payload={"ids": ["a1", "a2"], "tagged": 1},
+            headers={"X-Actor-Token": "mark-token-1"},
+        )
+        self.assertEqual(status, 410)
+        self.assertEqual(body.get("error"), "tag workflow retired")
+
+        status, body = self._request(
+            "/api/assets/flag/bulk",
+            method="POST",
+            payload={"ids": ["a1", "a2"], "flagged": 1},
+            headers={"X-Actor-Token": "leslie-token-1"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(int(body.get("updated") or 0), 2)
+
+        status, body = self._request(
+            "/api/assets/flag/bulk",
+            method="POST",
+            payload={"ids": ["a1", "a2"], "flagged": 1},
+            headers={"X-Actor-Token": "jim-token-1"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(int(body.get("updated") or 0), 2)
+
+        with Db(self.db_path) as db:
+            flagged_by = db.query_value("select flagged_by from assets where id='a1'")
+        self.assertEqual(flagged_by, "Jim")
 
     def test_assets_endpoint_supports_label_mode_all(self):
         with Db(self.db_path) as db:
@@ -1136,7 +1664,7 @@ class TestServerApi(unittest.TestCase):
         req = urllib.request.Request(f"{self.base_url}/app/app.js?v=6", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
             self.assertEqual(resp.status, 200)
-            self.assertEqual(resp.headers.get("Cache-Control"), "public, max-age=31536000, immutable")
+            self.assertEqual(resp.headers.get("Cache-Control"), "public, max-age=300")
 
     def test_head_requests_supported_for_api_and_static_assets(self):
         status, body, headers = self._request("/api/assets?limit=1", method="HEAD", return_headers=True)

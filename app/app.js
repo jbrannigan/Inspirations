@@ -36,6 +36,7 @@ const state = {
 
   // Collections + facets + catalog
   collections: [],
+  hiddenCollections: [],
   facets: { sources: [], boards: [] },
   catalogTree: [],
 
@@ -723,6 +724,14 @@ function getReviewScopeInfo() {
   };
 }
 
+function _reviewActorLabel() {
+  const actor = state.actor || null;
+  if (!actor) return "Reviewer: Not signed in";
+  const name = String(actor.name || "Unknown").trim() || "Unknown";
+  const role = String(actor.role || "").trim().toLowerCase();
+  return role ? `Reviewer: ${name} (${role})` : `Reviewer: ${name}`;
+}
+
 function updateReviewScopeChips() {
   const scope = getReviewScopeInfo();
   const chipText = `Scope: ${scope.label}`;
@@ -730,6 +739,10 @@ function updateReviewScopeChips() {
   if (headerChip) headerChip.textContent = chipText;
   const modalChip = $("#modalReviewScope");
   if (modalChip) modalChip.textContent = chipText;
+  const oneByOneActorChip = $("#reviewActorChip");
+  if (oneByOneActorChip) oneByOneActorChip.textContent = _reviewActorLabel();
+  const canvasActorChip = $("#reviewActorChipCanvas");
+  if (canvasActorChip) canvasActorChip.textContent = _reviewActorLabel();
   const modalLocalHideBtn = $("#modalHideLocalBtn");
   if (modalLocalHideBtn) modalLocalHideBtn.disabled = !scope.hasCollectionScope;
 }
@@ -922,6 +935,13 @@ function renderModalSourceLinks(asset) {
     sourceSiteRow.hidden = false;
   } else if (sourceSiteRow) {
     sourceSiteRow.hidden = true;
+  }
+
+  const sourceLinksWrap = $("#modalSourceLinks");
+  if (sourceLinksWrap) {
+    const primaryVisible = !!(sourceLink && !sourceLink.hidden);
+    const secondaryVisible = !!(sourceSiteRow && !sourceSiteRow.hidden);
+    sourceLinksWrap.hidden = !(primaryVisible || secondaryVisible);
   }
 
 }
@@ -1183,14 +1203,9 @@ function buildCard(a) {
   const flagged = a.flagged == 1;
   const tagged = a.tagged == 1;
 
-  // Triage/flag/tag badges — owner-only
-  let tagBadgeHtml = "";
+  // Triage/flag badges — owner-only
   let badgeHtml = "";
   if (isOwner()) {
-    // Tagged badge (Jim's anomaly markers for Claude Code diagnosis)
-    if (tagged) {
-      tagBadgeHtml = '<span class="triage-badge tagged" title="Tagged for diagnosis"></span>';
-    }
     if (flagged) {
       badgeHtml = '<span class="triage-badge flagged" title="Flagged for review"></span>';
     } else if (ts === "keeper" && needsComment) {
@@ -1220,7 +1235,7 @@ function buildCard(a) {
   const titleQualityHtml = titleQuality.label
     ? `<span class="title-quality-badge ${escapeHtml(titleQuality.kind)}" title="${escapeHtml(titleQuality.tooltip)}">${escapeHtml(titleQuality.label)}</span>`
     : "";
-  const quickTagHtml = state.actor
+  const quickTagHtml = canUseTag()
     ? `<button class="card-quick-tag${tagged ? " tagged" : ""}" title="${tagged ? "Remove tag" : "Tag for diagnosis"}" type="button">🏷️</button>`
     : "";
   const isKeeper = ts === "keeper";
@@ -1243,7 +1258,7 @@ function buildCard(a) {
     <div class="card-image">
       <div class="card-checkbox"></div>
       ${mediaHtml}
-      ${tagBadgeHtml}${badgeHtml}
+      ${badgeHtml}
       <span class="source-badge source-${escapeHtml(a.source || "")}">${escapeHtml(sourceLabel)}</span>
       ${quickStarHtml}
       ${quickTagHtml}
@@ -1291,6 +1306,10 @@ function buildCard(a) {
   if (quickTagBtn) {
     quickTagBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
+      if (!canUseTag()) {
+        Shared.showToast("Tag workflow retired.", { type: "info" });
+        return;
+      }
       const newTagged = a.tagged ? 0 : 1;
       try {
         await api(`/api/assets/${encodeURIComponent(a.id)}/tag`, {
@@ -2010,6 +2029,11 @@ async function pollQuestions() {
   }
 }
 
+function refreshQuestionsIfOwner() {
+  if (!isOwner()) return;
+  void pollQuestions();
+}
+
 function renderQuestionBadge() {
   let badge = $("#questionBadge");
   if (!badge) {
@@ -2092,13 +2116,202 @@ function wireStatusChips() {
 
 // ─── Collections ────────────────────────────────────────────────────────────────
 
+function _isSystemHiddenCollectionName(name) {
+  return String(name || "").trim().toLowerCase() === "hidden";
+}
+
+function _collectionIsHidden(collection) {
+  if (!collection) return false;
+  const raw = collection.hidden;
+  if (raw === true) return true;
+  const n = Number(raw);
+  return Number.isFinite(n) && n === 1;
+}
+
 async function loadCollections() {
   try {
     const data = await api("/api/collections");
-    state.collections = data.collections || [];
+    const rows = Array.isArray(data.collections) ? data.collections : [];
+    state.collections = rows
+      .filter((c) => !_collectionIsHidden(c))
+      .filter((c) => !_isSystemHiddenCollectionName(c.name));
+    state.hiddenCollections = [];
   } catch (e) {
     console.error("Failed to load collections:", e);
   }
+}
+
+async function loadCollectionsForManager() {
+  try {
+    const data = await api("/api/collections?include_hidden=1");
+    const rows = Array.isArray(data.collections) ? data.collections : [];
+    const nonSystem = rows.filter((c) => !_isSystemHiddenCollectionName(c.name));
+    state.collections = nonSystem.filter((c) => !_collectionIsHidden(c));
+    state.hiddenCollections = nonSystem.filter((c) => _collectionIsHidden(c));
+  } catch (e) {
+    console.error("Failed to load collections:", e);
+    state.collections = [];
+    state.hiddenCollections = [];
+  }
+}
+
+const collectionBulkSelection = {
+  active: new Set(),
+  hidden: new Set(),
+};
+
+function _pruneCollectionBulkSelection() {
+  const activeIds = new Set((state.collections || []).map((c) => String(c.id || "")));
+  const hiddenIds = new Set((state.hiddenCollections || []).map((c) => String(c.id || "")));
+  for (const id of Array.from(collectionBulkSelection.active)) {
+    if (!activeIds.has(id)) collectionBulkSelection.active.delete(id);
+  }
+  for (const id of Array.from(collectionBulkSelection.hidden)) {
+    if (!hiddenIds.has(id)) collectionBulkSelection.hidden.delete(id);
+  }
+}
+
+function _renderCollectionBulkList(kind) {
+  const isHidden = kind === "hidden";
+  const listEl = isHidden ? $("#collectionBulkHiddenList") : $("#collectionBulkActiveList");
+  const countEl = isHidden ? $("#collectionBulkHiddenCount") : $("#collectionBulkActiveCount");
+  const selected = isHidden ? collectionBulkSelection.hidden : collectionBulkSelection.active;
+  const rows = isHidden ? (state.hiddenCollections || []) : (state.collections || []);
+  if (countEl) {
+    countEl.textContent = `${rows.length} collection${rows.length === 1 ? "" : "s"}`;
+  }
+  if (!listEl) return;
+  if (!rows.length) {
+    listEl.innerHTML = `<div class="muted">${isHidden ? "No hidden collections." : "No active collections."}</div>`;
+    return;
+  }
+  listEl.innerHTML = rows.map((c) => {
+    const id = String(c.id || "");
+    const checked = selected.has(id) ? "checked" : "";
+    const name = escapeHtml(String(c.name || "Untitled collection"));
+    const count = Number(c.count || 0);
+    return (
+      `<label class="collectionBulkRow">`
+      + `<input type="checkbox" data-kind="${isHidden ? "hidden" : "active"}" data-id="${escapeHtml(id)}" ${checked} />`
+      + `<span class="collectionBulkName">${name}</span>`
+      + `<span class="collectionBulkCount">${count}</span>`
+      + `</label>`
+    );
+  }).join("");
+  listEl.querySelectorAll("input[type='checkbox'][data-id]").forEach((input) => {
+    input.addEventListener("change", () => {
+      const cid = String(input.getAttribute("data-id") || "");
+      if (!cid) return;
+      if (input.checked) selected.add(cid);
+      else selected.delete(cid);
+      refreshCollectionBulkActions();
+    });
+  });
+}
+
+function refreshCollectionBulkActions() {
+  const hideBtn = $("#collectionBulkHideBtn");
+  const restoreBtn = $("#collectionBulkRestoreBtn");
+  const deleteBtn = $("#collectionBulkDeleteBtn");
+  const selectedActive = collectionBulkSelection.active.size;
+  const selectedHidden = collectionBulkSelection.hidden.size;
+  if (hideBtn) hideBtn.disabled = selectedActive === 0;
+  if (restoreBtn) restoreBtn.disabled = selectedHidden === 0;
+  if (deleteBtn) deleteBtn.disabled = selectedHidden === 0;
+}
+
+function renderCollectionBulkModal() {
+  _pruneCollectionBulkSelection();
+  _renderCollectionBulkList("active");
+  _renderCollectionBulkList("hidden");
+  refreshCollectionBulkActions();
+}
+
+async function _refreshCollectionViewsAfterBulkChange() {
+  await Promise.all([loadCollections(), loadCatalogTree()]);
+  if (isOwner()) await loadHiddenTree();
+  await loadAssets();
+}
+
+async function bulkHideCollections() {
+  const ids = Array.from(collectionBulkSelection.active);
+  if (!ids.length) return;
+  try {
+    const payload = await api("/api/collections/bulk-hide", {
+      method: "POST",
+      body: JSON.stringify({ collection_ids: ids, hidden: true }),
+    });
+    const updated = Number(payload.updated || 0);
+    Shared.showToast(`Hidden ${updated} collection${updated === 1 ? "" : "s"}.`, { type: "success" });
+    collectionBulkSelection.active.clear();
+    await loadCollectionsForManager();
+    renderCollectionBulkModal();
+    await _refreshCollectionViewsAfterBulkChange();
+  } catch (e) {
+    Shared.showToast(`Hide failed: ${formatApiError(e)}`, { type: "error" });
+  }
+}
+
+async function bulkRestoreCollections() {
+  const ids = Array.from(collectionBulkSelection.hidden);
+  if (!ids.length) return;
+  try {
+    const payload = await api("/api/collections/bulk-hide", {
+      method: "POST",
+      body: JSON.stringify({ collection_ids: ids, hidden: false }),
+    });
+    const updated = Number(payload.updated || 0);
+    Shared.showToast(`Restored ${updated} collection${updated === 1 ? "" : "s"}.`, { type: "success" });
+    collectionBulkSelection.hidden.clear();
+    await loadCollectionsForManager();
+    renderCollectionBulkModal();
+    await _refreshCollectionViewsAfterBulkChange();
+  } catch (e) {
+    Shared.showToast(`Restore failed: ${formatApiError(e)}`, { type: "error" });
+  }
+}
+
+async function bulkDeleteHiddenCollections() {
+  const ids = Array.from(collectionBulkSelection.hidden);
+  if (!ids.length) return;
+  const ok = confirm(`Delete ${ids.length} hidden collection${ids.length === 1 ? "" : "s"} permanently? This cannot be undone.`);
+  if (!ok) return;
+  try {
+    const payload = await api("/api/collections/bulk-delete", {
+      method: "POST",
+      body: JSON.stringify({ collection_ids: ids }),
+    });
+    const deleted = Number(payload.deleted || 0);
+    const skipped = Number(payload.skipped || 0);
+    if (skipped > 0) {
+      Shared.showToast(`Deleted ${deleted}. Skipped ${skipped} (must already be hidden).`, { type: "info" });
+    } else {
+      Shared.showToast(`Deleted ${deleted} hidden collection${deleted === 1 ? "" : "s"}.`, { type: "success" });
+    }
+    collectionBulkSelection.hidden.clear();
+    await loadCollectionsForManager();
+    renderCollectionBulkModal();
+    await _refreshCollectionViewsAfterBulkChange();
+  } catch (e) {
+    Shared.showToast(`Delete failed: ${formatApiError(e)}`, { type: "error" });
+  }
+}
+
+async function openCollectionBulkModal() {
+  if (!isOwner()) {
+    Shared.showToast("Owner access required.", { type: "error" });
+    return;
+  }
+  await loadCollectionsForManager();
+  renderCollectionBulkModal();
+  $("#collectionBulkModal")?.classList.remove("hidden");
+}
+
+function closeCollectionBulkModal() {
+  collectionBulkSelection.active.clear();
+  collectionBulkSelection.hidden.clear();
+  renderCollectionBulkModal();
+  $("#collectionBulkModal")?.classList.add("hidden");
 }
 
 function setCollectionFilter(collectionId) {
@@ -2130,6 +2343,29 @@ $("#newCollection").addEventListener("click", async () => {
     Shared.showToast(`Failed: ${formatApiError(e)}`, { type: "error" });
   }
 });
+
+const manageCollectionsBtn = $("#manageCollections");
+if (manageCollectionsBtn) {
+  manageCollectionsBtn.addEventListener("click", async () => {
+    await openCollectionBulkModal();
+  });
+}
+const closeCollectionBulkBtn = $("#closeCollectionBulk");
+if (closeCollectionBulkBtn) closeCollectionBulkBtn.addEventListener("click", closeCollectionBulkModal);
+const cancelCollectionBulkBtn = $("#cancelCollectionBulk");
+if (cancelCollectionBulkBtn) cancelCollectionBulkBtn.addEventListener("click", closeCollectionBulkModal);
+const collectionBulkHideBtn = $("#collectionBulkHideBtn");
+if (collectionBulkHideBtn) collectionBulkHideBtn.addEventListener("click", bulkHideCollections);
+const collectionBulkRestoreBtn = $("#collectionBulkRestoreBtn");
+if (collectionBulkRestoreBtn) collectionBulkRestoreBtn.addEventListener("click", bulkRestoreCollections);
+const collectionBulkDeleteBtn = $("#collectionBulkDeleteBtn");
+if (collectionBulkDeleteBtn) collectionBulkDeleteBtn.addEventListener("click", bulkDeleteHiddenCollections);
+const collectionBulkModalEl = $("#collectionBulkModal");
+if (collectionBulkModalEl) {
+  collectionBulkModalEl.addEventListener("click", (e) => {
+    if (e.target === collectionBulkModalEl) closeCollectionBulkModal();
+  });
+}
 
 // ─── Detail modal ────────────────────────────────────────────────────────────────
 
@@ -2331,6 +2567,7 @@ async function openModal(asset) {
   if (notesArea) {
     notesArea.value = asset.notes || "";
     notesArea.oninput = () => scheduleNotesUpdate(asset.id, notesArea.value);
+    notesArea.onblur = () => { void persistAssetNotesNow(asset.id, notesArea.value); };
   }
 
   // Keeper star in modal title
@@ -2353,6 +2590,10 @@ async function openModal(asset) {
     flagBtn.classList.toggle("active", !!asset.flagged);
     flagBtn.textContent = asset.flagged ? "🚩 Flagged" : "🚩 Flag";
     flagBtn.onclick = async () => {
+      if (!canUseFlag()) {
+        Shared.showToast("Flagging is owner-only.", { type: "info" });
+        return;
+      }
       const newFlagged = asset.flagged ? 0 : 1;
       try {
         await api(`/api/assets/${encodeURIComponent(asset.id)}/flag`, {
@@ -2387,6 +2628,10 @@ async function openModal(asset) {
     tagBtn.classList.toggle("active", !!asset.tagged);
     tagBtn.textContent = asset.tagged ? "🏷️ Tagged" : "🏷️ Tag";
     tagBtn.onclick = async () => {
+      if (!canUseTag()) {
+        Shared.showToast("Tag workflow retired.", { type: "info" });
+        return;
+      }
       const newTagged = asset.tagged ? 0 : 1;
       try {
         await api(`/api/assets/${encodeURIComponent(asset.id)}/tag`, {
@@ -2554,9 +2799,20 @@ async function setTriageFromModal(asset, status) {
 }
 
 function closeModal() {
+  const currentAsset = state.modalAsset;
+  const notesArea = $("#assetNotes");
+  if (currentAsset && notesArea) {
+    void persistAssetNotesNow(currentAsset.id, notesArea.value);
+  }
+  const activeAnnId = state.activeAnnotationId;
+  const floatingTextEl = $("#floatingText");
+  if (activeAnnId && floatingTextEl) {
+    void persistAnnotationNow(activeAnnId, { text: floatingTextEl.value });
+  }
   $("#modal").classList.add("hidden");
   state.modalAsset = null;
   state.annotations = [];
+  state.activeAnnotationId = null;
   const img = $("#modalImage");
   if (img) img.style.display = "block";
   const video = $("#modalVideo");
@@ -2595,16 +2851,20 @@ async function _navModalScan(delta) {
 
 // ─── Notes / annotations ────────────────────────────────────────────────────────
 
+async function persistAssetNotesNow(assetId, value) {
+  clearTimeout(state.noteTimers[assetId]);
+  delete state.noteTimers[assetId];
+  try {
+    await api(`/api/assets/${encodeURIComponent(assetId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ notes: value }),
+    });
+  } catch (_) {}
+}
+
 function scheduleNotesUpdate(assetId, value) {
   clearTimeout(state.noteTimers[assetId]);
-  state.noteTimers[assetId] = setTimeout(async () => {
-    try {
-      await api(`/api/assets/${encodeURIComponent(assetId)}`, {
-        method: "PUT",
-        body: JSON.stringify({ notes: value }),
-      });
-    } catch {}
-  }, 800);
+  state.noteTimers[assetId] = setTimeout(() => { void persistAssetNotesNow(assetId, value); }, 800);
 }
 
 async function loadAnnotations(assetId) {
@@ -2675,6 +2935,9 @@ function renderAnnotations() {
         syncFloatingText(ann.id, ta.value);
         scheduleAnnotationUpdate(ann.id, { text: ta.value });
       });
+      ta.addEventListener("blur", () => {
+        void persistAnnotationNow(ann.id, { text: ta.value });
+      });
     }
     const delEl = el.querySelector("[data-del]");
     if (delEl) {
@@ -2693,6 +2956,7 @@ function renderAnnotations() {
           ann.resolved = newVal;
           renderAnnotations();
           renderMarkers();
+          refreshQuestionsIfOwner();
         } catch (err) {
           Shared.showToast(`Failed to update: ${formatApiError(err)}`, { type: "error" });
         }
@@ -2704,21 +2968,39 @@ function renderAnnotations() {
 
 function scheduleAnnotationUpdate(annId, patch) {
   clearTimeout(state.noteTimers[`ann_${annId}`]);
-  state.noteTimers[`ann_${annId}`] = setTimeout(async () => {
-    try {
-      await api(`/api/annotations/${annId}`, { method: "PUT", body: JSON.stringify(patch) });
-    } catch (e) {
-      console.error("Annotation save failed:", e);
-      Shared.showToast("Annotation save failed — will retry on next edit", { type: "error" });
-    }
-  }, 600);
+  state.noteTimers[`ann_${annId}`] = setTimeout(() => { void persistAnnotationNow(annId, patch); }, 600);
 }
 
-function setActiveAnnotation(annId) {
+function focusActiveAnnotationEditor() {
+  const annId = state.activeAnnotationId;
+  if (!annId) return;
+  const ann = state.annotations.find((a) => a.id === annId);
+  if (!ann || !canManageAnnotation(ann)) return;
+  requestAnimationFrame(() => {
+    const floatingNote = $("#floatingNote");
+    const ft = $("#floatingText");
+    if (floatingNote && ft && !floatingNote.classList.contains("hidden")) {
+      ft.focus({ preventScroll: true });
+      const end = (ft.value || "").length;
+      ft.setSelectionRange(end, end);
+      return;
+    }
+    const listTa = document.querySelector(`textarea[data-ann="${annId}"]`);
+    if (listTa && !listTa.readOnly) {
+      listTa.focus({ preventScroll: true });
+      const end = (listTa.value || "").length;
+      listTa.setSelectionRange(end, end);
+    }
+  });
+}
+
+function setActiveAnnotation(annId, options = {}) {
+  const focusEditor = !!options.focusEditor;
   state.activeAnnotationId = annId;
   renderAnnotations();
   renderMarkers();
   renderFloatingNote();
+  if (focusEditor) focusActiveAnnotationEditor();
 }
 
 function syncFloatingText(annId, value) {
@@ -2738,6 +3020,38 @@ function renderFloatingNote() {
   note.style.top = `${pt.top}px`;
   note.classList.remove("hidden");
   ft.value = ann.text || "";
+}
+
+async function persistAnnotationNow(annId, patch) {
+  clearTimeout(state.noteTimers[`ann_${annId}`]);
+  delete state.noteTimers[`ann_${annId}`];
+  try {
+    await api(`/api/annotations/${annId}`, { method: "PUT", body: JSON.stringify(patch) });
+  } catch (e) {
+    console.error("Annotation save failed:", e);
+    Shared.showToast("Annotation save failed — will retry on next edit", { type: "error" });
+  }
+}
+
+const floatingTextEl = $("#floatingText");
+if (floatingTextEl) {
+  floatingTextEl.addEventListener("input", () => {
+    const annId = state.activeAnnotationId;
+    if (!annId) return;
+    const ann = state.annotations.find((a) => a.id === annId);
+    if (!ann || !canManageAnnotation(ann)) return;
+    ann.text = floatingTextEl.value;
+    const listTextarea = document.querySelector(`textarea[data-ann="${annId}"]`);
+    if (listTextarea && listTextarea.value !== floatingTextEl.value) {
+      listTextarea.value = floatingTextEl.value;
+    }
+    scheduleAnnotationUpdate(annId, { text: floatingTextEl.value });
+  });
+  floatingTextEl.addEventListener("blur", () => {
+    const annId = state.activeAnnotationId;
+    if (!annId) return;
+    void persistAnnotationNow(annId, { text: floatingTextEl.value });
+  });
 }
 
 async function deleteAnnotationWithUndo(ann) {
@@ -2868,8 +3182,8 @@ if (imageStageEl) {
       body: JSON.stringify({ asset_id: state.modalAsset.id, x: point.x, y: point.y, text: "", annotation_type }),
     });
     state.annotations.push(res.annotation);
-    state.activeAnnotationId = res.annotation.id;
-    renderAnnotations(); renderMarkers(); renderFloatingNote();
+    setActiveAnnotation(res.annotation.id, { focusEditor: true });
+    if (annotation_type === "question") refreshQuestionsIfOwner();
   });
 
   imageStageEl.addEventListener("pointermove", async (e) => {
@@ -3079,6 +3393,8 @@ function renderReviewCard() {
   if (cb) cb.checked = false;
 
   // Update undo button
+  const prevBtn = $("#reviewPrevBtn");
+  if (prevBtn) prevBtn.disabled = state.reviewHistory.length === 0;
   const undoBtn = $("#reviewUndo");
   if (undoBtn) undoBtn.disabled = state.reviewHistory.length === 0;
 }
@@ -3310,9 +3626,9 @@ function updateCanvasSelectionCount() {
   const hideGlobalBtn = $("#canvasHideGlobal");
   if (hideGlobalBtn) hideGlobalBtn.disabled = !hasSelection;
   const flagBtn = $("#canvasFlag");
-  if (flagBtn) flagBtn.disabled = !hasSelection;
+  if (flagBtn) flagBtn.disabled = !(hasSelection && canUseFlag());
   const tagBtn = $("#canvasTag");
-  if (tagBtn) tagBtn.disabled = !hasSelection;
+  if (tagBtn) tagBtn.disabled = !(hasSelection && canUseTag());
 }
 
 async function canvasBulkKeep() {
@@ -3379,6 +3695,10 @@ async function canvasBulkHideGlobal() {
 }
 
 async function canvasBulkFlag() {
+  if (!canUseFlag()) {
+    Shared.showToast("Flagging is owner-only.", { type: "info" });
+    return;
+  }
   const ids = Array.from(state.canvasSelected);
   if (!ids.length) return;
   try {
@@ -3399,6 +3719,10 @@ async function canvasBulkFlag() {
 }
 
 async function canvasBulkTag() {
+  if (!canUseTag()) {
+    Shared.showToast("Tag workflow retired.", { type: "info" });
+    return;
+  }
   const ids = Array.from(state.canvasSelected);
   if (!ids.length) return;
   try {
@@ -3455,6 +3779,9 @@ if (reviewSkipBtn) reviewSkipBtn.addEventListener("click", () => reviewAction("s
 const reviewKeepBtn = $("#reviewKeepBtn");
 if (reviewKeepBtn) reviewKeepBtn.addEventListener("click", () => reviewAction("keep"));
 
+const reviewPrevBtn = $("#reviewPrevBtn");
+if (reviewPrevBtn) reviewPrevBtn.addEventListener("click", undoReview);
+
 const reviewUndoBtn = $("#reviewUndo");
 if (reviewUndoBtn) reviewUndoBtn.addEventListener("click", undoReview);
 
@@ -3492,6 +3819,7 @@ window.addEventListener("keydown", (e) => {
   // Close modal with Escape
   if (e.key === "Escape") {
     if (!$("#modal").classList.contains("hidden")) { closeModal(); return; }
+    if (!$("#collectionBulkModal").classList.contains("hidden")) { closeCollectionBulkModal(); return; }
     if (!$("#mediaImportModal").classList.contains("hidden") && !isAnyImportBusy()) { closeMediaImportModal(); return; }
     if (!$("#scanImportModal").classList.contains("hidden") && !state.scanImportBusy) { closeScanImportModal(); return; }
     if (!$("#photoImportModal").classList.contains("hidden") && !state.photoImportBusy) { closePhotoImportModal(); return; }
@@ -3660,7 +3988,7 @@ async function processChat(text) {
 
     const action = data.action || "message";
     const params = data.params || {};
-    const message = data.message || "";
+    let message = data.message || "";
     const routingMessage = data.routing_message || "";
 
     // Show routing acknowledgment while grid loads
@@ -3675,6 +4003,16 @@ async function processChat(text) {
 
     await executeChatAction(action, params);
 
+    if (action === "search" && /dave is unavailable/i.test(message) && (state.assets || []).length === 0) {
+      const reasonMatch = message.match(/dave is unavailable\s*\(([^)]+)\)/i);
+      const reason = reasonMatch ? ` (${reasonMatch[1]})` : "";
+      state.q = "";
+      state.chatPrompt = "";
+      state.chatItemIds = null;
+      await loadAssets();
+      message = `Dave is unavailable right now${reason}. Keyword fallback found no matches, so I left your current view unchanged.`;
+    }
+
     hideChatSpinner();
 
     if (message) {
@@ -3683,15 +4021,30 @@ async function processChat(text) {
   } catch (e) {
     hideChatSpinner();
     const errMsg = formatApiError(e);
-    if (errMsg.includes("ANTHROPIC_API_KEY") || errMsg.includes("Anthropic")) {
-      // AI chat unavailable — fall back to text search using extracted keywords
-      const keywords = _chatKeywords(trimmed) || trimmed;
-      state.chatPrompt = trimmed;
-      state.q = keywords;
-      loadAssets();
-      addChatResponse(`Filtering by "${keywords}" (AI chat unavailable without API key)`, 8000);
-    } else {
-      addChatResponse(`Chat error: ${errMsg}`, 8000);
+    const keywords = _chatKeywords(trimmed) || trimmed;
+    state.chatPrompt = trimmed;
+    state.q = keywords;
+    try {
+      await loadAssets();
+      if ((state.assets || []).length === 0) {
+        // If naive keyword fallback yields no results, revert to the user's
+        // current tree/panel scope instead of stranding them on an empty grid.
+        state.q = "";
+        state.chatPrompt = "";
+        state.chatItemIds = null;
+        await loadAssets();
+        addChatResponse(
+          `Dave is unavailable right now (${errMsg}). Text fallback found no matches, so I left your current view unchanged.`,
+          9000
+        );
+      } else {
+        addChatResponse(`Dave is unavailable right now (${errMsg}). Filtering by "${keywords}" instead.`, 9000);
+      }
+    } catch (loadErr) {
+      addChatResponse(
+        `Dave failed (${errMsg}) and fallback search failed (${formatApiError(loadErr)}).`,
+        9000
+      );
     }
   }
 }
@@ -3946,6 +4299,10 @@ async function executeChatAction(action, params) {
       break;
     }
     case "bulk_flag": {
+      if (!canUseFlag()) {
+        addChatResponse("Flagging is owner-only.", 6000);
+        break;
+      }
       const ids = (state.canvasReview && state.canvasSelected.size > 0)
         ? Array.from(state.canvasSelected)
         : state.assets.map((a) => a.id);
@@ -4428,22 +4785,20 @@ async function syncExplorerFilter() {
 // ─── Filter indicator ────────────────────────────────────────────────────────────
 
 function updateFilterIndicator() {
-  const bar = $("#filterIndicator");
-  const text = $("#filterIndicatorText");
+  const bar = $("#filterSummary");
+  const text = $("#filterSummaryText");
+  const clearBtn = $("#clearFilterSummary");
   if (!bar || !text) return;
 
+  const davePrompt = String(state.chatPrompt || "").trim();
   const parts = [];
   const catalogFiles = getCatalogFilterFiles();
   const collectionIds = getCollectionFilterIds();
 
-  // When a chat prompt is active, show it as the primary context;
-  // skip the raw search text since it's just the extracted keyword from the prompt.
-  if (state.chatPrompt) {
-    parts.push(`Dave: "${state.chatPrompt}"`);
-  } else if (state.semanticMode) {
+  if (!davePrompt && state.semanticMode) {
     const semQ = semanticQueryFromInput(state.q);
     parts.push(`Semantic search: "${semQ}"`);
-  } else if (state.q && state.q.trim()) {
+  } else if (!davePrompt && state.q && state.q.trim()) {
     parts.push(`"${state.q.trim()}"`);
   }
   if (state.currentSource && !catalogFiles.length && !collectionIds.length) {
@@ -4475,35 +4830,43 @@ function updateFilterIndicator() {
     }
   }
   if (state.triageFilter) {
-    const labels = { pending: "Pending", keeper: "Keepers", hidden: "Hidden", "needs-comment": "Needs comment", flagged: "🚩 Flagged" };
+    const labels = { pending: "Pending", keeper: "Keepers", hidden: "Hidden", "needs-comment": "Needs comment", flagged: "Flagged" };
     parts.push(`Status: ${labels[state.triageFilter] || state.triageFilter}`);
   }
 
   updateReviewScopeChips();
-  if (parts.length === 0) {
+  if (!davePrompt && parts.length === 0) {
     bar.hidden = true;
+    if (clearBtn) {
+      clearBtn.hidden = true;
+      clearBtn.disabled = true;
+    }
     return;
   }
-  text.textContent = `Results filtered by ${parts.join(" + ")}`;
+  if (davePrompt) {
+    text.textContent = parts.length
+      ? `Filtered by Dave: "${davePrompt}" • ${parts.join(" • ")}`
+      : `Filtered by Dave: "${davePrompt}"`;
+    if (clearBtn) {
+      clearBtn.hidden = false;
+      clearBtn.disabled = false;
+    }
+  } else {
+    text.textContent = `Results filtered by: ${parts.join(" • ")}`;
+    if (clearBtn) {
+      clearBtn.hidden = true;
+      clearBtn.disabled = true;
+    }
+  }
   bar.hidden = false;
 }
 
-const clearFilterBtn = $("#clearFilterIndicator");
+const clearFilterBtn = $("#clearFilterSummary");
 if (clearFilterBtn) clearFilterBtn.addEventListener("click", () => {
-  state.currentSource = null;
-  state.currentBoard = null;
-  state.currentContentKind = null;
-  clearCollectionFilter();
-  clearCatalogFilter();
-  state.currentTreeNodeId = null;
-  state.triageFilter = "";
+  if (!state.chatPrompt) return;
   state.q = "";
   state.chatPrompt = "";
   state.chatItemIds = null;
-  $$("[data-triage]").forEach((c) => {
-    c.classList.toggle("active", c.dataset.triage === "");
-  });
-  renderCatalogTree();
   updateFilterIndicator();
   loadAssets();
 });
@@ -4643,6 +5006,7 @@ async function importScanPdf(file, opts = {}) {
     await loadFacets();
     await loadAssets();
     Shared.showToast(`Imported ${created} clip page${created === 1 ? "" : "s"} from "${name}".`, { type: "success" });
+    Shared.showToast("New items may take a few seconds to appear in the tree.", { type: "info", duration: 4500 });
     closeScanImportModal();
   } catch (e) {
     Shared.showToast(`Clip import failed: ${formatApiError(e)}`, { type: "error", duration: 8000 });
@@ -4675,6 +5039,7 @@ async function importPhoto(file, opts = {}) {
     await loadFacets();
     await loadAssets();
     Shared.showToast(`Imported ${created} photo${created === 1 ? "" : "s"} from "${name}".`, { type: "success" });
+    Shared.showToast("New items may take a few seconds to appear in the tree.", { type: "info", duration: 4500 });
     closePhotoImportModal();
   } catch (e) {
     Shared.showToast(`Photo import failed: ${formatApiError(e)}`, { type: "error", duration: 8000 });
@@ -4707,6 +5072,7 @@ async function importVideo(file, opts = {}) {
     await loadFacets();
     await loadAssets();
     Shared.showToast(`Imported ${created} video${created === 1 ? "" : "s"} from "${name}".`, { type: "success" });
+    Shared.showToast("New items may take a few seconds to appear in the tree.", { type: "info", duration: 4500 });
     closeVideoImportModal();
   } catch (e) {
     Shared.showToast(`Video import failed: ${formatApiError(e)}`, { type: "error", duration: 8000 });
@@ -4907,6 +5273,15 @@ function isOwner() {
   return state.actor && state.actor.role === "owner";
 }
 
+function canUseFlag() {
+  return isOwner();
+}
+
+function canUseTag() {
+  // Tag workflow retired.
+  return false;
+}
+
 function applyRoleVisibility() {
   const owner = isOwner();
   if (state.allItemsTreeCollapsed === null) {
@@ -4924,6 +5299,8 @@ function applyRoleVisibility() {
   if (addMediaEl) addMediaEl.hidden = !owner;
   const adminEl = $(".adminLink");
   if (adminEl) adminEl.hidden = !owner;
+  const manageCollectionsEl = $("#manageCollections");
+  if (manageCollectionsEl) manageCollectionsEl.hidden = !owner;
 
   // Modal triage buttons — owner-only
   const keepBtnEl = $("#modalKeepBtn");
@@ -4943,11 +5320,16 @@ function applyRoleVisibility() {
   const reviewGroup = $("#modalReviewGroup");
   if (reviewGroup) reviewGroup.hidden = !state.actor;
 
-  // Modal flag button — visible to all logged-in actors
+  // Modal flag/tag buttons — scoped by named owner permissions
   const flagBtnEl = $("#modalFlagBtn");
-  if (flagBtnEl) flagBtnEl.hidden = !state.actor;
+  if (flagBtnEl) flagBtnEl.hidden = !canUseFlag();
   const tagBtnEl = $("#modalTagBtn");
-  if (tagBtnEl) tagBtnEl.hidden = !state.actor;
+  if (tagBtnEl) tagBtnEl.hidden = !canUseTag();
+
+  const canvasFlagBtnEl = $("#canvasFlag");
+  if (canvasFlagBtnEl) canvasFlagBtnEl.hidden = !canUseFlag();
+  const canvasTagBtnEl = $("#canvasTag");
+  if (canvasTagBtnEl) canvasTagBtnEl.hidden = !canUseTag();
 
   // Annotation question toggle — available to all (collaborators ask questions)
   // Notes textarea — available to all
@@ -4998,8 +5380,12 @@ async function checkFlaggedCount() {
     if (isOwner()) {
       loadHiddenTree();
       pollQuestions();
-      state.questionPollTimer = setInterval(pollQuestions, 60000);
+      state.questionPollTimer = setInterval(pollQuestions, 15000);
       checkFlaggedCount();
+      window.addEventListener("focus", refreshQuestionsIfOwner);
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") refreshQuestionsIfOwner();
+      });
     }
   } catch (e) {
     const grid = $("#grid");

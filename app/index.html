@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inspirations!</title>
-    <link rel="stylesheet" href="/app/styles.css?v=5" />
+    <link rel="stylesheet" href="/app/styles.css?v=11" />
     <script type="importmap">
       {
         "imports": {
@@ -101,9 +101,10 @@
           <a href="/app/admin.html" class="header-btn adminLink">Admin</a>
         </div>
       <!-- Canvas review action bar (inside header so it sticks with topbar) -->
-      <div id="canvasActionBar" class="canvas-action-bar" hidden>
+        <div id="canvasActionBar" class="canvas-action-bar" hidden>
         <div class="canvas-action-bar-inner">
           <span id="reviewScopeChip" class="canvas-scope-chip">Scope: Entire library</span>
+          <span id="reviewActorChipCanvas" class="canvas-reviewer-chip">Reviewer: Not signed in</span>
           <span id="canvasSelectionCount" class="canvas-selection-count">0 selected</span>
           <span id="reviewSelectionToolChip" class="canvas-selection-tool-chip" hidden>Selection: Click</span>
           <div class="canvas-action-buttons">
@@ -111,7 +112,6 @@
             <button id="canvasHideLocal" class="canvas-action-btn canvas-action-hide-local" type="button" disabled>↘ Hide in this collection</button>
             <button id="canvasHideGlobal" class="canvas-action-btn canvas-action-hide-global" type="button" disabled>✗ Hide globally</button>
             <button id="canvasFlag" class="canvas-action-btn canvas-action-flag" type="button" disabled>🚩 Flag</button>
-            <button id="canvasTag" class="canvas-action-btn canvas-action-tag" type="button" disabled>🏷️ Tag</button>
             <button id="canvasClear" class="canvas-action-btn" type="button">Clear</button>
           </div>
           <div class="canvas-mode-toggle">
@@ -123,11 +123,6 @@
     </header>
 
     <div id="chatResponse" class="chat-response-bar" hidden></div>
-    <div id="filterIndicator" class="filter-indicator" hidden>
-      <span class="filter-indicator-arrow">↳</span>
-      <span id="filterIndicatorText"></span>
-      <button id="clearFilterIndicator" class="filter-indicator-clear" type="button">&times; Clear</button>
-    </div>
 
     <div class="layout">
       <button id="sidebarExpandHandle" class="sidebar-handle sidebar-expand-handle" type="button" title="Show side panel" aria-label="Show side panel" hidden>&#9656;</button>
@@ -142,7 +137,7 @@
             <button class="filter-chip" data-triage="keeper">Keepers</button>
             <button class="filter-chip" data-triage="hidden">Hidden</button>
             <button class="filter-chip" data-triage="needs-comment">Needs comment</button>
-            <button class="filter-chip" data-triage="flagged" id="flaggedChip" hidden>🚩 Flagged</button>
+            <button class="filter-chip" data-triage="flagged" id="flaggedChip" hidden>Flagged</button>
           </div>
         </div>
         <div class="sidebar-section sidebar-tree-section">
@@ -157,6 +152,7 @@
         </div>
         <div class="sidebar-section">
           <button id="newCollection" class="new-item-btn" type="button">+ New Collection</button>
+          <button id="manageCollections" class="new-item-btn new-item-btn-secondary" type="button">Manage Collections</button>
         </div>
       </aside>
 
@@ -165,6 +161,10 @@
         <div class="stats-bar">
           <span id="stats" class="stats-count">Loading…</span>
           <span id="canvasNarrative" class="stats-narrative"></span>
+          <span id="filterSummary" class="stats-filter" hidden>
+            <span id="filterSummaryText"></span>
+            <button id="clearFilterSummary" class="stats-filter-clear" type="button">Clear filters</button>
+          </span>
         </div>
         <div id="contextLinkBanner" class="context-link-banner" hidden role="status" aria-live="polite"></div>
 
@@ -192,6 +192,7 @@
           <div class="review-header">
             <button id="reviewBack" class="review-back-btn" type="button">← Back to browsing</button>
             <span id="reviewCounter" class="review-counter"></span>
+            <span id="reviewActorChip" class="review-actor-chip">Reviewer: Not signed in</span>
             <div class="review-progress-track">
               <div id="reviewProgressBar" class="review-progress-bar"></div>
             </div>
@@ -210,6 +211,10 @@
           </div>
 
           <div class="review-actions">
+            <button id="reviewPrevBtn" class="review-btn review-btn-prev" type="button" title="Go back (Z)" disabled>
+              <span class="review-btn-icon">↩</span>
+              <span class="review-btn-label">Go back</span>
+            </button>
             <button id="reviewHideBtn" class="review-btn review-btn-hide" type="button" title="Hide (← or S)">
               <span class="review-btn-icon">✗</span>
               <span class="review-btn-label">Hide</span>
@@ -260,13 +265,18 @@
                 <button id="copyAssetIdBtn" class="iconBtn" type="button" title="Copy item ID">Copy ID</button>
               </div>
               <div id="modalCreator" class="muted" hidden></div>
+              <div id="modalSourceLinks" class="modal-source-links" hidden>
+                <a id="sourceLink" href="#" target="_blank" rel="noopener">Open original</a>
+                <span id="sourceSiteRow" hidden>
+                  <a id="sourceSiteLink" href="#" target="_blank" rel="noopener" class="source-site-link">Original site ↗</a>
+                </span>
+              </div>
             </div>
             <div class="modal-header-actions">
               <div id="modalReviewGroup" class="modal-action-group modal-review-group">
                 <span class="modal-action-group-label modal-review-label">Review</span>
                 <span id="modalReviewScope" class="modal-review-scope-chip">Scope: Entire library</span>
                 <button id="modalFlagBtn" class="modal-triage-btn modal-flag-btn" type="button" title="Flag for review — wrong thumbnail or needs attention">🚩 Flag</button>
-                <button id="modalTagBtn" class="modal-triage-btn" type="button" title="Tag for diagnosis">🏷️ Tag</button>
                 <button id="modalKeepBtn" class="modal-triage-btn modal-keep-btn" type="button">✓ Keep</button>
                 <button id="modalHideLocalBtn" class="modal-triage-btn modal-hide-local-btn" type="button" title="Remove from active collection scope">↘ Hide in this collection</button>
                 <button id="modalHideGlobalBtn" class="modal-triage-btn modal-hide-btn" type="button">✗ Hide globally</button>
@@ -303,13 +313,42 @@
             </div>
             <div class="sectionTitle mt-3">Notes</div>
             <textarea id="assetNotes" placeholder="General notes about this image…"></textarea>
-            <div class="muted mt-2">
-              Source: <a id="sourceLink" href="#" target="_blank" rel="noopener">Open original</a>
-            </div>
-            <div class="mt-2" id="sourceSiteRow" hidden>
-              <a id="sourceSiteLink" href="#" target="_blank" rel="noopener" class="source-site-link">Original site ↗</a>
-            </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Collection bulk manager modal -->
+    <div id="collectionBulkModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="collectionBulkTitle">
+      <div class="modalContent collectionBulkContent">
+        <div class="modalHeader">
+          <div>
+            <div id="collectionBulkTitle" class="modalTitle">Manage Collections</div>
+            <div class="muted">Hide active collections, restore hidden ones, or permanently delete hidden collections.</div>
+          </div>
+          <button id="closeCollectionBulk" type="button">Close</button>
+        </div>
+        <div class="collectionBulkBody">
+          <section class="collectionBulkSection">
+            <div class="collectionBulkSectionHeader">
+              <h3>Active Collections</h3>
+              <span id="collectionBulkActiveCount" class="muted">0 collections</span>
+            </div>
+            <div id="collectionBulkActiveList" class="collectionBulkList"></div>
+          </section>
+          <section class="collectionBulkSection">
+            <div class="collectionBulkSectionHeader">
+              <h3>Hidden Collections</h3>
+              <span id="collectionBulkHiddenCount" class="muted">0 collections</span>
+            </div>
+            <div id="collectionBulkHiddenList" class="collectionBulkList"></div>
+          </section>
+        </div>
+        <div class="collectionBulkActions">
+          <button id="collectionBulkHideBtn" type="button">Hide selected</button>
+          <button id="collectionBulkRestoreBtn" type="button">Restore selected</button>
+          <button id="collectionBulkDeleteBtn" type="button">Delete hidden</button>
+          <button id="cancelCollectionBulk" type="button">Done</button>
         </div>
       </div>
     </div>
@@ -450,9 +489,9 @@
 
     <div id="toastContainer" class="toast-container" aria-live="polite"></div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
-    <script src="/app/shared.js?v=1"></script>
+    <script src="/app/shared.js?v=3"></script>
     <script src="/app/explorer.js?v=1"></script>
     <script src="/app/attractor-explorer.js?v=1"></script>
-    <script src="/app/app.js?v=17"></script>
+    <script src="/app/app.js?v=26"></script>
   </body>
 </html>
