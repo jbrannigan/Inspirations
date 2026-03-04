@@ -123,6 +123,30 @@ Latest automated validation:
 - lint: `PASS`
 - unit tests: `PASS` (`232` tests)
 
+## Execution Updates (Mar 4, 2026)
+
+- Collaborator browse UX clarity pass completed:
+  - one explicit collaborator toggle now communicates state directly:
+    - `Browse more from Leslie collection ...`
+    - `Hide extra folders`
+  - relock path restores shared-collections scope for collaborators.
+- Sidebar/tree visual cleanup completed:
+  - clearer nested hierarchy under `All Items` and `Collections`
+  - removed internal vertical tree guide lines per UX decision.
+- 3D outlier spacing fix completed:
+  - when a node is missing from `/api/explorer/layout`, 3D merge now places it near layout centroid (small deterministic jitter) instead of leaving it on mismatched fallback coordinates.
+
+Associated commits:
+- `c96ab22` — collaborator toggle clarity + tree hierarchy UI polish
+- `d334345` — unmatched 3D node centroid fallback
+
+Latest validation (post-fix):
+- Automated: `python3 tools/run_bugfix_suite.py` → `PASS`
+  - lint: `PASS`
+  - unit tests: `PASS` (`232` tests, `36.028s`)
+- Manual: `PASS` on iPad + desktop checklist
+  - run log: `docs/MANUAL_SIGNOFF_LOG_2026-03-04.md`
+
 ## Technical Debt: Retired Tag Workflow (Mar 2, 2026)
 
 Decision: UI/UX tag workflow is retired and no longer exposed in product flows.

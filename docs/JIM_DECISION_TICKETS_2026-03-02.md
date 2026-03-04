@@ -94,6 +94,11 @@ No checklist item is considered passed until manually tested and logged.
 3. Each `fail` becomes a tracked bug with owner + repro.
 4. Sprint cannot close while any P1/P2 failure remains unresolved, unless explicitly deferred.
 
+### Execution update (Mar 4, 2026)
+- Manual sign-off run completed.
+- Run log: `docs/MANUAL_SIGNOFF_LOG_2026-03-04.md`
+- Outcome: all listed checklist areas passed; no unresolved P1/P2 manual failures.
+
 ### Minimum checklist areas
 - Owner grid + explorer core flows.
 - Collaborator default + browse-unlock behavior.
@@ -110,4 +115,3 @@ No checklist item is considered passed until manually tested and logged.
 3. Implement `JIM-4` poster generation.
 4. Run full automated suite.
 5. Execute `JIM-5` manual sign-off run log.
-

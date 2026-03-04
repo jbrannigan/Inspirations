@@ -127,7 +127,7 @@ Planned workflow:
    - Add clear repro steps and expected vs actual behavior for each issue.
    - Mark owner (`UI`, `API`, `3D`, `IA`, `mobile-deferred`).
    - Update (Mar 2, 2026): workflow/test matrix and manual validation ownership documented in `docs/WORKFLOW_TEST_MATRIX_2026-03-02.md`.
-3. **[ ] Fix in severity order**
+3. **[x] Fix in severity order**
    - Execute P1 blockers first, then P2 UX regressions, then P3 polish.
    - Decision-locked implementation tasks:
      - `JIM-1`: ingest chips align to Explorer groups + auto-tags (`actor`, `ingested_at`).
@@ -153,14 +153,23 @@ Planned workflow:
          - Import reports now include poster execution metadata (`tool`, `generated`, `errors`) for diagnostics.
          - Grid cards and modal playback now use poster thumbs for videos when available, with existing video playback fallback intact.
          - Added importer regression tests for both poster success and poster failure non-blocking paths.
-4. **[ ] Regression pack**
+   - Update (Mar 4, 2026):
+     - Collaborator browse toggle copy/behavior clarified and made symmetric (`Browse more from Leslie collection ...` ↔ `Hide extra folders`).
+     - Tree hierarchy readability polish shipped (nested branch clarity; removed internal vertical guide lines).
+     - 3D unmatched-node spacing regression fixed by centroid fallback placement.
+4. **[x] Regression pack**
    - Re-run Sprint 0 + Sprint 1 acceptance checks after each fix batch.
    - Update (Mar 2, 2026): canonical bug-fix suite runner added at `tools/run_bugfix_suite.py` (lint + full unit discover).
    - Update (Mar 2, 2026): re-ran bug-fix suite after `JIM-4`; lint + full unit discover PASS (`216` tests).
-5. **[ ] Sign-off checklist**
+   - Update (Mar 4, 2026): `python3 tools/run_bugfix_suite.py` PASS; lint PASS; full unit discover PASS (`232` tests).
+5. **[x] Sign-off checklist**
    - iPad + desktop pass list before closing sprint.
    - `JIM-5` gate (approved): no assumed passes; execute manual run log with per-item pass/fail notes.
    - Any failed manual item must be tracked as a bug with owner+repro before sprint closure.
+   - Update (Mar 4, 2026):
+     - Manual checklist executed on target platforms with owner acceptance.
+     - Run log recorded at `docs/MANUAL_SIGNOFF_LOG_2026-03-04.md`.
+     - No open manual failures.
 
 ### Next Sprint — Implementation (easiest-first)
 

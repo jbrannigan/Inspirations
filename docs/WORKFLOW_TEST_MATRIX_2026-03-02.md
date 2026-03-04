@@ -25,7 +25,7 @@ This matrix ties known workflows to automated validation and manual checks for t
 | Workflow | Device/Role | Why Manual |
 |---|---|---|
 | Grid/Explorer mode switch behavior | iPad + desktop, owner + collaborator | Rendering/perf/UX timing are not fully captured in unit tests |
-| Collaborator tree unlock (`Browse Leslie's collection`) | iPad + desktop, collaborator | Interaction sequencing and visual tree integrity are UI-level |
+| Collaborator tree unlock/toggle (`Browse more from Leslie collection ...` / `Hide extra folders`) | iPad + desktop, collaborator | Interaction sequencing and visual tree integrity are UI-level |
 | Add Media modal UX | desktop + iPad, owner | Input ergonomics, chips behavior, and modal transitions are browser UX concerns |
 | Video card/modal playback | iPad + desktop | Browser codec/policy differences not deterministic in unit tests |
 | Print flow from modal | Safari + Chrome | Print-window behavior is browser-specific |
@@ -40,8 +40,16 @@ This matrix ties known workflows to automated validation and manual checks for t
 ## Current Baseline
 
 - Lint: PASS
-- Unit tests: PASS (`212` tests)
-- Manual matrix: pending owner acceptance
+- Unit tests: PASS (`232` tests)
+- Manual matrix: PASS (owner sign-off complete; no open manual failures)
+- Manual run log: `docs/MANUAL_SIGNOFF_LOG_2026-03-04.md`
+
+## Latest Validation Snapshot (Mar 4, 2026)
+
+- Automated: `python3 tools/run_bugfix_suite.py` → PASS
+  - lint: PASS
+  - unit tests: PASS (`232` tests, `36.028s`)
+- Manual: PASS (iPad + desktop sprint target)
 
 ## Decision Inputs
 

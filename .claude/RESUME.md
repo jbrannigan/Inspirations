@@ -607,3 +607,51 @@ Reboot-safe startup checklist:
    - Ask Dave a known intent (`show collections`).
    - Try a timeout/fallback-style query and ensure view is not stranded empty.
    - Verify managed collections modal actions (hide/restore/delete hidden).
+
+## Session Update (Mar 4, 2026 — Final Bug-Fix Sign-Off + Reboot Continuity)
+
+Branch:
+- `codex/sprint6-jim4-video-poster`
+
+Commits added this session:
+- `c96ab22` — collaborator browse toggle clarity + tree hierarchy UI polish
+- `d334345` — keep unmatched 3D explorer nodes near cluster centroid
+
+Key UX/behavior updates:
+- Collaborator browse control now has explicit dual-state wording:
+  - `Browse more from Leslie collection ...`
+  - `Hide extra folders`
+- Hide-extra-folders path now relocks collaborator browse and restores shared-collections scope.
+- Tree visual hierarchy is clearer via nested branches, with internal vertical guide lines removed per latest UX preference.
+- 3D view no longer isolates unmatched layout assets (notably lone video cases) far from cluster cloud; unmatched nodes now spawn near layout centroid with deterministic jitter.
+
+Validation status:
+- Automated (Mar 4, 2026):
+  - `python3 tools/run_bugfix_suite.py` → PASS
+  - lint: PASS
+  - unit tests: PASS (`232` tests, `36.028s`)
+- Manual:
+  - Owner reported full checklist PASS on target platforms (iPad + desktop).
+  - Run log recorded: `docs/MANUAL_SIGNOFF_LOG_2026-03-04.md`
+  - Open manual failures: `0`
+
+Documentation synchronized:
+- `docs/BUGFIX_SPRINT_BASELINE_2026-03-02.md`
+- `docs/WORKFLOW_TEST_MATRIX_2026-03-02.md`
+- `docs/MANUAL_SIGNOFF_LOG_2026-03-04.md`
+- `.claude/TODO.md`
+
+Reboot-safe startup checklist (current):
+1. Confirm branch + working tree:
+   - `git rev-parse --abbrev-ref HEAD`
+   - `git status --short`
+2. Ensure API keys are available:
+   - Dave: `security find-generic-password -s inspirations_anthropic_api_key >/dev/null && echo found`
+   - Gemini (if needed): `security find-generic-password -s inspirations_gemini_api_key >/dev/null && echo found`
+3. Start server for cross-device validation:
+   - `PYTHONPATH=src python3 -m inspirations serve --host 0.0.0.0 --port 8001 --reload`
+4. If browser appears stale, hard refresh once and verify current cache-busters:
+   - `styles.css?v=15`
+   - `app.js?v=30`
+5. Optional regression confidence run:
+   - `python3 tools/run_bugfix_suite.py`
