@@ -4521,10 +4521,64 @@ function _merge3DExplorerData(layoutData, attractorData) {
   const layoutNodes = Array.isArray(layoutData?.nodes) ? layoutData.nodes : [];
   const layoutById = new Map(layoutNodes.map((node) => [node.id, node]));
   let matched = 0;
+  let unmatched = 0;
+
+  // Layout coordinates use a different scale than attractor-data fallback.
+  // If a node is missing from layout (usually no embedding yet), place it
+  // near the layout centroid with tiny deterministic jitter.
+  const layoutCenter = (() => {
+    if (!layoutNodes.length) return { x: 0, y: 0, z: 0 };
+    let sx = 0;
+    let sy = 0;
+    let sz = 0;
+    for (const n of layoutNodes) {
+      sx += Number.isFinite(n.x) ? n.x : 0;
+      sy += Number.isFinite(n.y) ? n.y : 0;
+      sz += Number.isFinite(n.z) ? n.z : 0;
+    }
+    return { x: sx / layoutNodes.length, y: sy / layoutNodes.length, z: sz / layoutNodes.length };
+  })();
+  const jitterScale = (() => {
+    if (!layoutNodes.length) return 0.8;
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (const n of layoutNodes) {
+      const x = Number.isFinite(n.x) ? n.x : 0;
+      const y = Number.isFinite(n.y) ? n.y : 0;
+      const z = Number.isFinite(n.z) ? n.z : 0;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (z < minZ) minZ = z;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+      if (z > maxZ) maxZ = z;
+    }
+    const span = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
+    return Math.max(0.5, Math.min(2.5, span * 0.03));
+  })();
+  const _idHash = (id) => {
+    const raw = String(id || "");
+    let h = 2166136261;
+    for (let i = 0; i < raw.length; i++) {
+      h ^= raw.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  };
+  const _axisJitter = (seed, shift) => (((seed >> shift) & 1023) / 1023 - 0.5) * 2 * jitterScale;
 
   const mergedAssets = assets.map((asset) => {
     const layoutNode = layoutById.get(asset.id);
-    if (!layoutNode) return asset;
+    if (!layoutNode) {
+      unmatched += 1;
+      const seed = _idHash(asset.id);
+      return {
+        ...asset,
+        x: layoutCenter.x + _axisJitter(seed, 0),
+        y: layoutCenter.y + _axisJitter(seed, 10),
+        z: layoutCenter.z + _axisJitter(seed, 20),
+      };
+    }
     matched += 1;
     return {
       ...asset,
@@ -4541,7 +4595,7 @@ function _merge3DExplorerData(layoutData, attractorData) {
   } else if (matched === 0) {
     console.warn("[Explorer] 3D layout IDs did not overlap; using PCA fallback positions");
   } else {
-    console.log(`[Explorer] 3D layout merged ${matched}/${assets.length} nodes`);
+    console.log(`[Explorer] 3D layout merged ${matched}/${assets.length} nodes (${unmatched} fallback)`);
   }
 
   return {
