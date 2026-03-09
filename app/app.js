@@ -764,6 +764,24 @@ function getReviewScopeInfo() {
   };
 }
 
+function _currentTrackFilterValues() {
+  if (String(state.currentClassificationAxis || "").trim() !== "track") return [];
+  return String(state.currentClassificationValue || "")
+    .split(",")
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+}
+
+function _reviewItemMatchesCurrentScope(item) {
+  if (!item) return false;
+  const trackValues = _currentTrackFilterValues();
+  if (trackValues.length) {
+    const effectiveTrack = _effectiveClassificationTrack(item.classification_review || {});
+    if (!effectiveTrack || !trackValues.includes(effectiveTrack)) return false;
+  }
+  return true;
+}
+
 function _buildCurrentAssetQueryParams({ limit, offset = 0, ids = null } = {}) {
   const params = new URLSearchParams();
   if (limit != null) params.set("limit", String(limit));
@@ -4016,7 +4034,20 @@ function _persistCurrentReviewDraft() {
 }
 
 async function renderReviewCard() {
-  const item = await hydrateReviewItem(state.reviewIndex);
+  let item = await hydrateReviewItem(state.reviewIndex);
+  while (item && !_reviewItemMatchesCurrentScope(item)) {
+    state.reviewItems.splice(state.reviewIndex, 1);
+    state.reviewSnapshotTotal = state.reviewItems.length;
+    state.reviewScopeTotal = Math.min(
+      Math.max(0, Number(state.reviewScopeTotal || 0)),
+      state.reviewItems.length,
+    );
+    if (!state.reviewItems.length || state.reviewIndex >= state.reviewItems.length) {
+      showReviewComplete();
+      return;
+    }
+    item = await hydrateReviewItem(state.reviewIndex);
+  }
   if (!item) return;
 
   const total = state.reviewSnapshotTotal || state.reviewItems.length;
