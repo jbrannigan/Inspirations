@@ -12,6 +12,9 @@ const state = {
   currentCatalogFile: null,     // catalog dimension file (e.g. "room/bathroom.md")
   currentCatalogFiles: [],      // recursive catalog scope
   currentCatalogLabel: "",      // display label for catalog scope
+  currentClassificationAxis: null,   // v2 browse axis filter (e.g. room, track)
+  currentClassificationValue: null,  // optional v2 axis value (e.g. kitchen)
+  currentClassificationLabel: "",    // display label for v2 classification scope
   currentTreeNodeId: null,      // active sidebar tree node ID
   triageFilter: "",             // "" | "pending" | "keeper" | "hidden" | "needs-comment"
 
@@ -30,9 +33,14 @@ const state = {
   reviewItems: [],
   reviewIndex: 0,
   reviewHistory: [],
+  reviewDrafts: {},
   reviewSkipped: 0,
   reviewKept: 0,
+  reviewMoved: 0,
   reviewHidden: 0,
+  reviewSnapshotTotal: 0,
+  reviewScopeTotal: 0,
+  reviewSeedIds: null,
 
   // Collections + facets + catalog
   collections: [],
@@ -96,11 +104,20 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 const escapeHtml = Shared.escapeHtml;
 const api = Shared.api;
 const formatApiError = Shared.formatApiError;
-const _bp = Shared.prefixPath;
-const _B = Shared.basePath;  // base path prefix for template-literal URLs
 const SIDEBAR_VISIBILITY_KEY = "inspirations.ui.sidebar.hidden.v1";
 const VIEW_MODE_KEY = "inspirations.ui.view.mode.v1";
 const CONTEXT_LINK_BANNER_DEFAULT = "Use this shared context link to review the referenced item.";
+const CLASSIFICATION_TRACK_LABELS = {
+  style_product_decor: "Style / Decor",
+  construction_concern: "Construction",
+  home_maintenance_diy: "Maintenance / DIY",
+  irrelevant: "Irrelevant",
+};
+const MOVABLE_CLASSIFICATION_TRACKS = [
+  "style_product_decor",
+  "construction_concern",
+  "home_maintenance_diy",
+];
 
 const IMAGE_SUFFIX_RE = /\.(jpg|jpeg|png|webp|gif|bmp|svg)(\?.*)?$/i;
 const VIDEO_SUFFIX_RE = /\.(mp4|mov|m4v|webm|avi|mkv|mpeg|mpg|wmv|3gp)(\?.*)?$/i;
@@ -168,7 +185,7 @@ const INGEST_TAG_GROUPS = [
 async function apiUpload(path, formData) {
   const actorToken = typeof Shared.getActorToken === "function" ? Shared.getActorToken() : "";
   const headers = actorToken ? { "X-Actor-Token": actorToken } : {};
-  const res = await fetch(_bp(path), { method: "POST", body: formData, headers });
+  const res = await fetch(path, { method: "POST", body: formData, headers });
   if (!res.ok) { const t = await res.text(); throw new Error(t || res.statusText); }
   return res.json();
 }
@@ -185,8 +202,8 @@ function semanticQueryFromInput(value) {
 }
 
 function previewForAsset(a) {
-  if (a.thumb_path) return `${_B}/media/${a.id}?kind=thumb`;
-  if (a.stored_path && IMAGE_SUFFIX_RE.test(a.stored_path)) return `${_B}/media/${a.id}?kind=original`;
+  if (a.thumb_path) return `/media/${a.id}?kind=thumb`;
+  if (a.stored_path && IMAGE_SUFFIX_RE.test(a.stored_path)) return `/media/${a.id}?kind=original`;
   if (a.image_url && IMAGE_SUFFIX_RE.test(a.image_url)) return a.image_url;
   return "";
 }
@@ -203,7 +220,7 @@ function isVideoAsset(asset) {
 
 function videoUrlForAsset(asset) {
   if (!asset || !isVideoAsset(asset)) return "";
-  if (asset.stored_path) return `${_B}/media/${asset.id}?kind=original`;
+  if (asset.stored_path) return `/media/${asset.id}?kind=original`;
   if (asset.image_url && VIDEO_SUFFIX_RE.test(asset.image_url)) return asset.image_url;
   return "";
 }
@@ -251,6 +268,9 @@ function _fallbackTitleFromSourceRef(asset) {
 }
 
 function displayTitle(a) {
+  const info = a && typeof a === "object" ? (a.title_info || null) : null;
+  const serverDisplay = String((info && info.display_title) || a?.display_title || "").trim();
+  if (serverDisplay) return serverDisplay;
   const title = (a.title || "").trim();
   const ai = (a.ai_summary || "").trim();
   const alt = (a.seo_alt_text || "").trim().replace(/^This may contain:\s*/i, "");
@@ -266,7 +286,23 @@ function displayTitle(a) {
     || "(untitled)";
 }
 
+function classificationTrackLabel(value) {
+  const key = String(value || "").trim();
+  return CLASSIFICATION_TRACK_LABELS[key] || key || "";
+}
+
 function titleQualityForAsset(asset) {
+  const serverQuality = asset?.title_quality || asset?.title_info?.quality || null;
+  if (serverQuality && typeof serverQuality === "object") {
+    const label = String(serverQuality.label || "").trim();
+    if (label) {
+      return {
+        kind: String(serverQuality.kind || "").trim(),
+        label,
+        tooltip: String(serverQuality.tooltip || "").trim(),
+      };
+    }
+  }
   const source = normalizeSourceKey(asset?.source);
   const title = String(asset?.title || "").trim();
   const sourceRef = String(asset?.source_ref || "").trim();
@@ -724,6 +760,109 @@ function getReviewScopeInfo() {
   };
 }
 
+function _buildCurrentAssetQueryParams({ limit, offset = 0, ids = null } = {}) {
+  const params = new URLSearchParams();
+  if (limit != null) params.set("limit", String(limit));
+  params.set("offset", String(offset));
+
+  if (Array.isArray(ids) && ids.length) {
+    params.set("ids", ids.join(","));
+  } else {
+    const semQ = semanticQueryFromInput(state.q);
+    if (semQ) {
+      params.set("q", `sem:${semQ}`);
+    } else if (state.q) {
+      params.set("q", state.q);
+    }
+    if (state.currentSource) params.set("source", state.currentSource);
+    if (state.currentBoard) params.set("board", state.currentBoard);
+    if (state.currentContentKind) params.set("content_kind", state.currentContentKind);
+    if (state.currentClassificationAxis) params.set("classification_axis", state.currentClassificationAxis);
+    if (state.currentClassificationValue) params.set("classification_value", state.currentClassificationValue);
+    const collectionIds = getCollectionFilterIds();
+    if (collectionIds.length) params.set("collection_id", collectionIds.join(","));
+  }
+
+  if (state.triageFilter === "needs-comment") {
+    params.set("needs_annotation", "1");
+    params.set("include_hidden", "1");
+  } else if (state.triageFilter === "hidden") {
+    params.set("triage_status", "hidden");
+    params.set("include_hidden", "1");
+  } else if (state.triageFilter === "flagged") {
+    params.set("flagged", "1");
+    params.set("include_hidden", "1");
+  } else if (state.triageFilter) {
+    params.set("triage_status", state.triageFilter);
+  }
+  return params;
+}
+
+function _buildCurrentCatalogQueryParams({ limit, offset = 0 } = {}) {
+  const params = new URLSearchParams();
+  const catalogFiles = getCatalogFilterFiles();
+  for (const file of catalogFiles) params.append("file", file);
+  if (limit != null) params.set("limit", String(limit));
+  params.set("offset", String(offset));
+  if (state.triageFilter === "hidden" || state.triageFilter === "needs-comment" || state.triageFilter === "flagged") {
+    params.set("include_hidden", "1");
+  }
+  return params;
+}
+
+async function _fetchAssetsByIds(ids) {
+  const orderedIds = _uniqNonEmpty(ids || []);
+  if (!orderedIds.length) return [];
+  const byId = new Map();
+  const chunkSize = 80;
+  for (let i = 0; i < orderedIds.length; i += chunkSize) {
+    const chunk = orderedIds.slice(i, i + chunkSize);
+    const params = _buildCurrentAssetQueryParams({ limit: chunk.length + 5, ids: chunk });
+    const data = await api(`/api/assets?${params}`);
+    for (const asset of (data.assets || [])) {
+      if (asset && asset.id) byId.set(asset.id, asset);
+    }
+  }
+  return orderedIds.map((id) => byId.get(id)).filter(Boolean);
+}
+
+async function _fetchAllAssetsForCurrentScope() {
+  const catalogFiles = getCatalogFilterFiles();
+  const semQ = semanticQueryFromInput(state.q);
+  if (semQ) {
+    return {
+      items: [...state.assets],
+      scopeTotal: Number.isFinite(Number(state.totalCount)) ? Number(state.totalCount) : state.assets.length,
+    };
+  }
+
+  if (Array.isArray(state.reviewSeedIds) && state.reviewSeedIds.length) {
+    const items = await _fetchAssetsByIds(state.reviewSeedIds);
+    return { items, scopeTotal: items.length };
+  }
+
+  const pageSize = 500;
+  const items = [];
+  let offset = 0;
+  let total = 0;
+  while (true) {
+    let data;
+    if (catalogFiles.length) {
+      const params = _buildCurrentCatalogQueryParams({ limit: pageSize, offset });
+      data = await api(`/api/catalog/items?${params}`);
+    } else {
+      const params = _buildCurrentAssetQueryParams({ limit: pageSize, offset });
+      data = await api(`/api/assets?${params}`);
+    }
+    const batch = data.assets || [];
+    items.push(...batch);
+    total = Number(data.total || items.length);
+    if (!data.has_more || !batch.length) break;
+    offset += batch.length;
+  }
+  return { items, scopeTotal: total || items.length };
+}
+
 function _reviewActorLabel() {
   const actor = state.actor || null;
   if (!actor) return "Reviewer: Not signed in";
@@ -737,14 +876,10 @@ function updateReviewScopeChips() {
   const chipText = `Scope: ${scope.label}`;
   const headerChip = $("#reviewScopeChip");
   if (headerChip) headerChip.textContent = chipText;
-  const modalChip = $("#modalReviewScope");
-  if (modalChip) modalChip.textContent = chipText;
   const oneByOneActorChip = $("#reviewActorChip");
   if (oneByOneActorChip) oneByOneActorChip.textContent = _reviewActorLabel();
   const canvasActorChip = $("#reviewActorChipCanvas");
   if (canvasActorChip) canvasActorChip.textContent = _reviewActorLabel();
-  const modalLocalHideBtn = $("#modalHideLocalBtn");
-  if (modalLocalHideBtn) modalLocalHideBtn.disabled = !scope.hasCollectionScope;
 }
 
 function confirmGlobalHideBulk(count) {
@@ -761,6 +896,30 @@ function hasCollectionFilter() {
   return getCollectionFilterIds().length > 0;
 }
 
+function hasClassificationFilter() {
+  return !!String(state.currentClassificationAxis || "").trim();
+}
+
+function clearClassificationFilter() {
+  state.currentClassificationAxis = null;
+  state.currentClassificationValue = null;
+  state.currentClassificationLabel = "";
+}
+
+function setClassificationFilter(axis, value = "", { label = "", nodeId = null } = {}) {
+  const cleanAxis = String(axis || "").trim();
+  const cleanValue = String(value || "").trim();
+  if (!cleanAxis) {
+    clearClassificationFilter();
+    state.currentTreeNodeId = null;
+    return;
+  }
+  state.currentClassificationAxis = cleanAxis;
+  state.currentClassificationValue = cleanValue || null;
+  state.currentClassificationLabel = label || cleanValue || cleanAxis;
+  state.currentTreeNodeId = nodeId;
+}
+
 function clearCollectionFilter() {
   state.currentCollection = null;
   state.currentCollectionIds = [];
@@ -768,7 +927,8 @@ function clearCollectionFilter() {
 }
 
 function isAllItemsScopeActive() {
-  return !state.currentSource && !state.currentBoard && !state.currentContentKind && !hasCollectionFilter() && !hasCatalogFilter();
+  return !state.currentSource && !state.currentBoard && !state.currentContentKind
+    && !hasCollectionFilter() && !hasCatalogFilter() && !hasClassificationFilter();
 }
 
 function setCollectionFilterIds(ids, { label = "", nodeId = null } = {}) {
@@ -903,7 +1063,7 @@ function _scanPdfHrefForAsset(asset) {
     const idx = state.modalScanPages.indexOf(asset.id);
     if (idx >= 0) page = idx + 1;
   }
-  return `${_B}/api/scan/doc-pdf?asset_id=${encodeURIComponent(asset.id)}#page=${page}`;
+  return `/api/scan/doc-pdf?asset_id=${encodeURIComponent(asset.id)}#page=${page}`;
 }
 
 function renderModalSourceLinks(asset) {
@@ -1074,6 +1234,8 @@ async function loadAssets(opts = {}) {
   if (state.currentBoard) params.set("board", state.currentBoard);
   if (state.currentContentKind) params.set("content_kind", state.currentContentKind);
   if (state.currentCollection) params.set("collection_id", state.currentCollection);
+  if (state.currentClassificationAxis) params.set("classification_axis", state.currentClassificationAxis);
+  if (state.currentClassificationValue) params.set("classification_value", state.currentClassificationValue);
 
   if (state.triageFilter === "needs-comment") {
     params.set("needs_annotation", "1");
@@ -1103,7 +1265,7 @@ async function loadAssets(opts = {}) {
       catParams.set("offset", state.offset);
       data = await api(`/api/catalog/items?${catParams}`);
     } else if (semQ) {
-      const res = await fetch(_bp(`/api/search/similar?${params}`));
+      const res = await fetch(`/api/search/similar?${params}`);
       if (!res.ok) throw new Error(await res.text());
       data = await res.json();
     } else {
@@ -1301,7 +1463,7 @@ function buildCard(a) {
       if (prev) prev.disabled = pageIdx === 0;
       if (next) next.disabled = pageIdx >= memberIds.length - 1;
       if (indicator) indicator.textContent = `${pageIdx + 1} / ${memberIds.length}`;
-      if (img) img.src = `${_B}/media/${memberIds[pageIdx]}?kind=thumb`;
+      if (img) img.src = `/media/${memberIds[pageIdx]}?kind=thumb`;
     };
 
     if (prev) prev.addEventListener("click", (e) => { e.stopPropagation(); pageIdx = Math.max(0, pageIdx - 1); updateNav(); });
@@ -1410,6 +1572,12 @@ async function loadCatalogTree() {
   }
 }
 
+async function refreshSidebarTrees() {
+  const tasks = [loadCollections(), loadCatalogTree()];
+  if (isOwner()) tasks.push(loadHiddenTree());
+  await Promise.all(tasks);
+}
+
 function resetTriageFilter() {
   if (state.triageFilter) {
     state.triageFilter = "";
@@ -1453,6 +1621,7 @@ function renderCatalogTree() {
     state.currentContentKind = null;
     clearCollectionFilter();
     clearCatalogFilter();
+    clearClassificationFilter();
     if (isCollaboratorActor()) {
       state.collaboratorTreeUnlocked = true;
       state.allItemsTreeCollapsed = false;
@@ -1523,6 +1692,8 @@ function renderCatalogTree() {
     for (const node of tree) {
       if (node.type === "source") {
         allItemsBranch.appendChild(buildSourceNode(node));
+      } else if (node.type === "classification") {
+        allItemsBranch.appendChild(buildClassificationNode(node));
       } else if (node.type === "dimension") {
         allItemsBranch.appendChild(buildDimensionNode(node));
       }
@@ -1593,6 +1764,7 @@ function buildSourceNode(node) {
     state.currentContentKind = null;
     clearCollectionFilter();
     clearCatalogFilter();
+    clearClassificationFilter();
     state.currentTreeNodeId = node.id;
     state.offset = 0;
     renderCatalogTree();
@@ -1614,16 +1786,17 @@ function buildSourceNode(node) {
       subtypeLeaf.innerHTML = `<span>${escapeHtml(child.label)}</span><span class="tree-count">${child.count}</span>`;
       subtypeLeaf.onclick = () => {
         if (shouldIgnorePostBrowseUnlockTreeClick()) return;
-        resetTriageFilter();
-        state.currentSource = sourceKey;
-        state.currentBoard = null;
-        state.currentContentKind = subtypeKind || null;
-        clearCollectionFilter();
-        clearCatalogFilter();
-        state.currentTreeNodeId = child.id || null;
-        state.offset = 0;
-        renderCatalogTree();
-        loadAssets();
+      resetTriageFilter();
+      state.currentSource = sourceKey;
+      state.currentBoard = null;
+      state.currentContentKind = subtypeKind || null;
+      clearCollectionFilter();
+      clearCatalogFilter();
+      clearClassificationFilter();
+      state.currentTreeNodeId = child.id || null;
+      state.offset = 0;
+      renderCatalogTree();
+      loadAssets();
       };
       const _src = sourceKey;
       const _kind = subtypeKind;
@@ -1655,6 +1828,7 @@ function buildSourceNode(node) {
         state.currentBoard = null;
         state.currentContentKind = null;
         clearCollectionFilter();
+        clearClassificationFilter();
         setCatalogFilter([child.file], { label: child.label, nodeId: child.id });
       } else {
         // Direct source+board filter for named boards
@@ -1663,6 +1837,7 @@ function buildSourceNode(node) {
         state.currentContentKind = null;
         clearCollectionFilter();
         clearCatalogFilter();
+        clearClassificationFilter();
         state.currentTreeNodeId = child.id;
       }
       state.offset = 0;
@@ -1717,6 +1892,7 @@ function buildDimensionNode(node) {
     state.currentBoard = null;
     state.currentContentKind = null;
     clearCollectionFilter();
+    clearClassificationFilter();
     setCatalogFilter(collectDescendantCatalogFiles(node), { label: node.label, nodeId: node.id });
     state.offset = 0;
     renderCatalogTree();
@@ -1735,6 +1911,7 @@ function buildDimensionNode(node) {
       state.currentBoard = null;
       state.currentContentKind = null;
       clearCollectionFilter();
+      clearClassificationFilter();
       setCatalogFilter([child.file], { label: child.label, nodeId: child.id });
       state.offset = 0;
       renderCatalogTree();
@@ -1742,6 +1919,80 @@ function buildDimensionNode(node) {
     };
     children.appendChild(leaf);
   }
+
+  el.appendChild(toggle);
+  el.appendChild(children);
+  return el;
+}
+
+function buildClassificationNode(node) {
+  const el = document.createElement("div");
+  el.className = "tree-node";
+
+  const nodeKey = node.id;
+  const axisName = String(node.axis_name || "").trim();
+  const isActiveHeader = state.currentTreeNodeId === node.id
+    || (state.currentClassificationAxis === axisName && !state.currentClassificationValue);
+  const toggle = document.createElement("button");
+  toggle.className = `tree-toggle${isActiveHeader ? " active" : ""}`;
+  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label">${escapeHtml(node.label)}</span><span class="tree-count">${node.count}</span>`;
+
+  const children = document.createElement("div");
+  children.className = "tree-children";
+
+  const hasActiveChild = (node.children || []).some(
+    (child) => (
+      state.currentClassificationAxis === String(child.axis_name || "").trim()
+      && state.currentClassificationValue === String(child.axis_value || "").trim()
+    )
+  );
+  if (hasActiveChild || isActiveHeader) state.expandedTreeNodes.add(nodeKey);
+  _setTreeNodeExpanded(nodeKey, toggle, children, state.expandedTreeNodes.has(nodeKey));
+  _wireTreeArrowToggle(toggle, nodeKey, children);
+
+  toggle.onclick = () => {
+    if (shouldIgnorePostBrowseUnlockTreeClick()) return;
+    resetTriageFilter();
+    state.currentSource = null;
+    state.currentBoard = null;
+    state.currentContentKind = null;
+    clearCollectionFilter();
+    clearCatalogFilter();
+    setClassificationFilter(axisName, "", { label: node.label, nodeId: node.id });
+    state.offset = 0;
+    renderCatalogTree();
+    loadAssets();
+  };
+
+  for (const child of (node.children || [])) {
+    const axisValue = String(child.axis_value || "").trim();
+    const leaf = document.createElement("button");
+    const isActive = (
+      state.currentClassificationAxis === axisName
+      && state.currentClassificationValue === axisValue
+    );
+    leaf.className = `tree-leaf${isActive ? " active" : ""}`;
+    leaf.innerHTML = `<span>${escapeHtml(child.label)}</span><span class="tree-count">${child.count}</span>`;
+    leaf.onclick = () => {
+      if (shouldIgnorePostBrowseUnlockTreeClick()) return;
+      resetTriageFilter();
+      state.currentSource = null;
+      state.currentBoard = null;
+      state.currentContentKind = null;
+      clearCollectionFilter();
+      clearCatalogFilter();
+      setClassificationFilter(axisName, axisValue, { label: child.label, nodeId: child.id });
+      state.offset = 0;
+      renderCatalogTree();
+      loadAssets();
+    };
+    const _axis = axisName;
+    const _value = axisValue;
+    addTreeHideToggle(leaf, () => ({ classification_axis: _axis, classification_value: _value }));
+    children.appendChild(leaf);
+  }
+
+  addTreeHideToggle(toggle, () => ({ classification_axis: axisName }));
 
   el.appendChild(toggle);
   el.appendChild(children);
@@ -1778,6 +2029,7 @@ function buildCollectionsGroupNode(node) {
     state.currentBoard = null;
     state.currentContentKind = null;
     clearCatalogFilter();
+    clearClassificationFilter();
     setCollectionFilterIds(collectDescendantCollectionIds(node), { label: "All Collections", nodeId: node.id });
     state.offset = 0;
     renderCatalogTree();
@@ -1795,6 +2047,7 @@ function buildCollectionsGroupNode(node) {
       state.currentBoard = null;
       state.currentContentKind = null;
       clearCatalogFilter();
+      clearClassificationFilter();
       setCollectionFilterIds([child.collection_id], { label: child.label, nodeId: child.id });
       state.offset = 0;
       renderCatalogTree();
@@ -1901,6 +2154,7 @@ function setSourceFilter(source) {
   state.currentContentKind = null;
   clearCollectionFilter();
   clearCatalogFilter();
+  clearClassificationFilter();
   state.currentTreeNodeId = null;
   state.offset = 0;
   renderCatalogTree();
@@ -1913,6 +2167,7 @@ function setBoardFilter(board) {
   state.currentContentKind = null;
   clearCollectionFilter();
   clearCatalogFilter();
+  clearClassificationFilter();
   state.currentTreeNodeId = null;
   state.offset = 0;
   renderCatalogTree();
@@ -2351,6 +2606,7 @@ function setCollectionFilter(collectionId) {
     state.currentBoard = null;
     state.currentContentKind = null;
     clearCatalogFilter();
+    clearClassificationFilter();
     const col = state.collections.find((c) => c.id === collectionId);
     setCollectionFilterIds([collectionId], { label: col ? col.name : "", nodeId: null });
   } else {
@@ -2400,7 +2656,305 @@ if (collectionBulkModalEl) {
 
 // ─── Detail modal ────────────────────────────────────────────────────────────────
 
+function replaceAssetInState(updatedAsset) {
+  const next = updatedAsset && typeof updatedAsset === "object" ? updatedAsset : null;
+  if (!next || !next.id) return;
+  state.assets = state.assets.map((asset) => (asset && asset.id === next.id ? next : asset));
+  if (state.modalAsset && state.modalAsset.id === next.id) state.modalAsset = next;
+}
+
+function setTitleRow(rowId, valueId, metaId, value, meta) {
+  const row = $(rowId);
+  const valueEl = $(valueId);
+  const metaEl = $(metaId);
+  const text = String(value || "").trim();
+  const note = String(meta || "").trim();
+  if (valueEl) valueEl.textContent = text;
+  if (metaEl) {
+    metaEl.textContent = note;
+    metaEl.hidden = !note;
+  }
+  if (row) row.hidden = !text;
+}
+
+function renderModalTitlePanel(asset) {
+  const panel = $("#modalTitlePanel");
+  if (!panel) return;
+  const info = asset?.title_info || {};
+  const workingTitle = String(info.working_title || asset?.title || "").trim();
+  const workingMeta = String(info.working_origin_label || "").trim();
+  const suggestedTitle = String(info.suggested_title || "").trim();
+  const suggestedMeta = String(info.suggestion_label || "").trim();
+  const originalTitle = String(info.best_original_title || "").trim();
+  const originalMeta = String(info.best_original_origin_label || "").trim();
+
+  setTitleRow("#modalSuggestedTitleRow", "#modalSuggestedTitleValue", "#modalSuggestedTitleMeta", suggestedTitle, suggestedMeta);
+  setTitleRow("#modalOriginalTitleRow", "#modalOriginalTitleValue", "#modalOriginalTitleMeta", originalTitle, originalMeta);
+
+  const workingValueEl = $("#modalWorkingTitleValue");
+  const workingMetaEl = $("#modalWorkingTitleMeta");
+  if (workingValueEl) workingValueEl.textContent = workingTitle || displayTitle(asset);
+  if (workingMetaEl) {
+    workingMetaEl.textContent = workingMeta;
+    workingMetaEl.hidden = !workingMeta;
+  }
+
+  const editor = $("#modalTitleEditor");
+  const workingInput = $("#modalWorkingTitleInput");
+  const saveBtn = $("#modalTitleSaveBtn");
+  const suggestedBtn = $("#modalTitleUseSuggestedBtn");
+  const owner = isOwner();
+  if (editor) editor.hidden = !owner;
+  if (workingInput) workingInput.value = workingTitle;
+  if (saveBtn) saveBtn.disabled = !owner;
+  if (suggestedBtn) {
+    suggestedBtn.disabled = !owner || !suggestedTitle;
+    suggestedBtn.hidden = !suggestedTitle;
+  }
+
+  panel.hidden = !(workingTitle || suggestedTitle || originalTitle || owner);
+}
+
+async function hydrateModalAsset(asset) {
+  const assetId = String(asset?.id || "").trim();
+  if (!assetId) return asset;
+  const qs = isOwner() ? "?include_hidden=1" : "";
+  try {
+    const data = await api(`/api/assets/${encodeURIComponent(assetId)}${qs}`);
+    if (data?.asset && typeof data.asset === "object") {
+      return { ...asset, ...data.asset };
+    }
+  } catch (_) {
+    // Fall back to the asset already on hand when detail hydration fails.
+  }
+  return asset;
+}
+
+function _isBoilerplateClassificationReviewNote(note) {
+  const text = String(note || "").trim().toLowerCase();
+  if (!text) return false;
+  if (text === "keep current track (modal review)") return true;
+  return /^move to [a-z_]+ \(modal review\)$/.test(text);
+}
+
+function _effectiveClassificationTrack(review) {
+  return String(review?.active_override_track || review?.current_track || "").trim();
+}
+
+function _preferredMoveTrack(track, fallback = "style_product_decor") {
+  const normalized = String(track || "").trim();
+  if (MOVABLE_CLASSIFICATION_TRACKS.includes(normalized)) return normalized;
+  return fallback;
+}
+
+function _modalClassificationNeedsReview(review) {
+  if (!review || typeof review !== "object") return false;
+  if (Number(review.current_is_ambiguous || 0) > 0) return true;
+  if (String(review.source_qc_verdict || "").trim() === "conflicting") return true;
+  if (String(review.active_override_track || "").trim()) return true;
+  return false;
+}
+
+function _modalClassificationStatusText(review) {
+  const messages = [];
+  if (Number(review?.current_is_ambiguous || 0) > 0) {
+    messages.push("Classifier is unsure.");
+  }
+  if (String(review?.source_qc_verdict || "").trim() === "conflicting") {
+    messages.push("Source link conflicts with the current track.");
+  }
+  if (String(review?.active_override_track || "").trim()) {
+    messages.push("Human review is saved and will persist.");
+  }
+  return messages.join(" ");
+}
+
+function renderModalClassificationPanel(asset) {
+  const panel = $("#modalClassificationPanel");
+  if (!panel) return;
+  if (!isOwner()) {
+    panel.hidden = true;
+    return;
+  }
+  const review = asset?.classification_review || {};
+  const currentTrack = String(review.current_track || "").trim();
+  const currentConfidence = Number(review.current_confidence || 0);
+  const currentReason = String(review.current_reason || "").trim();
+  const sourceVerdict = String(review.source_qc_verdict || "").trim();
+  const sourceTrack = String(review.source_qc_inferred_track || "").trim();
+  const sourceConfidence = Number(review.source_qc_confidence || 0);
+  const sourceReason = String(review.source_qc_reason || "").trim();
+  const overrideTrack = String(review.active_override_track || "").trim();
+  const overrideActor = String(review.active_override_actor || "").trim();
+  const overrideNote = String(review.active_override_note || "").trim();
+  const overrideCreatedAt = String(review.active_override_created_at || "").trim();
+  const effectiveTrack = _effectiveClassificationTrack(review);
+  const needsReview = _modalClassificationNeedsReview(review);
+  const statusText = _modalClassificationStatusText(review);
+  const cleanedOverrideNote = _isBoilerplateClassificationReviewNote(overrideNote) ? "" : overrideNote;
+
+  panel.hidden = !needsReview;
+  if (!needsReview) return;
+
+  const statusEl = $("#modalClassificationStatus");
+  if (statusEl) {
+    statusEl.textContent = statusText;
+    statusEl.hidden = !statusText;
+  }
+
+  const currentEl = $("#modalClassificationCurrent");
+  if (currentEl) {
+    const parts = [];
+    if (currentTrack) parts.push(classificationTrackLabel(currentTrack));
+    if (currentConfidence) parts.push(`${Math.round(currentConfidence * 100)}%`);
+    currentEl.textContent = parts.join(" · ") || "No current track";
+    currentEl.title = currentReason || "";
+  }
+
+  const sourceRow = $("#modalClassificationSourceRow");
+  const sourceEl = $("#modalClassificationSource");
+  const sourceReasonEl = $("#modalClassificationSourceReason");
+  const hasSourceConflict = sourceVerdict === "conflicting" && !!sourceTrack;
+  if (sourceRow) sourceRow.hidden = !hasSourceConflict;
+  if (sourceEl) {
+    const parts = [];
+    if (sourceTrack) parts.push(classificationTrackLabel(sourceTrack));
+    if (sourceConfidence) parts.push(`${Math.round(sourceConfidence * 100)}%`);
+    sourceEl.textContent = hasSourceConflict ? parts.join(" · ") : "";
+  }
+  if (sourceReasonEl) {
+    sourceReasonEl.textContent = sourceReason;
+    sourceReasonEl.hidden = !(hasSourceConflict && sourceReason);
+  }
+
+  const overrideRow = $("#modalClassificationOverrideRow");
+  const overrideEl = $("#modalClassificationOverride");
+  const overrideMetaEl = $("#modalClassificationOverrideMeta");
+  if (overrideRow) overrideRow.hidden = !overrideTrack;
+  if (overrideEl) overrideEl.textContent = overrideTrack ? classificationTrackLabel(overrideTrack) : "";
+  if (overrideMetaEl) {
+    const parts = [];
+    if (overrideActor) parts.push(`by ${overrideActor}`);
+    if (overrideCreatedAt) parts.push(overrideCreatedAt.slice(0, 10));
+    if (cleanedOverrideNote) parts.push(cleanedOverrideNote);
+    overrideMetaEl.textContent = parts.join(" · ");
+    overrideMetaEl.hidden = !parts.length;
+  }
+
+  const editor = $("#modalClassificationEditor");
+  const moveTo = $("#modalClassificationMoveTo");
+  const comment = $("#modalClassificationComment");
+  const keepBtn = $("#modalClassificationKeepBtn");
+  const saveBtn = $("#modalClassificationSaveBtn");
+  const irrelevantBtn = $("#modalClassificationIrrelevantBtn");
+  if (editor) editor.hidden = false;
+  const defaultTrack = overrideTrack || (hasSourceConflict ? sourceTrack : currentTrack);
+  if (moveTo) moveTo.value = _preferredMoveTrack(defaultTrack);
+  if (comment) comment.value = cleanedOverrideNote || "";
+  if (keepBtn) keepBtn.disabled = !effectiveTrack;
+  if (saveBtn) saveBtn.disabled = false;
+  if (irrelevantBtn) irrelevantBtn.disabled = false;
+}
+
+async function saveModalClassificationReview(opts = {}) {
+  const asset = state.modalAsset;
+  if (!asset || !asset.id) return;
+  if (!isOwner()) {
+    Shared.showToast("Classification review is owner-only.", { type: "info" });
+    return;
+  }
+  const review = asset.classification_review || {};
+  const currentTrack = _effectiveClassificationTrack(review);
+  const moveTo = $("#modalClassificationMoveTo");
+  const comment = $("#modalClassificationComment");
+  const keepBtn = $("#modalClassificationKeepBtn");
+  const saveBtn = $("#modalClassificationSaveBtn");
+  const irrelevantBtn = $("#modalClassificationIrrelevantBtn");
+  const track = String(opts.track || moveTo?.value || "").trim();
+  const note = String(comment?.value || "").trim();
+  if (!track) {
+    Shared.showToast("Choose a track first.", { type: "info" });
+    return;
+  }
+  if (keepBtn) keepBtn.disabled = true;
+  if (saveBtn) saveBtn.disabled = true;
+  if (irrelevantBtn) irrelevantBtn.disabled = true;
+  if (moveTo) moveTo.disabled = true;
+  if (comment) comment.disabled = true;
+  try {
+    const data = await api(`/api/assets/${encodeURIComponent(asset.id)}/classification-review`, {
+      method: "PUT",
+      body: JSON.stringify({ track, note }),
+    });
+    const updated = data.asset || null;
+    if (!updated) throw new Error("Updated asset missing from response");
+    replaceAssetInState(updated);
+    state.modalAsset = updated;
+    await Promise.all([loadCatalogTree(), loadAssets()]);
+    renderModalClassificationPanel(updated);
+    Shared.showToast(
+      track === currentTrack ? "Kept current classification." : `Moved to ${classificationTrackLabel(track)}.`,
+      { type: "success", duration: 1800 }
+    );
+  } catch (e) {
+    Shared.showToast(formatApiError(e), { type: "error", duration: 3200 });
+  } finally {
+    if (keepBtn) keepBtn.disabled = false;
+    if (saveBtn) saveBtn.disabled = false;
+    if (irrelevantBtn) irrelevantBtn.disabled = false;
+    if (moveTo) moveTo.disabled = false;
+    if (comment) comment.disabled = false;
+  }
+}
+
+async function saveWorkingTitleFromModal(opts = {}) {
+  const asset = state.modalAsset;
+  if (!asset || !asset.id) return;
+  if (!isOwner()) {
+    Shared.showToast("Title editing is owner-only.", { type: "info" });
+    return;
+  }
+  const saveBtn = $("#modalTitleSaveBtn");
+  const suggestedBtn = $("#modalTitleUseSuggestedBtn");
+  const input = $("#modalWorkingTitleInput");
+  const useSuggested = !!opts.useSuggested;
+  const title = useSuggested
+    ? ""
+    : String(input?.value || "").trim();
+  if (!useSuggested && !title) {
+    Shared.showToast("Enter a title first.", { type: "info" });
+    return;
+  }
+  const payload = {
+    expected_title: String(asset.title || "").trim(),
+    use_suggested: useSuggested,
+  };
+  if (!useSuggested) payload.title = title;
+  if (saveBtn) saveBtn.disabled = true;
+  if (suggestedBtn) suggestedBtn.disabled = true;
+  if (input) input.disabled = true;
+  try {
+    const data = await api(`/api/assets/${encodeURIComponent(asset.id)}/title`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    const updated = data.asset || null;
+    if (!updated) throw new Error("Updated asset missing from response");
+    replaceAssetInState(updated);
+    renderGrid();
+    await openModal(updated);
+    Shared.showToast("Title saved.", { type: "success", duration: 1800 });
+  } catch (e) {
+    Shared.showToast(formatApiError(e), { type: "error", duration: 3200 });
+  } finally {
+    if (input) input.disabled = false;
+    if (saveBtn) saveBtn.disabled = false;
+    if (suggestedBtn) suggestedBtn.disabled = false;
+  }
+}
+
 async function openModal(asset) {
+  asset = await hydrateModalAsset(asset);
   state.modalAsset = asset;
 
   const title = displayTitle(asset);
@@ -2446,6 +3000,24 @@ async function openModal(asset) {
       Shared.showToast("Item ID copied", { type: "success", duration: 1500 });
     };
   }
+  renderModalTitlePanel(asset);
+  renderModalClassificationPanel(asset);
+  const titleSaveBtn = $("#modalTitleSaveBtn");
+  if (titleSaveBtn) titleSaveBtn.onclick = () => saveWorkingTitleFromModal({ useSuggested: false });
+  const titleSuggestedBtn = $("#modalTitleUseSuggestedBtn");
+  if (titleSuggestedBtn) titleSuggestedBtn.onclick = () => saveWorkingTitleFromModal({ useSuggested: true });
+  const classificationKeepBtn = $("#modalClassificationKeepBtn");
+  if (classificationKeepBtn) {
+    classificationKeepBtn.onclick = () => saveModalClassificationReview({
+      track: _effectiveClassificationTrack(state.modalAsset?.classification_review || {}),
+    });
+  }
+  const classificationSaveBtn = $("#modalClassificationSaveBtn");
+  if (classificationSaveBtn) classificationSaveBtn.onclick = () => saveModalClassificationReview();
+  const classificationIrrelevantBtn = $("#modalClassificationIrrelevantBtn");
+  if (classificationIrrelevantBtn) {
+    classificationIrrelevantBtn.onclick = () => saveModalClassificationReview({ track: "irrelevant" });
+  }
 
   const img = $("#modalImage");
   const video = $("#modalVideo");
@@ -2463,8 +3035,8 @@ async function openModal(asset) {
       video.hidden = false;
     }
   } else {
-    const url = asset.thumb_path ? `${_B}/media/${asset.id}?kind=original`
-      : asset.stored_path ? `${_B}/media/${asset.id}?kind=original`
+    const url = asset.thumb_path ? `/media/${asset.id}?kind=original`
+      : asset.stored_path ? `/media/${asset.id}?kind=original`
         : asset.image_url || "";
     if (img) {
       img.src = url;
@@ -2529,7 +3101,7 @@ async function openModal(asset) {
     labelsEl.hidden = true;
     labelsEl.classList.remove("expanded");
     try {
-      const resp = await fetch(_bp(`/api/assets/${asset.id}/labels`));
+      const resp = await fetch(`/api/assets/${asset.id}/labels`);
       if (resp.ok) {
         const data = await resp.json();
         const labels = data.labels || [];
@@ -2600,20 +3172,6 @@ async function openModal(asset) {
     notesArea.oninput = () => scheduleNotesUpdate(asset.id, notesArea.value);
     notesArea.onblur = () => { void persistAssetNotesNow(asset.id, notesArea.value); };
   }
-
-  // Keeper star in modal title
-  const keeperStar = $("#modalKeeperStar");
-  if (keeperStar) keeperStar.hidden = asset.triage_status !== "keeper";
-
-  // Triage buttons
-  updateReviewScopeChips();
-  updateModalTriageButtons(asset.triage_status);
-  const keepBtn = $("#modalKeepBtn");
-  const hideLocalBtn = $("#modalHideLocalBtn");
-  const hideGlobalBtn = $("#modalHideGlobalBtn");
-  if (keepBtn) keepBtn.onclick = async () => { await setTriageFromModal(asset, "keeper"); };
-  if (hideLocalBtn) hideLocalBtn.onclick = async () => { await hideFromModalCollectionScope(asset); };
-  if (hideGlobalBtn) hideGlobalBtn.onclick = async () => { await setTriageFromModal(asset, "hidden"); };
 
   // Flag button
   const flagBtn = $("#modalFlagBtn");
@@ -2734,13 +3292,6 @@ async function openModal(asset) {
   renderMarkers();
 }
 
-function updateModalTriageButtons(triageStatus) {
-  const keepBtn = $("#modalKeepBtn");
-  const hideBtn = $("#modalHideGlobalBtn");
-  if (keepBtn) keepBtn.classList.toggle("active", triageStatus === "keeper");
-  if (hideBtn) hideBtn.classList.toggle("active", triageStatus === "hidden");
-}
-
 async function removeAssetsFromCollections(assetIds, collectionIds) {
   const ids = _uniqNonEmpty(assetIds);
   const targetCollections = _uniqNonEmpty(collectionIds);
@@ -2763,69 +3314,6 @@ async function addAssetsToCollections(assetIds, collectionIds) {
       method: "POST",
       body: JSON.stringify({ asset_ids: ids }),
     });
-  }
-}
-
-async function hideFromModalCollectionScope(asset) {
-  const scope = getReviewScopeInfo();
-  if (!scope.hasCollectionScope) {
-    Shared.showToast("No active collection scope. Use Hide globally for library-wide hide.", { type: "info" });
-    return;
-  }
-  try {
-    const results = await removeAssetsFromCollections([asset.id], scope.collectionIds);
-    const removedCollections = results.filter((r) => r.removed > 0).length;
-    if (!removedCollections) {
-      Shared.showToast("Item is not in the active collection scope.", { type: "info" });
-      return;
-    }
-    Shared.showToast(
-      `Removed from ${removedCollections} collection${removedCollections === 1 ? "" : "s"}.`,
-      { type: "success" }
-    );
-    closeModal();
-    await Promise.all([loadAssets(), loadCatalogTree()]);
-  } catch (e) {
-    Shared.showToast(`Collection hide failed: ${formatApiError(e)}`, { type: "error" });
-  }
-}
-
-async function setTriageFromModal(asset, status) {
-  const newStatus = asset.triage_status === status ? null : status;
-  try {
-    await api(`/api/assets/${encodeURIComponent(asset.id)}/triage`, {
-      method: "POST",
-      body: JSON.stringify({ status: newStatus }),
-    });
-    asset.triage_status = newStatus;
-    updateModalTriageButtons(newStatus);
-    // Update keeper star in modal title
-    const keeperStar = $("#modalKeeperStar");
-    if (keeperStar) keeperStar.hidden = newStatus !== "keeper";
-    // Update badge on card
-    const card = $(`[data-id="${asset.id}"]`);
-    if (card) {
-      const oldBadge = card.querySelector(".triage-badge");
-      if (oldBadge) oldBadge.remove();
-      if (newStatus === "keeper") {
-        const badge = document.createElement("span");
-        badge.className = "triage-badge keeper";
-        badge.title = "Keeper";
-        card.querySelector(".card-image").prepend(badge);
-      } else if (newStatus === "hidden") {
-        const badge = document.createElement("span");
-        badge.className = "triage-badge hidden-status";
-        badge.title = "Hidden";
-        card.querySelector(".card-image").prepend(badge);
-      }
-    }
-    const msg = newStatus === "keeper" ? "Marked as keeper" : newStatus === "hidden" ? "Hidden globally" : "Reset to pending";
-    Shared.showToast(msg, { type: "success" });
-    // Refresh tree counts (they depend on hidden status)
-    loadCatalogTree();
-    if (isOwner()) loadHiddenTree();
-  } catch (e) {
-    Shared.showToast(`Failed: ${formatApiError(e)}`, { type: "error" });
   }
 }
 
@@ -2866,7 +3354,7 @@ async function _navModalScan(delta) {
   const siblingSourceRef = sourceBase ? `${sourceBase}#p${absolutePage}` : (curAsset.source_ref || "");
   state.modalAsset = { ...curAsset, id: siblingId, source_ref: siblingSourceRef };
   const modalImage = $("#modalImage");
-  if (modalImage) modalImage.src = `${_B}/media/${siblingId}?kind=thumb`;
+  if (modalImage) modalImage.src = `/media/${siblingId}?kind=thumb`;
   const indicator = document.querySelector(".modalScanIndicator");
   if (indicator) indicator.textContent = `Page ${newIdx + 1} of ${state.modalScanPages.length}`;
   const prevBtn = document.querySelector(".modalScanPrev");
@@ -3247,7 +3735,7 @@ if (modalEl) modalEl.onclick = (e) => { if (e.target.id === "modal") closeModal(
 // ─── Print ──────────────────────────────────────────────────────────────────────
 
 function printModalAsset(asset) {
-  const url = asset?.id ? `${_B}/media/${asset.id}?kind=original` : (asset?.image_url || "");
+  const url = asset?.id ? `/media/${asset.id}?kind=original` : (asset?.image_url || "");
   if (!url) {
     Shared.showToast("Nothing to print for this item.", { type: "info" });
     return;
@@ -3314,27 +3802,46 @@ function printModalAsset(asset) {
 
 // ─── Review mode ────────────────────────────────────────────────────────────────
 
-function enterReview() {
-  if (!state.assets.length) {
+async function enterReview() {
+  const seedIds = Array.isArray(state.reviewSeedIds) ? _uniqNonEmpty(state.reviewSeedIds) : [];
+  if (!state.assets.length && !seedIds.length) {
+    Shared.showToast("No items to review.", { type: "info" });
+    return;
+  }
+  let reviewData;
+  try {
+    reviewData = await _fetchAllAssetsForCurrentScope();
+  } catch (e) {
+    Shared.showToast(`Unable to load review scope: ${formatApiError(e)}`, { type: "error" });
+    return;
+  }
+  const reviewItems = Array.isArray(reviewData?.items) ? reviewData.items : [];
+  if (!reviewItems.length) {
     Shared.showToast("No items to review.", { type: "info" });
     return;
   }
   state.view = "review";
-  state.reviewItems = [...state.assets];
+  state.reviewItems = reviewItems;
   state.reviewIndex = 0;
   state.reviewHistory = [];
+  state.reviewDrafts = {};
   state.reviewSkipped = 0;
   state.reviewKept = 0;
+  state.reviewMoved = 0;
   state.reviewHidden = 0;
+  state.reviewSnapshotTotal = reviewItems.length;
+  state.reviewScopeTotal = Number(reviewData?.scopeTotal || reviewItems.length);
 
   const browseView = $("#browseView");
   const reviewView = $("#reviewView");
   const reviewComplete = $("#reviewComplete");
   const reviewCard = $("#reviewCard");
+  const reviewActions = document.querySelector(".review-actions");
   if (browseView) browseView.hidden = true;
   if (reviewView) reviewView.hidden = false;
   if (reviewComplete) reviewComplete.hidden = true;
   if (reviewCard) reviewCard.hidden = false;
+  if (reviewActions) reviewActions.style.display = "";
 
   // Update back button label based on whether we came from canvas review
   const backBtn = $("#reviewBack");
@@ -3344,7 +3851,7 @@ function enterReview() {
   const actionBar = $("#canvasActionBar");
   if (actionBar) actionBar.hidden = true;
 
-  renderReviewCard();
+  await renderReviewCard();
 }
 
 function exitReview() {
@@ -3364,20 +3871,141 @@ function exitReview() {
   }
 }
 
-function renderReviewCard() {
+async function hydrateReviewItem(index = state.reviewIndex) {
+  const item = state.reviewItems[index];
+  if (!item || !isOwner()) return item;
+  if (item.classification_review) return item;
+  const hydrated = await hydrateModalAsset(item);
+  if (hydrated && hydrated.id === item.id) {
+    state.reviewItems[index] = hydrated;
+    replaceAssetInState(hydrated);
+    return hydrated;
+  }
+  return item;
+}
+
+function renderReviewClassificationPanel(item) {
+  const panel = $("#reviewClassificationPanel");
+  if (!panel) return;
+  if (!isOwner()) {
+    panel.hidden = true;
+    return;
+  }
+  const review = item?.classification_review || {};
+  const currentTrack = String(review.current_track || "").trim();
+  const currentConfidence = Number(review.current_confidence || 0);
+  const currentReason = String(review.current_reason || "").trim();
+  const sourceVerdict = String(review.source_qc_verdict || "").trim();
+  const sourceTrack = String(review.source_qc_inferred_track || "").trim();
+  const sourceConfidence = Number(review.source_qc_confidence || 0);
+  const sourceReason = String(review.source_qc_reason || "").trim();
+  const overrideTrack = String(review.active_override_track || "").trim();
+  const overrideActor = String(review.active_override_actor || "").trim();
+  const overrideNote = String(review.active_override_note || "").trim();
+  const overrideCreatedAt = String(review.active_override_created_at || "").trim();
+  const effectiveTrack = _effectiveClassificationTrack(review);
+  const statusText = _modalClassificationStatusText(review);
+  const cleanedOverrideNote = _isBoilerplateClassificationReviewNote(overrideNote) ? "" : overrideNote;
+  const draft = state.reviewDrafts && item?.id ? state.reviewDrafts[item.id] || null : null;
+
+  panel.hidden = false;
+
+  const statusEl = $("#reviewClassificationStatus");
+  if (statusEl) {
+    statusEl.textContent = statusText;
+    statusEl.hidden = !statusText;
+  }
+
+  const currentEl = $("#reviewClassificationCurrent");
+  if (currentEl) {
+    const parts = [];
+    if (currentTrack) parts.push(classificationTrackLabel(currentTrack));
+    if (currentConfidence) parts.push(`${Math.round(currentConfidence * 100)}%`);
+    currentEl.textContent = parts.join(" · ") || "No current track";
+    currentEl.title = currentReason || "";
+  }
+
+  const hasSourceConflict = sourceVerdict === "conflicting" && !!sourceTrack;
+  const sourceRow = $("#reviewClassificationSourceRow");
+  const sourceEl = $("#reviewClassificationSource");
+  const sourceReasonEl = $("#reviewClassificationSourceReason");
+  if (sourceRow) sourceRow.hidden = !hasSourceConflict;
+  if (sourceEl) {
+    const parts = [];
+    if (sourceTrack) parts.push(classificationTrackLabel(sourceTrack));
+    if (sourceConfidence) parts.push(`${Math.round(sourceConfidence * 100)}%`);
+    sourceEl.textContent = hasSourceConflict ? parts.join(" · ") : "";
+  }
+  if (sourceReasonEl) {
+    sourceReasonEl.textContent = sourceReason;
+    sourceReasonEl.hidden = !(hasSourceConflict && sourceReason);
+  }
+
+  const overrideRow = $("#reviewClassificationOverrideRow");
+  const overrideEl = $("#reviewClassificationOverride");
+  const overrideMetaEl = $("#reviewClassificationOverrideMeta");
+  if (overrideRow) overrideRow.hidden = !overrideTrack;
+  if (overrideEl) overrideEl.textContent = overrideTrack ? classificationTrackLabel(overrideTrack) : "";
+  if (overrideMetaEl) {
+    const parts = [];
+    if (overrideActor) parts.push(`by ${overrideActor}`);
+    if (overrideCreatedAt) parts.push(overrideCreatedAt.slice(0, 10));
+    if (cleanedOverrideNote) parts.push(cleanedOverrideNote);
+    overrideMetaEl.textContent = parts.join(" · ");
+    overrideMetaEl.hidden = !parts.length;
+  }
+
+  const editor = $("#reviewClassificationEditor");
+  const moveTo = $("#reviewClassificationMoveTo");
+  const comment = $("#reviewClassificationComment");
+  const keepBtn = $("#reviewClassificationKeepBtn");
+  const saveBtn = $("#reviewClassificationSaveBtn");
+  const irrelevantBtn = $("#reviewClassificationIrrelevantBtn");
+  if (editor) editor.hidden = false;
+  const defaultTrack = (draft && draft.track) || overrideTrack || (hasSourceConflict ? sourceTrack : currentTrack);
+  if (moveTo) moveTo.value = _preferredMoveTrack(defaultTrack);
+  if (comment) comment.value = draft && Object.prototype.hasOwnProperty.call(draft, "note") ? draft.note : (cleanedOverrideNote || "");
+  if (keepBtn) keepBtn.disabled = !effectiveTrack;
+  if (saveBtn) saveBtn.disabled = false;
+  if (irrelevantBtn) irrelevantBtn.disabled = false;
+}
+
+function _persistCurrentReviewDraft() {
+  if (!state.reviewDrafts || state.view !== "review") return;
   const item = state.reviewItems[state.reviewIndex];
+  if (!item || !item.id) return;
+  const moveTo = $("#reviewClassificationMoveTo");
+  const comment = $("#reviewClassificationComment");
+  if (!moveTo && !comment) return;
+  state.reviewDrafts[item.id] = {
+    track: _preferredMoveTrack(moveTo?.value || ""),
+    note: String(comment?.value || ""),
+  };
+}
+
+async function renderReviewCard() {
+  const item = await hydrateReviewItem(state.reviewIndex);
   if (!item) return;
 
-  const total = state.reviewItems.length;
+  const total = state.reviewSnapshotTotal || state.reviewItems.length;
+  const scopeTotal = Number.isFinite(Number(state.reviewScopeTotal))
+    ? Math.max(0, Number(state.reviewScopeTotal))
+    : total;
   const counter = $("#reviewCounter");
   const progressBar = $("#reviewProgressBar");
-  if (counter) counter.textContent = `${state.reviewIndex + 1} of ${total}`;
+  if (counter) {
+    if (scopeTotal !== total) {
+      counter.textContent = `${state.reviewIndex + 1} of ${total} snapshot · ${scopeTotal} in scope`;
+    } else {
+      counter.textContent = `${state.reviewIndex + 1} of ${total}`;
+    }
+  }
   if (progressBar) progressBar.style.width = `${((state.reviewIndex) / total) * 100}%`;
 
   const img = $("#reviewImg");
   if (img) {
-    const url = item.thumb_path ? `${_B}/media/${item.id}?kind=original`
-                : item.stored_path ? `${_B}/media/${item.id}?kind=original`
+    const url = item.thumb_path ? `/media/${item.id}?kind=original`
+                : item.stored_path ? `/media/${item.id}?kind=original`
                 : item.image_url || "";
     img.src = url;
     img.alt = displayTitle(item);
@@ -3385,9 +4013,8 @@ function renderReviewCard() {
 
   const titleEl = $("#reviewTitle");
   if (titleEl) {
-    const keeperPrefix = item.triage_status === "keeper" ? "★ " : "";
-    titleEl.textContent = keeperPrefix + displayTitle(item);
-    titleEl.style.color = item.triage_status === "keeper" ? "#b8860b" : "";
+    titleEl.textContent = displayTitle(item);
+    titleEl.style.color = "";
   }
 
   const metaEl = $("#reviewMeta");
@@ -3397,6 +4024,8 @@ function renderReviewCard() {
     parts.push(item.source || "");
     metaEl.textContent = parts.filter(Boolean).join(" · ");
   }
+  const assetIdEl = $("#reviewAssetId");
+  if (assetIdEl) assetIdEl.textContent = item.id ? `ID ${item.id}` : "";
 
   const descEl = $("#reviewDesc");
   if (descEl) descEl.textContent = item.seo_alt_text || item.ai_summary || item.description || "";
@@ -3408,20 +4037,7 @@ function renderReviewCard() {
     link.hidden = !ref;
     link.textContent = ref ? `View on ${item.source || "source"} ↗` : "";
   }
-
-  const scope = getReviewScopeInfo();
-  const hideBtn = $("#reviewHideBtn");
-  if (hideBtn) {
-    const hideLabel = hideBtn.querySelector(".review-btn-label");
-    if (hideLabel) hideLabel.textContent = scope.hasCollectionScope ? "Hide in scope" : "Hide";
-    const hideIcon = hideBtn.querySelector(".review-btn-icon");
-    if (hideIcon) hideIcon.textContent = scope.hasCollectionScope ? "↘" : "✗";
-    hideBtn.title = scope.hasCollectionScope ? "Hide from active collection scope (← or S)" : "Hide globally (← or S)";
-  }
-
-  // Reset checkbox
-  const cb = $("#commentLater");
-  if (cb) cb.checked = false;
+  renderReviewClassificationPanel(item);
 
   // Update undo button
   const prevBtn = $("#reviewPrevBtn");
@@ -3430,111 +4046,158 @@ function renderReviewCard() {
   if (undoBtn) undoBtn.disabled = state.reviewHistory.length === 0;
 }
 
-async function reviewAction(action) {
-  const item = state.reviewItems[state.reviewIndex];
-  if (!item) return;
-  const scope = getReviewScopeInfo();
-  const hideMode = action === "hide" ? (scope.hasCollectionScope ? "local" : "global") : null;
+function _incrementReviewDecisionCounter(kind) {
+  if (kind === "keep_current") state.reviewKept += 1;
+  else if (kind === "move") state.reviewMoved += 1;
+  else if (kind === "irrelevant") state.reviewHidden += 1;
+  else if (kind === "skip") state.reviewSkipped += 1;
+}
 
-  // Save undo entry
-  const historyEntry = {
-    id: item.id,
-    index: state.reviewIndex,
-    previousStatus: item.triage_status || null,
-    previousAnnotation: item.needs_annotation || 0,
-    action,
-    hideMode,
-    removedFromCollections: [],
-  };
-  state.reviewHistory.push(historyEntry);
+function _decrementReviewDecisionCounter(kind) {
+  if (kind === "keep_current") state.reviewKept = Math.max(0, state.reviewKept - 1);
+  else if (kind === "move") state.reviewMoved = Math.max(0, state.reviewMoved - 1);
+  else if (kind === "irrelevant") state.reviewHidden = Math.max(0, state.reviewHidden - 1);
+  else if (kind === "skip") state.reviewSkipped = Math.max(0, state.reviewSkipped - 1);
+}
 
-  if (action === "keep") {
-    const commentLater = document.getElementById("commentLater")?.checked || false;
-    try {
-      await api(`/api/assets/${encodeURIComponent(item.id)}/triage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "keeper", needs_annotation: commentLater ? 1 : 0 }),
-      });
-      item.triage_status = "keeper";
-      item.needs_annotation = commentLater ? 1 : 0;
-    } catch (e) {
-      Shared.showToast(`Failed to save: ${formatApiError(e)}`, { type: "error" });
-    }
-    state.reviewKept++;
-  } else if (action === "hide") {
-    if (hideMode === "local") {
-      try {
-        const results = await removeAssetsFromCollections([item.id], scope.collectionIds);
-        historyEntry.removedFromCollections = results
-          .filter((r) => r.removed > 0)
-          .map((r) => r.collectionId);
-      } catch (e) {
-        Shared.showToast(`Failed to save: ${formatApiError(e)}`, { type: "error" });
-      }
-    } else {
-      try {
-        await api(`/api/assets/${encodeURIComponent(item.id)}/triage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status: "hidden" }),
-        });
-        item.triage_status = "hidden";
-      } catch (e) {
-        Shared.showToast(`Failed to save: ${formatApiError(e)}`, { type: "error" });
-      }
-    }
-    state.reviewHidden++;
-  } else {
-    // skip — no API call
-    state.reviewSkipped++;
-  }
-
-  state.reviewIndex++;
-  if (state.reviewIndex >= state.reviewItems.length) {
+async function _advanceReviewAfterDecision() {
+  const snapshotTotal = state.reviewSnapshotTotal || state.reviewItems.length;
+  state.reviewIndex += 1;
+  if (state.reviewIndex >= snapshotTotal) {
     showReviewComplete();
     return;
   }
-  renderReviewCard();
+  await renderReviewCard();
+}
+
+async function saveReviewClassificationReview(opts = {}) {
+  const item = await hydrateReviewItem(state.reviewIndex);
+  if (!item || !item.id) return;
+  if (!isOwner()) {
+    Shared.showToast("Track review is owner-only.", { type: "info" });
+    return;
+  }
+
+  const review = item.classification_review || {};
+  const currentTrack = _effectiveClassificationTrack(review);
+  const previousOverrideTrack = String(review.active_override_track || "").trim();
+  const previousOverrideNote = String(review.active_override_note || "").trim();
+  const moveTo = $("#reviewClassificationMoveTo");
+  const comment = $("#reviewClassificationComment");
+  const keepBtn = $("#reviewClassificationKeepBtn");
+  const saveBtn = $("#reviewClassificationSaveBtn");
+  const irrelevantBtn = $("#reviewClassificationIrrelevantBtn");
+  const track = String(opts.track || moveTo?.value || "").trim();
+  const note = String(comment?.value || "").trim();
+  if (!track) {
+    Shared.showToast("Choose a track first.", { type: "info" });
+    return;
+  }
+
+  if (keepBtn) keepBtn.disabled = true;
+  if (saveBtn) saveBtn.disabled = true;
+  if (irrelevantBtn) irrelevantBtn.disabled = true;
+  if (moveTo) moveTo.disabled = true;
+  if (comment) comment.disabled = true;
+
+  try {
+    const data = await api(`/api/assets/${encodeURIComponent(item.id)}/classification-review`, {
+      method: "PUT",
+      body: JSON.stringify({ track, note }),
+    });
+    const updated = data.asset || null;
+    if (!updated) throw new Error("Updated asset missing from response");
+    replaceAssetInState(updated);
+    state.reviewItems[state.reviewIndex] = updated;
+    state.modalAsset = state.modalAsset?.id === updated.id ? updated : state.modalAsset;
+    if (state.reviewDrafts && updated.id) delete state.reviewDrafts[updated.id];
+
+    const kind = track === currentTrack ? "keep_current" : (track === "irrelevant" ? "irrelevant" : "move");
+    state.reviewHistory.push({
+      kind: "classification",
+      decisionKind: kind,
+      id: updated.id,
+      index: state.reviewIndex,
+      previousOverrideTrack,
+      previousOverrideNote,
+      appliedTrack: track,
+      appliedNote: note,
+    });
+    _incrementReviewDecisionCounter(kind);
+    await _advanceReviewAfterDecision();
+  } catch (e) {
+    Shared.showToast(`Failed to save: ${formatApiError(e)}`, { type: "error" });
+  } finally {
+    if (keepBtn) keepBtn.disabled = false;
+    if (saveBtn) saveBtn.disabled = false;
+    if (irrelevantBtn) irrelevantBtn.disabled = false;
+    if (moveTo) moveTo.disabled = false;
+    if (comment) comment.disabled = false;
+  }
+}
+
+async function reviewAction(action) {
+  if (action !== "skip") return;
+  const item = state.reviewItems[state.reviewIndex];
+  if (!item) return;
+  state.reviewHistory.push({
+    kind: "skip",
+    id: item.id,
+    index: state.reviewIndex,
+    decisionKind: "skip",
+  });
+  _incrementReviewDecisionCounter("skip");
+  await _advanceReviewAfterDecision();
 }
 
 async function undoReview() {
   const last = state.reviewHistory.pop();
   if (!last) return;
 
-  // Revert counts
-  if (last.action === "keep") state.reviewKept = Math.max(0, state.reviewKept - 1);
-  else if (last.action === "hide") state.reviewHidden = Math.max(0, state.reviewHidden - 1);
-  else state.reviewSkipped = Math.max(0, state.reviewSkipped - 1);
+  _decrementReviewDecisionCounter(last.decisionKind || "");
 
-  // Restore API
   try {
-    if (last.action === "hide" && last.hideMode === "local") {
-      const restoreCollections = _uniqNonEmpty(last.removedFromCollections || []);
-      if (restoreCollections.length) {
-        await addAssetsToCollections([last.id], restoreCollections);
-      }
-    } else {
-      await api(`/api/assets/${encodeURIComponent(last.id)}/triage`, {
-        method: "POST",
-        body: JSON.stringify({ status: last.previousStatus, needs_annotation: last.previousAnnotation }),
+    if (last.kind === "classification") {
+      const payload = last.previousOverrideTrack
+        ? { track: last.previousOverrideTrack, note: last.previousOverrideNote }
+        : { clear: true };
+      const data = await api(`/api/assets/${encodeURIComponent(last.id)}/classification-review`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
       });
-      const item = state.reviewItems.find((i) => i.id === last.id);
-      if (item) { item.triage_status = last.previousStatus; item.needs_annotation = last.previousAnnotation; }
+      const restored = data.asset || null;
+      if (restored) {
+        const idx = state.reviewItems.findIndex((item) => item && item.id === last.id);
+        if (idx >= 0) state.reviewItems[idx] = restored;
+        replaceAssetInState(restored);
+        if (state.modalAsset?.id === restored.id) state.modalAsset = restored;
+      }
+      if (state.reviewDrafts && last.id) {
+        state.reviewDrafts[last.id] = {
+          track: String(last.appliedTrack || "").trim(),
+          note: String(last.appliedNote || ""),
+        };
+      }
     }
   } catch (e) {
     Shared.showToast(`Undo failed: ${formatApiError(e)}`, { type: "error" });
+    state.reviewHistory.push(last);
+    _incrementReviewDecisionCounter(last.decisionKind || "");
+    return;
   }
 
   state.reviewIndex = last.index;
 
-  // If review was completed, show card again
   const reviewComplete = $("#reviewComplete");
   const reviewCard = $("#reviewCard");
+  const reviewActions = document.querySelector(".review-actions");
+  const reviewUndoBtn = $("#reviewUndo");
   if (reviewComplete) reviewComplete.hidden = true;
   if (reviewCard) reviewCard.hidden = false;
+  if (reviewActions) reviewActions.style.display = "";
+  if (reviewUndoBtn) reviewUndoBtn.hidden = false;
 
-  renderReviewCard();
+  await renderReviewCard();
 }
 
 function showReviewComplete() {
@@ -3549,20 +4212,26 @@ function showReviewComplete() {
   if (reviewComplete) {
     reviewComplete.hidden = false;
     const desc = $("#reviewCompleteDesc");
-    const total = state.reviewItems.length;
+    const total = state.reviewSnapshotTotal || state.reviewItems.length;
     if (desc) desc.textContent = `You reviewed ${total} item${total === 1 ? "" : "s"}.`;
     const statsEl = $("#reviewCompleteStats");
     if (statsEl) {
       statsEl.innerHTML = `
-        <span class="review-stat keeper">${state.reviewKept} keepers</span>
-        <span class="review-stat hidden-s">${state.reviewHidden} hidden</span>
+        <span class="review-stat keeper">${state.reviewKept} kept current</span>
+        <span class="review-stat moved">${state.reviewMoved} moved</span>
+        <span class="review-stat hidden-s">${state.reviewHidden} irrelevant</span>
         <span class="review-stat skipped">${state.reviewSkipped} skipped</span>
       `;
     }
     const progressBar = $("#reviewProgressBar");
     if (progressBar) progressBar.style.width = "100%";
     const counter = $("#reviewCounter");
-    if (counter) counter.textContent = `${total} of ${total}`;
+    if (counter) {
+      const scopeTotal = Number.isFinite(Number(state.reviewScopeTotal))
+        ? Math.max(0, Number(state.reviewScopeTotal))
+        : total;
+      counter.textContent = scopeTotal !== total ? `${total} of ${total} snapshot · ${scopeTotal} in scope` : `${total} of ${total}`;
+    }
   }
 }
 
@@ -3575,8 +4244,19 @@ function enterCanvasReview() {
   }
   let switchedFromExplorer = false;
   if (isExplorerViewActive()) {
+    if (_ExplorerImpl && typeof _ExplorerImpl.getVisibleNodeIds === "function") {
+      try {
+        state.reviewSeedIds = _uniqNonEmpty(_ExplorerImpl.getVisibleNodeIds() || []);
+      } catch (_) {
+        state.reviewSeedIds = null;
+      }
+    } else {
+      state.reviewSeedIds = null;
+    }
     setViewMode("grid", { persist: false });
     switchedFromExplorer = true;
+  } else {
+    state.reviewSeedIds = null;
   }
   state.canvasReview = true;
   state.canvasSelected.clear();
@@ -3801,14 +4481,33 @@ if (reviewBtn) reviewBtn.addEventListener("click", enterCanvasReview);
 const reviewBackBtn = $("#reviewBack");
 if (reviewBackBtn) reviewBackBtn.addEventListener("click", exitReview);
 
-const reviewHideBtn = $("#reviewHideBtn");
-if (reviewHideBtn) reviewHideBtn.addEventListener("click", () => reviewAction("hide"));
-
 const reviewSkipBtn = $("#reviewSkipBtn");
 if (reviewSkipBtn) reviewSkipBtn.addEventListener("click", () => reviewAction("skip"));
 
-const reviewKeepBtn = $("#reviewKeepBtn");
-if (reviewKeepBtn) reviewKeepBtn.addEventListener("click", () => reviewAction("keep"));
+const reviewClassificationKeepBtn = $("#reviewClassificationKeepBtn");
+if (reviewClassificationKeepBtn) {
+  reviewClassificationKeepBtn.addEventListener("click", () => saveReviewClassificationReview({
+    track: _effectiveClassificationTrack(state.reviewItems[state.reviewIndex]?.classification_review || {}),
+  }));
+}
+
+const reviewClassificationMoveTo = $("#reviewClassificationMoveTo");
+if (reviewClassificationMoveTo) {
+  reviewClassificationMoveTo.addEventListener("change", _persistCurrentReviewDraft);
+}
+
+const reviewClassificationComment = $("#reviewClassificationComment");
+if (reviewClassificationComment) {
+  reviewClassificationComment.addEventListener("input", _persistCurrentReviewDraft);
+}
+
+const reviewClassificationSaveBtn = $("#reviewClassificationSaveBtn");
+if (reviewClassificationSaveBtn) reviewClassificationSaveBtn.addEventListener("click", () => saveReviewClassificationReview());
+
+const reviewClassificationIrrelevantBtn = $("#reviewClassificationIrrelevantBtn");
+if (reviewClassificationIrrelevantBtn) {
+  reviewClassificationIrrelevantBtn.addEventListener("click", () => saveReviewClassificationReview({ track: "irrelevant" }));
+}
 
 const reviewPrevBtn = $("#reviewPrevBtn");
 if (reviewPrevBtn) reviewPrevBtn.addEventListener("click", undoReview);
@@ -3820,19 +4519,23 @@ const reviewExitBtn = $("#reviewExitBtn");
 if (reviewExitBtn) reviewExitBtn.addEventListener("click", exitReview);
 
 const reviewSkippedBtn = $("#reviewSkippedBtn");
-if (reviewSkippedBtn) reviewSkippedBtn.addEventListener("click", () => {
-  // Restart with skipped items (those that were "skip" actioned)
+if (reviewSkippedBtn) reviewSkippedBtn.addEventListener("click", async () => {
+  // Restart with skipped items only.
   const skipped = state.reviewItems.filter((item) => {
     const histEntry = state.reviewHistory.find((h) => h.id === item.id);
-    return !histEntry || histEntry.action === "skip";
+    return histEntry && histEntry.decisionKind === "skip";
   });
   if (!skipped.length) { Shared.showToast("No skipped items.", { type: "info" }); return; }
   state.reviewItems = skipped;
   state.reviewIndex = 0;
   state.reviewHistory = [];
+  state.reviewDrafts = {};
   state.reviewKept = 0;
+  state.reviewMoved = 0;
   state.reviewHidden = 0;
   state.reviewSkipped = 0;
+  state.reviewSnapshotTotal = skipped.length;
+  state.reviewScopeTotal = skipped.length;
   const reviewComplete = $("#reviewComplete");
   const reviewCard = $("#reviewCard");
   const reviewActions = document.querySelector(".review-actions");
@@ -3841,7 +4544,7 @@ if (reviewSkippedBtn) reviewSkippedBtn.addEventListener("click", () => {
   if (reviewCard) reviewCard.hidden = false;
   if (reviewActions) reviewActions.style.display = "";
   if (reviewUndoBtnEl) reviewUndoBtnEl.hidden = false;
-  renderReviewCard();
+  await renderReviewCard();
 });
 
 // ─── Keyboard shortcuts ──────────────────────────────────────────────────────────
@@ -3883,13 +4586,21 @@ window.addEventListener("keydown", (e) => {
     case "k":
     case "K":
       e.preventDefault();
-      reviewAction("keep");
+      saveReviewClassificationReview({
+        track: _effectiveClassificationTrack(state.reviewItems[state.reviewIndex]?.classification_review || {}),
+      });
       break;
     case "ArrowLeft":
     case "s":
     case "S":
       e.preventDefault();
-      reviewAction("hide");
+      saveReviewClassificationReview({ track: "irrelevant" });
+      break;
+    case "Enter":
+    case "m":
+    case "M":
+      e.preventDefault();
+      saveReviewClassificationReview();
       break;
     case "ArrowDown":
     case " ":
@@ -3901,13 +4612,6 @@ window.addEventListener("keydown", (e) => {
       e.preventDefault();
       undoReview();
       break;
-    case "c":
-    case "C": {
-      e.preventDefault();
-      const cb = $("#commentLater");
-      if (cb) cb.checked = !cb.checked;
-      break;
-    }
   }
 });
 
@@ -4094,6 +4798,7 @@ async function executeChatAction(action, params) {
         state.currentContentKind = null;
         clearCollectionFilter();
         clearCatalogFilter();
+        clearClassificationFilter();
         state.currentTreeNodeId = null;
         state.triageFilter = "";
         const data = await api(`/api/assets?ids=${encodeURIComponent(ids)}&include_hidden=1&limit=200`);
@@ -4290,6 +4995,7 @@ async function executeChatAction(action, params) {
       state.currentContentKind = null;
       clearCollectionFilter();
       clearCatalogFilter();
+      clearClassificationFilter();
       state.currentTreeNodeId = null;
       state.triageFilter = "";
       state.q = "";
@@ -4394,7 +5100,7 @@ let _explorerMode = "3d";   // "2d" | "3d"
 let _ExplorerImpl = null;
 let _disable3DForSession = false;
 let _explorer3DLoadPromise = null;
-const EXPLORER_3D_MODULE_URL = `${_B}/app/attractor-explorer-3d.js?v=32`;
+const EXPLORER_3D_MODULE_URL = "/app/attractor-explorer-3d.js?v=33";
 // Hard refresh in Safari can cold-load Three.js from CDN; allow enough
 // headroom so we do not incorrectly drop into 2D fallback.
 const EXPLORER_3D_READY_WAIT_MS = 12000;
@@ -4773,6 +5479,7 @@ function _hasActiveFilters() {
     state.triageFilter ||
     state.currentSource ||
     state.currentBoard ||
+    hasClassificationFilter() ||
     hasCollectionFilter() ||
     hasCatalogFilter() ||
     state.chatItemIds ||
@@ -4840,6 +5547,8 @@ async function syncExplorerFilter() {
   if (state.currentSource) params.set("source", state.currentSource);
   if (state.currentBoard) params.set("board", state.currentBoard);
   if (state.currentContentKind) params.set("content_kind", state.currentContentKind);
+  if (state.currentClassificationAxis) params.set("classification_axis", state.currentClassificationAxis);
+  if (state.currentClassificationValue) params.set("classification_value", state.currentClassificationValue);
   const collectionIds = getCollectionFilterIds();
   if (collectionIds.length) params.set("collection_id", collectionIds.join(","));
   if (state.triageFilter === "needs-comment") {
@@ -4904,6 +5613,11 @@ function updateFilterIndicator() {
       catalogLabel = `${catalogFiles.length} folders`;
     }
     parts.push(`Catalog: ${catalogLabel}`);
+  }
+  if (hasClassificationFilter()) {
+    const axisLabel = String(state.currentClassificationAxis || "").trim().replace(/_/g, " ");
+    const scopeLabel = String(state.currentClassificationLabel || state.currentClassificationValue || axisLabel).trim();
+    parts.push(`Browse: ${scopeLabel}`);
   }
   if (collectionIds.length) {
     if (collectionIds.length === 1) {
@@ -5387,14 +6101,6 @@ function applyRoleVisibility() {
   const manageCollectionsEl = $("#manageCollections");
   if (manageCollectionsEl) manageCollectionsEl.hidden = !owner;
 
-  // Modal triage buttons — owner-only
-  const keepBtnEl = $("#modalKeepBtn");
-  const hideLocalBtnEl = $("#modalHideLocalBtn");
-  const hideGlobalBtnEl = $("#modalHideGlobalBtn");
-  if (keepBtnEl) keepBtnEl.hidden = !owner;
-  if (hideLocalBtnEl) hideLocalBtnEl.hidden = !owner;
-  if (hideGlobalBtnEl) hideGlobalBtnEl.hidden = !owner;
-
   // Share context actions — available to authenticated actors only
   for (const id of ["modalShareLinkBtn", "modalShareEmailBtn", "modalShareMessageBtn"]) {
     const btn = document.getElementById(id);
@@ -5402,8 +6108,6 @@ function applyRoleVisibility() {
   }
   const shareGroup = $("#modalShareGroup");
   if (shareGroup) shareGroup.hidden = !state.actor;
-  const reviewGroup = $("#modalReviewGroup");
-  if (reviewGroup) reviewGroup.hidden = !state.actor;
 
   // Modal flag/tag buttons — scoped by named owner permissions
   const flagBtnEl = $("#modalFlagBtn");

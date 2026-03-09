@@ -62,6 +62,7 @@ from .store import (
     update_annotation,
     update_asset_notes,
 )
+from .title_workflow import TitleConflictError, TitleNotFoundError, apply_working_title, enrich_assets_with_title_info
 from .explorer_layout import compute_layout
 from .feature_vectors import build_feature_vectors
 from .thumbnails import generate_thumbnails
@@ -75,6 +76,12 @@ DEFAULT_ASSETS_PAGE_SIZE = 240
 MAX_SCAN_DOC_GROUP_PAGES = 6
 VIDEO_UPLOAD_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".mpeg", ".mpg", ".wmv", ".3gp"}
 SCAN_DOC_TITLE_SUFFIX_RE = re.compile(r"(\s-\sdoc\s+\d+(?:\s+p\d+)?)\s*$", re.IGNORECASE)
+CLASSIFICATION_TRACK_OPTIONS = (
+    "style_product_decor",
+    "construction_concern",
+    "home_maintenance_diy",
+    "irrelevant",
+)
 
 # ── API key helpers ──────────────────────────────────────────────────────────────
 
@@ -346,6 +353,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 flagged_only=_parse_bool_param(q.get("flagged", [""])[0], default=False),
                 tagged_only=_parse_bool_param(q.get("tagged", [""])[0], default=False),
                 include_hidden=include_hidden,
+                classification_axis=q.get("classification_axis", [""])[0],
+                classification_value=q.get("classification_value", [""])[0],
                 limit=page_limit + 1,
                 offset=int(q.get("offset", ["0"])[0]),
             )
@@ -396,6 +405,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 needs_annotation=_parse_bool_param(q.get("needs_annotation", [""])[0], default=False),
                 flagged_only=_parse_bool_param(q.get("flagged", [""])[0], default=False),
                 include_hidden=include_hidden,
+                classification_axis=q.get("classification_axis", [""])[0],
+                classification_value=q.get("classification_value", [""])[0],
             )
             return _send(self, 200, {"ids": ids})
 
@@ -1281,6 +1292,73 @@ class ApiHandler(BaseHTTPRequestHandler):
         except Exception as e:
             return _send(self, 400, {"error": str(e)})
 
+        m = re.match(r"^/api/assets/([^/]+)/title$", parsed.path)
+        if m:
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
+            asset_id = m.group(1)
+            requested_title = str(body.get("title") or "").strip()
+            expected_title_raw = body.get("expected_title")
+            expected_title = str(expected_title_raw or "").strip() if expected_title_raw is not None else None
+            use_suggested = bool(body.get("use_suggested"))
+
+            try:
+                if use_suggested and not requested_title:
+                    current_asset = self._with_db(self._get_asset_for_modal, asset_id=asset_id, include_hidden=True)
+                    if not current_asset:
+                        return _send(self, 404, {"error": "asset not found"})
+                    requested_title = str(
+                        ((current_asset.get("title_info") or {}).get("suggested_title") or "")
+                    ).strip()
+                    if not requested_title:
+                        return _send(self, 400, {"error": "no suggested title available"})
+                updated_asset = self._with_db(
+                    apply_working_title,
+                    asset_id=asset_id,
+                    title=requested_title,
+                    actor_name=str(actor.get("name") or "").strip() or "ui",
+                    expected_title=expected_title,
+                    origin_ref="api:/api/assets/title",
+                )
+            except TitleNotFoundError:
+                return _send(self, 404, {"error": "asset not found"})
+            except TitleConflictError as e:
+                return _send(self, 409, {"error": str(e)})
+            except ValueError as e:
+                return _send(self, 400, {"error": str(e)})
+
+            return _send(self, 200, {"ok": True, "asset": updated_asset})
+
+        m = re.match(r"^/api/assets/([^/]+)/classification-review$", parsed.path)
+        if m:
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
+            asset_id = m.group(1)
+            clear_override = bool(body.get("clear"))
+            track = str(body.get("track") or "").strip()
+            note = str(body.get("note") or "").strip()
+            if not clear_override and track not in CLASSIFICATION_TRACK_OPTIONS:
+                return _send(self, 400, {"error": "track must be one of style_product_decor, construction_concern, home_maintenance_diy, irrelevant"})
+            try:
+                if clear_override:
+                    updated_asset = self._with_db(
+                        self._clear_modal_classification_review,
+                        asset_id=asset_id,
+                    )
+                else:
+                    updated_asset = self._with_db(
+                        self._apply_modal_classification_review,
+                        asset_id=asset_id,
+                        track=track,
+                        note=note,
+                        actor_name=str(actor.get("name") or "").strip() or "ui",
+                    )
+            except FileNotFoundError:
+                return _send(self, 404, {"error": "asset not found"})
+            return _send(self, 200, {"ok": True, "asset": updated_asset})
+
         m = re.match(r"^/api/assets/([^/]+)$", parsed.path)
         if m:
             notes = body.get("notes") or ""
@@ -1778,6 +1856,18 @@ class ApiHandler(BaseHTTPRequestHandler):
                 current_section["children"].append(child)
                 continue
 
+        tree = [
+            node
+            for node in tree
+            if node.get("type") != "dimension" or str(node.get("id") or "").strip().lower() == "dimension:other"
+        ]
+        try:
+            with Db(self.server.db_path) as db:
+                ensure_schema(db)
+                tree.extend(self._build_classification_tree_sections(db))
+        except Exception:
+            pass
+
         # Replace catalog-file collection section with live DB-backed, visible collections.
         tree = [node for node in tree if node.get("type") != "collections_group"]
         try:
@@ -1833,6 +1923,166 @@ class ApiHandler(BaseHTTPRequestHandler):
             pass
 
         return tree
+
+    def _classification_value_label(self, axis_name: str, axis_value: str) -> str:
+        axis = str(axis_name or "").strip().lower()
+        value = str(axis_value or "").strip().lower()
+        if not value:
+            return ""
+        special = {
+            "style_product_decor": "Style / Decor",
+            "construction_concern": "Construction",
+            "home_maintenance_diy": "Maintenance / DIY",
+            "plans_code_permits": "Plans / Code / Permits",
+            "site_exterior": "Site / Exterior",
+            "non_spatial": "Non-Spatial",
+            "full_space_scene": "Full Space Scene",
+            "single_product": "Single Product",
+            "material_finish": "Material / Finish",
+            "architectural_detail": "Architectural Detail",
+            "plan_drawing": "Plan / Drawing",
+            "vignette_styling": "Vignette / Styling",
+            "lighting_fixture": "Lighting",
+            "laundry_room": "Laundry",
+            "entryway": "Entry",
+            "mep": "MEP",
+            "zip_system": "ZIP System",
+        }
+        if value in special:
+            return special[value]
+        if axis == "product_system_focus" and value.endswith("_system"):
+            return value.replace("_", " ").title()
+        return value.replace("_", " ").title()
+
+    def _build_classification_tree_sections(self, db: Db) -> list[dict]:
+        track_run_id = db.query_value(
+            "select id from classification_runs where run_type='track_gate' order by created_at desc limit 1"
+        )
+        axis_run_id = db.query_value(
+            "select id from classification_runs where run_type='multi_axis_inference' order by created_at desc limit 1"
+        )
+        if not track_run_id and not axis_run_id:
+            return []
+
+        hidden_collection_id = db.query_value("select id from collections where lower(name)='hidden' limit 1")
+        visible_clauses = [
+            "(a.triage_status is null or a.triage_status != 'hidden')",
+        ]
+        visible_params: list[object] = []
+        if hidden_collection_id:
+            visible_clauses.append("a.id not in (select asset_id from collection_items where collection_id = ?)")
+            visible_params.append(hidden_collection_id)
+        visible_sql = " and ".join(visible_clauses)
+        home_visible_sql = f"{visible_sql} and coalesce(a.category, 'home_design') = 'home_design'"
+
+        sections: list[dict] = []
+
+        if track_run_id:
+            track_rows = db.query(
+                f"""
+                select ata.track as axis_value, count(distinct ata.asset_id) as n
+                from asset_track_assessments ata
+                join assets a on a.id = ata.asset_id
+                where ata.run_id = ?
+                  and {visible_sql}
+                group by ata.track
+                order by n desc, ata.track asc
+                """,
+                (str(track_run_id), *visible_params),
+            )
+            if track_rows:
+                total = int(sum(int(row["n"] or 0) for row in track_rows))
+                sections.append(
+                    {
+                        "id": "classification:track",
+                        "label": "Track",
+                        "count": total,
+                        "type": "classification",
+                        "axis_name": "track",
+                        "children": [
+                            {
+                                "id": f"classification_item:track:{str(row['axis_value'] or '').strip()}",
+                                "label": self._classification_value_label("track", str(row["axis_value"] or "")),
+                                "count": int(row["n"] or 0),
+                                "type": "classification_item",
+                                "axis_name": "track",
+                                "axis_value": str(row["axis_value"] or "").strip(),
+                            }
+                            for row in track_rows
+                            if str(row["axis_value"] or "").strip()
+                        ],
+                    }
+                )
+
+        if not axis_run_id:
+            return sections
+
+        axis_specs = [
+            ("space_context", "Space Context", "style_product_decor", 10),
+            ("subject_type", "Subject Type", "style_product_decor", 10),
+            ("room", "Rooms", "style_product_decor", 16),
+            ("product_focus", "Style Product Focus", "style_product_decor", 16),
+            ("concern_domain", "Construction Concerns", "construction_concern", 12),
+            ("product_system_focus", "Construction Systems", "construction_concern", 12),
+        ]
+        for axis_name, label, track_filter, max_children in axis_specs:
+            track_sql = " and aam.track = ?"
+            base_params = [str(axis_run_id), axis_name, *visible_params, track_filter]
+            total = db.query_value(
+                f"""
+                select count(distinct aam.asset_id)
+                from asset_axis_memberships aam
+                join assets a on a.id = aam.asset_id
+                where aam.run_id = ?
+                  and aam.axis_name = ?
+                  and {home_visible_sql}
+                  {track_sql}
+                """,
+                tuple(base_params),
+            )
+            if not total:
+                continue
+            rows = db.query(
+                f"""
+                select aam.axis_value, count(distinct aam.asset_id) as n
+                from asset_axis_memberships aam
+                join assets a on a.id = aam.asset_id
+                where aam.run_id = ?
+                  and aam.axis_name = ?
+                  and {home_visible_sql}
+                  {track_sql}
+                group by aam.axis_value
+                order by n desc, aam.axis_value asc
+                limit ?
+                """,
+                tuple([*base_params, int(max_children)]),
+            )
+            children = [
+                {
+                    "id": f"classification_item:{axis_name}:{str(row['axis_value'] or '').strip()}",
+                    "label": self._classification_value_label(axis_name, str(row["axis_value"] or "")),
+                    "count": int(row["n"] or 0),
+                    "type": "classification_item",
+                    "axis_name": axis_name,
+                    "axis_value": str(row["axis_value"] or "").strip(),
+                }
+                for row in rows
+                if str(row["axis_value"] or "").strip()
+            ]
+            if not children:
+                continue
+            sections.append(
+                {
+                    "id": f"classification:{axis_name}",
+                    "label": label,
+                    "count": int(total or 0),
+                    "type": "classification",
+                    "axis_name": axis_name,
+                    "children": children,
+                }
+            )
+
+        return sections
 
     def _adjust_tree_counts_for_hidden(self, tree: list[dict]) -> None:
         """Adjust browse-tree counts so they reflect only visible items.
@@ -2140,7 +2390,11 @@ class ApiHandler(BaseHTTPRequestHandler):
                    a.created_at, a.imported_at, a.image_url, a.stored_path, a.thumb_path,
                    a.triage_status, a.needs_annotation, a.source_url, a.seo_alt_text,
                    a.post_text, a.hashtags, a.engagement_json, a.dominant_color,
-                   a.ai_summary, a.image_width, a.image_height, a.content_kind,
+                   coalesce(
+                     (select ai.summary from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1),
+                     a.ai_summary
+                   ) as ai_summary,
+                   a.image_width, a.image_height, a.content_kind,
                    a.creator_name, a.source_domain, a.source_name, a.notes,
                    a.flagged, a.flagged_by, a.flagged_note,
                    a.tagged, a.tagged_by, a.tagged_note
@@ -2153,6 +2407,8 @@ class ApiHandler(BaseHTTPRequestHandler):
         if not rows:
             return None
         asset = dict(rows[0])
+        enrich_assets_with_title_info(db, [asset])
+        asset["classification_review"] = self._classification_review_payload(db, asset_id=asset_id)
         if include_hidden:
             return asset
         if str(asset.get("triage_status") or "").strip().lower() == "hidden":
@@ -2167,6 +2423,144 @@ class ApiHandler(BaseHTTPRequestHandler):
             )
             if in_hidden:
                 return None
+        return asset
+
+    def _classification_review_payload(self, db: Db, *, asset_id: str) -> dict[str, object]:
+        track_row = db.query(
+            """
+            select run_id, track, confidence, is_ambiguous, decision_source, coalesce(reason, '') as reason, created_at
+            from asset_track_assessments
+            where asset_id=?
+            order by created_at desc, id desc
+            limit 1
+            """,
+            (asset_id,),
+        )
+        source_qc_row = db.query(
+            """
+            select run_id, track, inferred_track, verdict, confidence, coalesce(reason, '') as reason, coalesce(fetch_status, '') as fetch_status, created_at
+            from asset_source_link_qc
+            where asset_id=?
+            order by created_at desc, id desc
+            limit 1
+            """,
+            (asset_id,),
+        )
+        now_iso = datetime.now(timezone.utc).isoformat()
+        override_row = db.query(
+            """
+            select axis_value, actor, coalesce(note, '') as note, created_at
+            from asset_overrides
+            where asset_id=?
+              and axis_name='track'
+              and operation='set'
+              and (expires_at is null or expires_at > ?)
+            order by created_at desc, id desc
+            limit 1
+            """,
+            (asset_id, now_iso),
+        )
+        current = dict(track_row[0]) if track_row else {}
+        source_qc = dict(source_qc_row[0]) if source_qc_row else {}
+        override = dict(override_row[0]) if override_row else {}
+        return {
+            "current_track": str(current.get("track") or "").strip(),
+            "current_confidence": current.get("confidence"),
+            "current_is_ambiguous": int(current.get("is_ambiguous") or 0),
+            "current_decision_source": str(current.get("decision_source") or "").strip(),
+            "current_reason": str(current.get("reason") or "").strip(),
+            "current_run_id": str(current.get("run_id") or "").strip(),
+            "source_qc_track": str(source_qc.get("track") or "").strip(),
+            "source_qc_inferred_track": str(source_qc.get("inferred_track") or "").strip(),
+            "source_qc_verdict": str(source_qc.get("verdict") or "").strip(),
+            "source_qc_confidence": source_qc.get("confidence"),
+            "source_qc_reason": str(source_qc.get("reason") or "").strip(),
+            "source_qc_fetch_status": str(source_qc.get("fetch_status") or "").strip(),
+            "source_qc_run_id": str(source_qc.get("run_id") or "").strip(),
+            "active_override_track": str(override.get("axis_value") or "").strip(),
+            "active_override_actor": str(override.get("actor") or "").strip(),
+            "active_override_note": str(override.get("note") or "").strip(),
+            "active_override_created_at": str(override.get("created_at") or "").strip(),
+        }
+
+    def _apply_modal_classification_review(
+        self,
+        db: Db,
+        *,
+        asset_id: str,
+        track: str,
+        note: str,
+        actor_name: str,
+    ) -> dict:
+        existing = db.query_value("select 1 from assets where id=? limit 1", (asset_id,))
+        if not existing:
+            raise FileNotFoundError("asset not found")
+        created_at = datetime.now(timezone.utc).isoformat()
+        current_track = str((self._classification_review_payload(db, asset_id=asset_id) or {}).get("current_track") or "").strip()
+        if not note:
+            if current_track and track == current_track:
+                note = "keep current track (modal review)"
+            else:
+                note = f"move to {track} (modal review)"
+        db.exec(
+            """
+            update asset_overrides
+            set expires_at=?
+            where asset_id=?
+              and axis_name='track'
+              and operation='set'
+              and expires_at is null
+            """,
+            (created_at, asset_id),
+        )
+        db.exec(
+            """
+            insert into asset_overrides
+              (id, asset_id, track, axis_name, axis_value, operation, actor, note, created_at, expires_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                asset_id,
+                track,
+                "track",
+                track,
+                "set",
+                actor_name,
+                note,
+                created_at,
+                None,
+            ),
+        )
+        asset = self._get_asset_for_modal(db, asset_id=asset_id, include_hidden=True)
+        if not asset:
+            raise FileNotFoundError("asset not found")
+        return asset
+
+    def _clear_modal_classification_review(
+        self,
+        db: Db,
+        *,
+        asset_id: str,
+    ) -> dict:
+        existing = db.query_value("select 1 from assets where id=? limit 1", (asset_id,))
+        if not existing:
+            raise FileNotFoundError("asset not found")
+        cleared_at = datetime.now(timezone.utc).isoformat()
+        db.exec(
+            """
+            update asset_overrides
+            set expires_at=?
+            where asset_id=?
+              and axis_name='track'
+              and operation='set'
+              and expires_at is null
+            """,
+            (cleared_at, asset_id),
+        )
+        asset = self._get_asset_for_modal(db, asset_id=asset_id, include_hidden=True)
+        if not asset:
+            raise FileNotFoundError("asset not found")
         return asset
 
     def _scan_pdf_path_from_source_ref(self, source_ref: str | None) -> Path | None:

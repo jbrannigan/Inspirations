@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inspirations!</title>
-    <link rel="stylesheet" href="/app/styles.css?v=15" />
+    <link rel="stylesheet" href="/app/styles.css?v=18" />
     <script type="importmap">
       {
         "imports": {
@@ -213,8 +213,48 @@
             <div class="review-info">
               <h2 id="reviewTitle" class="review-title"></h2>
               <p id="reviewMeta" class="review-meta"></p>
+              <p id="reviewAssetId" class="review-asset-id"></p>
               <p id="reviewDesc" class="review-desc"></p>
               <a id="reviewSourceLink" href="#" target="_blank" rel="noopener" class="review-source-link">View on source ↗</a>
+              <div id="reviewClassificationPanel" class="modal-classification-panel review-track-panel" hidden>
+                <div class="sectionTitle">Track Review</div>
+                <div id="reviewClassificationStatus" class="modal-classification-status muted" hidden></div>
+                <div class="modal-classification-rows">
+                  <div class="modal-classification-row">
+                    <div class="modal-classification-label">Current track</div>
+                    <div id="reviewClassificationCurrent" class="modal-classification-value"></div>
+                  </div>
+                  <div id="reviewClassificationSourceRow" class="modal-classification-row" hidden>
+                    <div class="modal-classification-label">Suggested track</div>
+                    <div class="modal-classification-value-wrap">
+                      <div id="reviewClassificationSource" class="modal-classification-value"></div>
+                      <div id="reviewClassificationSourceReason" class="modal-title-note muted" hidden></div>
+                    </div>
+                  </div>
+                  <div id="reviewClassificationOverrideRow" class="modal-classification-row" hidden>
+                    <div class="modal-classification-label">Human review</div>
+                    <div class="modal-classification-value-wrap">
+                      <div id="reviewClassificationOverride" class="modal-classification-value"></div>
+                      <div id="reviewClassificationOverrideMeta" class="modal-title-note muted" hidden></div>
+                    </div>
+                  </div>
+                </div>
+                <div id="reviewClassificationEditor" class="modal-title-editor" hidden>
+                  <label for="reviewClassificationMoveTo" class="modal-title-edit-label">Set track to</label>
+                  <select id="reviewClassificationMoveTo" class="modal-classification-select">
+                    <option value="style_product_decor">Style / Decor</option>
+                    <option value="construction_concern">Construction</option>
+                    <option value="home_maintenance_diy">Maintenance / DIY</option>
+                  </select>
+                  <label for="reviewClassificationComment" class="modal-title-edit-label">Reason (optional)</label>
+                  <textarea id="reviewClassificationComment" class="modal-classification-comment" placeholder="Optional reason for this choice…"></textarea>
+                  <div class="modal-title-actions">
+                    <button id="reviewClassificationKeepBtn" class="header-btn modal-utility-btn" type="button">Keep current</button>
+                    <button id="reviewClassificationSaveBtn" class="header-btn modal-utility-btn" type="button">Move</button>
+                    <button id="reviewClassificationIrrelevantBtn" class="header-btn modal-utility-btn" type="button">Mark irrelevant</button>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -223,27 +263,15 @@
               <span class="review-btn-icon">↩</span>
               <span class="review-btn-label">Go back</span>
             </button>
-            <button id="reviewHideBtn" class="review-btn review-btn-hide" type="button" title="Hide (← or S)">
-              <span class="review-btn-icon">✗</span>
-              <span class="review-btn-label">Hide</span>
-            </button>
             <button id="reviewSkipBtn" class="review-btn review-btn-skip" type="button" title="Skip (Space or ↓)">
               <span class="review-btn-icon">→</span>
-              <span class="review-btn-label">Skip</span>
+              <span class="review-btn-label">Skip for now</span>
             </button>
-            <div class="review-keep-wrap">
-              <button id="reviewKeepBtn" class="review-btn review-btn-keep" type="button" title="Keep (→ or K)">
-                <span class="review-btn-icon">♥</span>
-                <span class="review-btn-label">Love it</span>
-              </button>
-              <label class="comment-later-label">
-                <input type="checkbox" id="commentLater" />
-                Comment later
-              </label>
-            </div>
+            <button id="reviewUndo" class="review-btn review-btn-prev" type="button" title="Undo (Z)" disabled>
+              <span class="review-btn-icon">↺</span>
+              <span class="review-btn-label">Undo</span>
+            </button>
           </div>
-
-          <button id="reviewUndo" class="review-undo-btn" type="button" title="Undo (Z)">↩ Undo</button>
 
           <!-- Review complete -->
           <div id="reviewComplete" class="review-complete" hidden>
@@ -265,7 +293,6 @@
           <div class="modalHeader">
             <div class="modal-title-block">
               <span id="modalBadge" class="content-kind-badge" hidden></span>
-              <span id="modalKeeperStar" class="modal-keeper-star" hidden>★</span>
               <div id="modalTitle" class="modalTitle"></div>
               <span id="modalTitleQuality" class="title-quality-badge modal-title-quality" hidden></span>
               <div id="modalMeta" class="muted"></div>
@@ -281,14 +308,6 @@
               </div>
             </div>
             <div class="modal-header-actions">
-              <div id="modalReviewGroup" class="modal-action-group modal-review-group">
-                <span class="modal-action-group-label modal-review-label">Review</span>
-                <span id="modalReviewScope" class="modal-review-scope-chip">Scope: Entire library</span>
-                <button id="modalFlagBtn" class="modal-triage-btn modal-flag-btn" type="button" title="Flag for review — wrong thumbnail or needs attention">🚩 Flag</button>
-                <button id="modalKeepBtn" class="modal-triage-btn modal-keep-btn" type="button">✓ Keep</button>
-                <button id="modalHideLocalBtn" class="modal-triage-btn modal-hide-local-btn" type="button" title="Remove from active collection scope">↘ Hide in this collection</button>
-                <button id="modalHideGlobalBtn" class="modal-triage-btn modal-hide-btn" type="button">✗ Hide globally</button>
-              </div>
               <div id="modalShareGroup" class="modal-action-group modal-share-group">
                 <span class="modal-action-group-label">Share</span>
                 <button id="modalShareLinkBtn" class="header-btn modal-utility-btn" type="button">Copy Link</button>
@@ -308,6 +327,79 @@
             </div>
           </div>
           <div class="notes">
+            <div id="modalTitlePanel" class="modal-title-panel" hidden>
+              <div class="sectionTitle">Title</div>
+              <div class="modal-title-rows">
+                <div class="modal-title-row">
+                  <div class="modal-title-label">Working</div>
+                  <div class="modal-title-value-wrap">
+                    <div id="modalWorkingTitleValue" class="modal-title-value"></div>
+                    <div id="modalWorkingTitleMeta" class="modal-title-note muted" hidden></div>
+                  </div>
+                </div>
+                <div id="modalSuggestedTitleRow" class="modal-title-row" hidden>
+                  <div class="modal-title-label">Suggested</div>
+                  <div class="modal-title-value-wrap">
+                    <div id="modalSuggestedTitleValue" class="modal-title-value"></div>
+                    <div id="modalSuggestedTitleMeta" class="modal-title-note muted" hidden></div>
+                  </div>
+                </div>
+                <div id="modalOriginalTitleRow" class="modal-title-row" hidden>
+                  <div class="modal-title-label">Best original</div>
+                  <div class="modal-title-value-wrap">
+                    <div id="modalOriginalTitleValue" class="modal-title-value"></div>
+                    <div id="modalOriginalTitleMeta" class="modal-title-note muted" hidden></div>
+                  </div>
+                </div>
+              </div>
+              <div id="modalTitleEditor" class="modal-title-editor" hidden>
+                <label for="modalWorkingTitleInput" class="modal-title-edit-label">Edit working title</label>
+                <input id="modalWorkingTitleInput" class="modal-title-input" type="text" maxlength="200" />
+                <div class="modal-title-actions">
+                  <button id="modalTitleSaveBtn" class="header-btn modal-utility-btn" type="button">Save title</button>
+                  <button id="modalTitleUseSuggestedBtn" class="header-btn modal-utility-btn" type="button">Use suggested</button>
+                </div>
+              </div>
+            </div>
+            <div id="modalClassificationPanel" class="modal-classification-panel" hidden>
+              <div class="sectionTitle">Track Review</div>
+              <div id="modalClassificationStatus" class="modal-classification-status muted" hidden></div>
+              <div class="modal-classification-rows">
+                <div class="modal-classification-row">
+                  <div class="modal-classification-label">Current track</div>
+                  <div id="modalClassificationCurrent" class="modal-classification-value"></div>
+                </div>
+                <div id="modalClassificationSourceRow" class="modal-classification-row" hidden>
+                  <div class="modal-classification-label">Suggested track</div>
+                  <div class="modal-classification-value-wrap">
+                    <div id="modalClassificationSource" class="modal-classification-value"></div>
+                    <div id="modalClassificationSourceReason" class="modal-title-note muted" hidden></div>
+                  </div>
+                </div>
+                <div id="modalClassificationOverrideRow" class="modal-classification-row" hidden>
+                  <div class="modal-classification-label">Human review</div>
+                  <div class="modal-classification-value-wrap">
+                    <div id="modalClassificationOverride" class="modal-classification-value"></div>
+                    <div id="modalClassificationOverrideMeta" class="modal-title-note muted" hidden></div>
+                  </div>
+                </div>
+              </div>
+              <div id="modalClassificationEditor" class="modal-title-editor" hidden>
+                <label for="modalClassificationMoveTo" class="modal-title-edit-label">Set track to</label>
+                <select id="modalClassificationMoveTo" class="modal-classification-select">
+                  <option value="style_product_decor">Style / Decor</option>
+                  <option value="construction_concern">Construction</option>
+                  <option value="home_maintenance_diy">Maintenance / DIY</option>
+                </select>
+                <label for="modalClassificationComment" class="modal-title-edit-label">Reason (optional)</label>
+                <textarea id="modalClassificationComment" class="modal-classification-comment" placeholder="Optional reason for this choice…"></textarea>
+                <div class="modal-title-actions">
+                  <button id="modalClassificationKeepBtn" class="header-btn modal-utility-btn" type="button">Keep current</button>
+                  <button id="modalClassificationSaveBtn" class="header-btn modal-utility-btn" type="button">Move</button>
+                  <button id="modalClassificationIrrelevantBtn" class="header-btn modal-utility-btn" type="button">Mark irrelevant</button>
+                </div>
+              </div>
+            </div>
             <div id="modalDescription" class="modal-description" hidden></div>
             <div id="modalHashtags" class="modal-hashtags" hidden></div>
             <div id="modalLabels" class="modal-labels" hidden></div>
@@ -499,7 +591,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
     <script src="/app/shared.js?v=3"></script>
     <script src="/app/explorer.js?v=1"></script>
-    <script src="/app/attractor-explorer.js?v=1"></script>
-    <script src="/app/app.js?v=30"></script>
+    <script src="/app/attractor-explorer.js?v=2"></script>
+    <script src="/app/app.js?v=35"></script>
   </body>
 </html>

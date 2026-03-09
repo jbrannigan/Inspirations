@@ -30,7 +30,7 @@
     window.AttractorExplorer3D = {
       __unavailable: true,
       init() {}, loadData() {}, setFilter() {}, setSearch() {},
-      setFocusedMode() {}, highlight() {}, onSelect() {}, onClickNode() {},
+      setFocusedMode() {}, getVisibleNodeIds() { return []; }, highlight() {}, onSelect() {}, onClickNode() {},
       pause() {}, resume() {}, destroy() {},
     };
     return;
@@ -780,7 +780,7 @@
         _restY: (a.y || 0) + jy,
         _restZ: (a.z || 0) + jz,
         vx: 0, vy: 0, vz: 0,
-        thumb_url: (window.Shared && Shared.prefixPath) ? Shared.prefixPath(a.t) : a.t,
+        thumb_url: a.t,
         title: a.title || "",
         source: _normalizeSourceKey(a.src || ""),
         _tex: null,
@@ -1803,7 +1803,18 @@
       }
     }
 
-    const chipOrder = ["rooms", "styles", "materials", "colors", "image_type", "elements"];
+    const chipOrder = [
+      "track",
+      "space_context",
+      "subject_type",
+      "room",
+      "product_focus",
+      "concern_domain",
+      "product_system_focus",
+      "style_family",
+      "materials",
+      "colors",
+    ];
     for (const catKey of chipOrder) {
       const options = _attractorOptions[catKey];
       if (!options || options.length === 0) continue;
@@ -1819,7 +1830,9 @@
       const chips = document.createElement("div");
       chips.className = "attractor-chips";
 
-      const maxChips = catKey === "colors" ? 8 : 10;
+      const maxChips = catKey === "colors"
+        ? 8
+        : (catKey === "product_focus" || catKey === "room" ? 12 : 10);
       for (const opt of options.slice(0, maxChips)) {
         const btn = document.createElement("button");
         btn.className = "attractor-chip";
@@ -2176,6 +2189,10 @@
     _rebuildForFocusedMode();
   }
 
+  function getVisibleNodeIds() {
+    return (_nodes || []).map((node) => node.id).filter(Boolean);
+  }
+
   function highlight(nodeIds) {
     _highlightedIds = nodeIds ? new Set(nodeIds) : null;
     _markVisualsDirty();
@@ -2283,6 +2300,7 @@
     setFilter,
     setSearch,
     setFocusedMode,
+    getVisibleNodeIds,
     highlight,
     onSelect,
     onClickNode,

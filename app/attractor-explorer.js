@@ -208,7 +208,7 @@
         y: sy,
         _restX: sx,
         _restY: sy,
-        thumb_url: (window.Shared && Shared.prefixPath) ? Shared.prefixPath(a.t) : a.t,
+        thumb_url: a.t,
         title: a.title || "",
         source: _normalizeSourceKey(a.src || ""),
         _img: null,
@@ -709,7 +709,18 @@
       }
     }
 
-    const chipOrder = ["rooms", "styles", "materials", "colors", "image_type", "elements"];
+    const chipOrder = [
+      "track",
+      "space_context",
+      "subject_type",
+      "room",
+      "product_focus",
+      "concern_domain",
+      "product_system_focus",
+      "style_family",
+      "materials",
+      "colors",
+    ];
     for (const catKey of chipOrder) {
       const options = _attractorOptions[catKey];
       if (!options || options.length === 0) continue;
@@ -726,7 +737,9 @@
       chips.className = "attractor-chips";
 
       // Show top items (most popular)
-      const maxChips = catKey === "colors" ? 8 : 10;
+      const maxChips = catKey === "colors"
+        ? 8
+        : (catKey === "product_focus" || catKey === "room" ? 12 : 10);
       for (const opt of options.slice(0, maxChips)) {
         const btn = document.createElement("button");
         btn.className = "attractor-chip";
@@ -1032,12 +1045,17 @@
     _rebuildForFocusedMode();
   }
 
+  function getVisibleNodeIds() {
+    return (_nodes || []).map((node) => node.id).filter(Boolean);
+  }
+
   window.AttractorExplorer = {
     init,
     loadData,
     setFilter,
     setSearch,
     setFocusedMode,
+    getVisibleNodeIds,
     highlight,
     onSelect,
     onClickNode,

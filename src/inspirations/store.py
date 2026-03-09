@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .db import Db
+from .title_workflow import enrich_assets_with_title_info
 
 _SCAN_REF_RE = re.compile(r"^scan://([a-f0-9]{64})(?:#p(\d+))?$", re.IGNORECASE)
 _SCAN_DOC_RE = re.compile(r"\s-\sdoc\s+(\d+)(?:\s+p(\d+))?$", re.IGNORECASE)
@@ -301,6 +302,16 @@ def _collapse_scan_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _latest_classification_run_id(db: Db, run_type: str) -> str:
+    return str(
+        db.query_value(
+            "select id from classification_runs where run_type=? order by created_at desc limit 1",
+            (str(run_type or "").strip(),),
+        )
+        or ""
+    ).strip()
+
+
 def _build_asset_filter(
     db: Db,
     *,
@@ -320,6 +331,8 @@ def _build_asset_filter(
     flagged_only: bool = False,
     tagged_only: bool = False,
     include_hidden: bool = False,
+    classification_axis: str = "",
+    classification_value: str = "",
 ) -> tuple[str, str, list]:
     """Build WHERE and JOIN clauses for asset queries. Returns (join_sql, where, params)."""
     clauses: list[str] = []
@@ -429,6 +442,31 @@ def _build_asset_filter(
         joins.append("join collection_items ci on ci.asset_id = a.id")
         clauses.append("ci.collection_id in (%s)" % ",".join(["?"] * len(collection_ids)))
         params.extend(collection_ids)
+    axis_name = str(classification_axis or "").strip().lower()
+    axis_values = [s.strip() for s in str(classification_value or "").split(",") if s.strip()]
+    if axis_name:
+        if axis_name == "track":
+            run_id = _latest_classification_run_id(db, "track_gate")
+            if not run_id:
+                clauses.append("1 = 0")
+            else:
+                joins.append("join asset_track_assessments ata on ata.asset_id = a.id and ata.run_id = ?")
+                params.append(run_id)
+                if axis_values:
+                    clauses.append("ata.track in (%s)" % ",".join(["?"] * len(axis_values)))
+                    params.extend(axis_values)
+        else:
+            run_id = _latest_classification_run_id(db, "multi_axis_inference")
+            if not run_id:
+                clauses.append("1 = 0")
+            else:
+                joins.append(
+                    "join asset_axis_memberships aam on aam.asset_id = a.id and aam.run_id = ? and aam.axis_name = ?"
+                )
+                params.extend([run_id, axis_name])
+                if axis_values:
+                    clauses.append("aam.axis_value in (%s)" % ",".join(["?"] * len(axis_values)))
+                    params.extend(axis_values)
     if triage_status:
         statuses = [s.strip() for s in triage_status.split(",") if s.strip()]
         if "pending" in statuses:
@@ -489,6 +527,8 @@ def list_assets(
     flagged_only: bool = False,
     tagged_only: bool = False,
     include_hidden: bool = False,
+    classification_axis: str = "",
+    classification_value: str = "",
     limit: int = 200,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
@@ -498,6 +538,7 @@ def list_assets(
         creator=creator, collection_id=collection_id, triage_status=triage_status,
         category=category, needs_annotation=needs_annotation, flagged_only=flagged_only,
         tagged_only=tagged_only, include_hidden=include_hidden,
+        classification_axis=classification_axis, classification_value=classification_value,
     )
 
     # Total count (same filters, no limit/offset)
@@ -553,6 +594,7 @@ def list_assets(
     """
     params += [limit, offset]
     rows = [dict(r) for r in db.query(sql, tuple(params))]
+    enrich_assets_with_title_info(db, rows)
     collapsed = _collapse_scan_rows(rows)
     # Expose the pre-collapse row count so callers can correctly determine
     # has_more when scan rows get collapsed into document groups.

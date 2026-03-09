@@ -26,8 +26,17 @@ from .ai import (
     run_similarity_search,
 )
 from .catalog import generate_catalog
+from .classification_v2 import run_multi_axis_inference_v2, run_track_gate_v2
+from .curation import (
+    DEFAULT_GEMINI_MODEL as DEFAULT_CURATION_GEMINI_MODEL,
+    DEFAULT_GEMINI_RECITATION_FALLBACK_MODEL as DEFAULT_CURATION_GEMINI_RECITATION_FALLBACK_MODEL,
+    render_curation_html,
+    run_curation_pipeline,
+)
 from .export import export_html_gallery, export_static_share_portal
 from .server import run_server
+from .source_link_enrichment import run_source_link_enrichment
+from .source_link_qc import run_source_link_qc
 from .store import create_collection, add_items_to_collection
 from .storage import backfill_previews_from_source_ref
 from .title_audit import (
@@ -651,6 +660,125 @@ def cmd_export_portal(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_curation_run(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    out_dir = _p(args.out_dir)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = run_curation_pipeline(
+            db,
+            out_dir=out_dir,
+            triage_status=args.triage_status,
+            source=args.source,
+            limit=args.limit,
+            provider=args.provider,
+            summary_provider=args.summary_provider,
+            model=args.model,
+            recitation_fallback_model=args.recitation_fallback_model,
+            api_key=args.api_key,
+            batch_size=args.batch_size,
+            timeout_s=float(args.timeout),
+            summarize=bool(args.summarize),
+            summary_sample_size=args.summary_sample_size,
+            style_ranking_mode=args.style_ranking_mode,
+            best_of_min_rating=args.best_of_min_rating,
+            best_of_max_total=args.best_of_max_total,
+            best_of_max_per_room=args.best_of_max_per_room,
+            best_of_target_per_room=args.best_of_target_per_room,
+            best_of_tie_max_per_room=args.best_of_tie_max_per_room,
+            best_of_backfill_if_short=bool(args.best_of_backfill_if_short),
+            best_of_show_all_if_under_target=bool(args.best_of_show_all_if_under_target),
+            pairwise_votes_path=args.pairwise_votes_path,
+            pairwise_max_candidates_per_room=args.pairwise_max_candidates_per_room,
+            pairwise_rounds_per_room=args.pairwise_rounds_per_room,
+            pairwise_max_pairs_per_room=args.pairwise_max_pairs_per_room,
+            pairwise_elo_k=float(args.pairwise_elo_k),
+            render_html=bool(args.render_html),
+            media_base=args.media_base,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_curation_render_html(args: argparse.Namespace) -> int:
+    report = render_curation_html(
+        out_dir=_p(args.out_dir),
+        media_base=args.media_base,
+        db_path=_p(args.db),
+    )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_curation_track_gate_v2(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = run_track_gate_v2(
+            db,
+            triage_status=args.triage_status,
+            source=args.source,
+            limit=args.limit,
+            notes=args.notes,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_curation_axis_infer_v2(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = run_multi_axis_inference_v2(
+            db,
+            track_run_id=args.track_run_id,
+            limit=args.limit,
+            notes=args.notes,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_curation_enrich_source_links_v2(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = run_source_link_enrichment(
+            db,
+            track_run_id=args.track_run_id,
+            only_ambiguous=bool(args.only_ambiguous),
+            source=args.source,
+            limit=args.limit,
+            offset=int(args.offset),
+            notes=args.notes,
+            timeout_s=float(args.timeout_s),
+            max_bytes=int(args.max_bytes),
+            max_redirects=int(args.max_redirects),
+            allow_http=bool(args.allow_http),
+            include_platform_hosts=bool(args.include_platform_hosts),
+            browser_platform_hosts=bool(args.browser_platform_hosts),
+            promote_best_source_url=bool(args.promote_best_source_url),
+            progress_every=int(args.progress_every),
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_curation_source_link_qc_v2(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = run_source_link_qc(
+            db,
+            track_run_id=args.track_run_id,
+            source=args.source,
+            limit=args.limit,
+            notes=args.notes,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
 def cmd_promote_boards(args: argparse.Namespace) -> int:
     db_path = _p(args.db)
     with Db(db_path) as db:
@@ -974,6 +1102,264 @@ def build_parser() -> argparse.ArgumentParser:
     )
     exp_portal.add_argument("--limit", type=int, default=0, help="Limit assets (0 = no limit)")
     exp_portal.set_defaults(func=cmd_export_portal)
+
+    curation = sub.add_parser("curation", help="AI curation pipeline")
+    curation.set_defaults(func=lambda _: curation.print_help() or 2)
+    curation_sub = curation.add_subparsers(dest="curation_cmd")
+
+    curation_run = curation_sub.add_parser(
+        "run",
+        help="Run hybrid curation (collect -> classify -> organize -> synthesize -> export) without human overrides",
+    )
+    curation_run.add_argument(
+        "--out-dir",
+        default="data/exports/curation",
+        help="Output directory for style-best-of.json, construction-concerns.json, and manifest",
+    )
+    curation_run.add_argument(
+        "--triage-status",
+        default="pending,keeper",
+        help="Comma-separated triage scope (default pending,keeper)",
+    )
+    curation_run.add_argument("--source", default="", help="Optional source filter (comma-separated)")
+    curation_run.add_argument("--limit", type=int, default=0, help="Limit candidates (0 = no limit)")
+    curation_run.add_argument(
+        "--provider",
+        default="gemini",
+        choices=["gemini", "heuristic"],
+        help="Classifier provider (default gemini)",
+    )
+    curation_run.add_argument(
+        "--summary-provider",
+        default="auto",
+        choices=["auto", "gemini", "heuristic"],
+        help="Summary provider: auto uses classifier provider, or force gemini/heuristic",
+    )
+    curation_run.add_argument(
+        "--model",
+        default=DEFAULT_CURATION_GEMINI_MODEL,
+        help=f"Gemini model (default {DEFAULT_CURATION_GEMINI_MODEL})",
+    )
+    curation_run.add_argument(
+        "--recitation-fallback-model",
+        default=DEFAULT_CURATION_GEMINI_RECITATION_FALLBACK_MODEL,
+        help=(
+            "Fallback model when primary returns finishReason=RECITATION "
+            f"(default {DEFAULT_CURATION_GEMINI_RECITATION_FALLBACK_MODEL})"
+        ),
+    )
+    curation_run.add_argument("--api-key", default="", help="Gemini API key (or set GEMINI_API_KEY)")
+    curation_run.add_argument("--batch-size", type=int, default=24, help="Items per classification batch")
+    curation_run.add_argument("--timeout", type=float, default=90.0, help="Per-request timeout (seconds)")
+    curation_run.add_argument(
+        "--summarize",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Generate group summaries (default true)",
+    )
+    curation_run.add_argument(
+        "--summary-sample-size",
+        type=int,
+        default=60,
+        help="Max items sampled per room/concern summary prompt",
+    )
+    curation_run.add_argument(
+        "--style-ranking-mode",
+        default="stars",
+        choices=["stars", "pairwise"],
+        help="Style ranking mode: stars (default) or pairwise",
+    )
+    curation_run.add_argument(
+        "--best-of-min-rating",
+        type=int,
+        default=4,
+        help="Minimum star rating considered for initial Best Of candidates (default 4)",
+    )
+    curation_run.add_argument(
+        "--best-of-max-total",
+        type=int,
+        default=0,
+        help="Cap Best Of item count globally (0 = no cap; use 10 for top-10)",
+    )
+    curation_run.add_argument(
+        "--best-of-max-per-room",
+        type=int,
+        default=0,
+        help="Cap Best Of items per room (0 = no per-room cap)",
+    )
+    curation_run.add_argument(
+        "--best-of-target-per-room",
+        type=int,
+        default=0,
+        help="Select top N items for every style room/category (0 = disabled)",
+    )
+    curation_run.add_argument(
+        "--best-of-tie-max-per-room",
+        type=int,
+        default=0,
+        help=(
+            "When target-per-room is set, allow expansion up to this cap for items tied at the room cutoff "
+            "(0 = no tie expansion)"
+        ),
+    )
+    curation_run.add_argument(
+        "--best-of-backfill-if-short",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="If Best Of is under target, backfill with lower-rated style items (default true)",
+    )
+    curation_run.add_argument(
+        "--best-of-show-all-if-under-target",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="If total style corpus is smaller than target, include all style items in Best Of (default true)",
+    )
+    curation_run.add_argument(
+        "--pairwise-votes-path",
+        default="",
+        help="Optional JSON/JSONL file with human pairwise votes for style ranking",
+    )
+    curation_run.add_argument(
+        "--pairwise-max-candidates-per-room",
+        type=int,
+        default=60,
+        help="Maximum room candidates included in pairwise ranking (0 = all)",
+    )
+    curation_run.add_argument(
+        "--pairwise-rounds-per-room",
+        type=int,
+        default=5,
+        help="Pairwise comparison rounds per room (higher = more comparisons)",
+    )
+    curation_run.add_argument(
+        "--pairwise-max-pairs-per-room",
+        type=int,
+        default=200,
+        help="Hard cap on pairwise comparisons per room (0 = no cap)",
+    )
+    curation_run.add_argument(
+        "--pairwise-elo-k",
+        type=float,
+        default=24.0,
+        help="Elo K-factor used for pairwise ranking updates (default 24.0)",
+    )
+    curation_run.add_argument(
+        "--render-html",
+        action="store_true",
+        help="Also render style-best-of.html and construction-concerns.html after JSON export",
+    )
+    curation_run.add_argument(
+        "--media-base",
+        default="",
+        help="Optional absolute base URL prepended to /media/... image paths in HTML (example http://localhost:8001)",
+    )
+    curation_run.set_defaults(func=cmd_curation_run)
+
+    curation_track_gate_v2 = curation_sub.add_parser(
+        "track-gate-v2",
+        help="Run provenance-aware v2 track classification and write results into classification tables",
+    )
+    curation_track_gate_v2.add_argument(
+        "--triage-status",
+        default="pending,keeper",
+        help="Comma-separated triage scope (default pending,keeper)",
+    )
+    curation_track_gate_v2.add_argument("--source", default="", help="Optional source filter (comma-separated)")
+    curation_track_gate_v2.add_argument("--limit", type=int, default=0, help="Limit candidates (0 = no limit)")
+    curation_track_gate_v2.add_argument("--notes", default="", help="Optional run notes")
+    curation_track_gate_v2.set_defaults(func=cmd_curation_track_gate_v2)
+
+    curation_axis_infer_v2 = curation_sub.add_parser(
+        "axis-infer-v2",
+        help="Run multi-axis v2 categorization for style and construction items from a v2 track-gate run",
+    )
+    curation_axis_infer_v2.add_argument(
+        "--track-run-id",
+        default="",
+        help="Optional classification_runs.id from track-gate-v2 (defaults to latest v2 track_gate run)",
+    )
+    curation_axis_infer_v2.add_argument("--limit", type=int, default=0, help="Limit candidates (0 = no limit)")
+    curation_axis_infer_v2.add_argument("--notes", default="", help="Optional run notes")
+    curation_axis_infer_v2.set_defaults(func=cmd_curation_axis_infer_v2)
+
+    curation_enrich_source_links_v2 = curation_sub.add_parser(
+        "enrich-source-links-v2",
+        help="Fetch source-page title/meta evidence for URL-backed assets and store it alongside v2 classification runs",
+    )
+    curation_enrich_source_links_v2.add_argument(
+        "--track-run-id",
+        default="",
+        help="Optional classification_runs.id from track-gate-v2 (defaults to latest v2 track_gate run)",
+    )
+    curation_enrich_source_links_v2.add_argument(
+        "--only-ambiguous",
+        action="store_true",
+        help="Only fetch source pages for ambiguous items from the chosen track run",
+    )
+    curation_enrich_source_links_v2.add_argument("--source", default="", help="Optional source filter (comma-separated)")
+    curation_enrich_source_links_v2.add_argument("--limit", type=int, default=0, help="Limit candidates (0 = no limit)")
+    curation_enrich_source_links_v2.add_argument("--offset", type=int, default=0, help="Skip this many candidates before fetching")
+    curation_enrich_source_links_v2.add_argument("--timeout-s", type=float, default=8.0, help="Per-request timeout in seconds")
+    curation_enrich_source_links_v2.add_argument("--max-bytes", type=int, default=262144, help="Maximum bytes to read per page")
+    curation_enrich_source_links_v2.add_argument("--max-redirects", type=int, default=4, help="Maximum safe redirects to follow")
+    curation_enrich_source_links_v2.add_argument(
+        "--allow-http",
+        action="store_true",
+        help="Allow http:// source pages if they pass public-URL safety checks",
+    )
+    curation_enrich_source_links_v2.add_argument(
+        "--include-platform-hosts",
+        action="store_true",
+        help="Also fetch pinterest.com/facebook.com wrapper pages instead of skipping them",
+    )
+    curation_enrich_source_links_v2.add_argument(
+        "--browser-platform-hosts",
+        action="store_true",
+        help="For Pinterest/Facebook wrapper URLs, use a Playwright browser session to capture page title and visible text evidence",
+    )
+    curation_enrich_source_links_v2.add_argument(
+        "--promote-best-source-url",
+        action="store_true",
+        help="Promote a fetched non-wrapper canonical/final URL into assets.source_url when it is better than the current working link",
+    )
+    curation_enrich_source_links_v2.add_argument(
+        "--progress-every",
+        type=int,
+        default=0,
+        help="Emit progress lines to stderr every N items (0 = final JSON only)",
+    )
+    curation_enrich_source_links_v2.add_argument("--notes", default="", help="Optional run notes")
+    curation_enrich_source_links_v2.set_defaults(func=cmd_curation_enrich_source_links_v2, only_ambiguous=False)
+
+    curation_source_link_qc_v2 = curation_sub.add_parser(
+        "source-link-qc-v2",
+        help="Assess whether fetched source-page evidence supports or conflicts with the current track classification",
+    )
+    curation_source_link_qc_v2.add_argument(
+        "--track-run-id",
+        default="",
+        help="Optional classification_runs.id from track-gate-v2 (defaults to latest v2 track_gate run)",
+    )
+    curation_source_link_qc_v2.add_argument("--source", default="", help="Optional source filter (comma-separated)")
+    curation_source_link_qc_v2.add_argument("--limit", type=int, default=0, help="Limit candidates (0 = no limit)")
+    curation_source_link_qc_v2.add_argument("--notes", default="", help="Optional run notes")
+    curation_source_link_qc_v2.set_defaults(func=cmd_curation_source_link_qc_v2)
+
+    curation_render = curation_sub.add_parser(
+        "render-html",
+        help="Render HTML reports from existing curation JSON outputs",
+    )
+    curation_render.add_argument(
+        "--out-dir",
+        default="data/exports/curation",
+        help="Directory containing style-best-of.json and construction-concerns.json",
+    )
+    curation_render.add_argument(
+        "--media-base",
+        default="",
+        help="Optional absolute base URL prepended to /media/... image paths (example http://localhost:8001)",
+    )
+    curation_render.set_defaults(func=cmd_curation_render_html)
 
     return p
 
