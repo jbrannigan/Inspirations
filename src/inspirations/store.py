@@ -450,10 +450,33 @@ def _build_asset_filter(
             if not run_id:
                 clauses.append("1 = 0")
             else:
+                now_iso = datetime.now(timezone.utc).isoformat()
                 joins.append("join asset_track_assessments ata on ata.asset_id = a.id and ata.run_id = ?")
                 params.append(run_id)
+                joins.append(
+                    """
+                    left join (
+                      select ao.asset_id, ao.axis_value
+                      from asset_overrides ao
+                      join (
+                        select asset_id, max(created_at) as max_created_at
+                        from asset_overrides
+                        where axis_name='track'
+                          and operation='set'
+                          and (expires_at is null or expires_at > ?)
+                        group by asset_id
+                      ) latest
+                        on latest.asset_id = ao.asset_id
+                       and latest.max_created_at = ao.created_at
+                      where ao.axis_name='track'
+                        and ao.operation='set'
+                        and (ao.expires_at is null or ao.expires_at > ?)
+                    ) ato on ato.asset_id = a.id
+                    """
+                )
+                params.extend([now_iso, now_iso])
                 if axis_values:
-                    clauses.append("ata.track in (%s)" % ",".join(["?"] * len(axis_values)))
+                    clauses.append("coalesce(ato.axis_value, ata.track) in (%s)" % ",".join(["?"] * len(axis_values)))
                     params.extend(axis_values)
         else:
             run_id = _latest_classification_run_id(db, "multi_axis_inference")

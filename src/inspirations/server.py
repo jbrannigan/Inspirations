@@ -1987,17 +1987,35 @@ class ApiHandler(BaseHTTPRequestHandler):
         sections: list[dict] = []
 
         if track_run_id:
+            now_iso = datetime.now(timezone.utc).isoformat()
             track_rows = db.query(
                 f"""
-                select ata.track as axis_value, count(distinct ata.asset_id) as n
+                select coalesce(ato.axis_value, ata.track) as axis_value, count(distinct ata.asset_id) as n
                 from asset_track_assessments ata
                 join assets a on a.id = ata.asset_id
+                left join (
+                  select ao.asset_id, ao.axis_value
+                  from asset_overrides ao
+                  join (
+                    select asset_id, max(created_at) as max_created_at
+                    from asset_overrides
+                    where axis_name='track'
+                      and operation='set'
+                      and (expires_at is null or expires_at > ?)
+                    group by asset_id
+                  ) latest
+                    on latest.asset_id = ao.asset_id
+                   and latest.max_created_at = ao.created_at
+                  where ao.axis_name='track'
+                    and ao.operation='set'
+                    and (ao.expires_at is null or ao.expires_at > ?)
+                ) ato on ato.asset_id = ata.asset_id
                 where ata.run_id = ?
                   and {visible_sql}
-                group by ata.track
-                order by n desc, ata.track asc
+                group by coalesce(ato.axis_value, ata.track)
+                order by n desc, axis_value asc
                 """,
-                (str(track_run_id), *visible_params),
+                (now_iso, now_iso, str(track_run_id), *visible_params),
             )
             if track_rows:
                 total = int(sum(int(row["n"] or 0) for row in track_rows))

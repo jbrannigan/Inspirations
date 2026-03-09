@@ -402,6 +402,39 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual([a["id"] for a in body.get("assets", [])], ["a1"])
         self.assertEqual(body.get("total"), 1)
 
+    def test_assets_endpoint_track_filter_honors_active_override(self):
+        self._seed_v2_classification()
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into asset_overrides
+                  (id, asset_id, track, axis_name, axis_value, operation, actor, note, created_at, expires_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "override-a2-track",
+                    "a2",
+                    "irrelevant",
+                    "track",
+                    "irrelevant",
+                    "set",
+                    "Jim",
+                    "human review moved this out of construction",
+                    "2026-03-09T17:00:00+00:00",
+                    None,
+                ),
+            )
+
+        status, body = self._request("/api/assets?classification_axis=track&classification_value=construction_concern&include_hidden=1")
+        self.assertEqual(status, 200)
+        self.assertEqual([a["id"] for a in body.get("assets", [])], [])
+        self.assertEqual(body.get("total"), 0)
+
+        status, body = self._request("/api/assets?classification_axis=track&classification_value=irrelevant&include_hidden=1")
+        self.assertEqual(status, 200)
+        self.assertIn("a2", [a["id"] for a in body.get("assets", [])])
+
     def test_catalog_tree_includes_classification_sections(self):
         self._seed_v2_classification()
         catalog_dir = self.tmp_path / "catalog"
@@ -460,6 +493,44 @@ class TestServerApi(unittest.TestCase):
         track_node = next((node for node in tree if node.get("type") == "classification" and node.get("axis_name") == "track"), None)
         self.assertIsNotNone(track_node)
         by_label = {child.get("label"): int(child.get("count") or 0) for child in track_node.get("children", [])}
+        self.assertEqual(by_label.get("Irrelevant"), 1)
+
+    def test_catalog_tree_track_counts_honor_active_override(self):
+        self._seed_v2_classification()
+        catalog_dir = self.tmp_path / "catalog-track-override"
+        catalog_dir.mkdir(parents=True, exist_ok=True)
+        (catalog_dir / "_index.md").write_text("", encoding="utf-8")
+        self.server.catalog_dir = catalog_dir
+
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into asset_overrides
+                  (id, asset_id, track, axis_name, axis_value, operation, actor, note, created_at, expires_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "override-a2-track-tree",
+                    "a2",
+                    "irrelevant",
+                    "track",
+                    "irrelevant",
+                    "set",
+                    "Jim",
+                    "human review moved this out of construction",
+                    "2026-03-09T17:00:00+00:00",
+                    None,
+                ),
+            )
+
+        status, body = self._request("/api/catalog/tree")
+        self.assertEqual(status, 200)
+        tree = body.get("tree", [])
+        track_node = next((node for node in tree if node.get("type") == "classification" and node.get("axis_name") == "track"), None)
+        self.assertIsNotNone(track_node)
+        by_label = {child.get("label"): int(child.get("count") or 0) for child in track_node.get("children", [])}
+        self.assertNotIn("Construction", by_label)
         self.assertEqual(by_label.get("Irrelevant"), 1)
 
     def test_explorer_attractor_data_uses_v2_classification_groups(self):
