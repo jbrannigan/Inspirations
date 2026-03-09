@@ -527,6 +527,19 @@ PRODUCT_FOCUS_HINTS: dict[str, tuple[str, ...]] = {
 }
 
 CONCERN_DOMAIN_HINTS: dict[str, tuple[str, ...]] = {
+    "inspection_quality_control": (
+        "inspection",
+        "inspector",
+        "inspectors",
+        "home inspection",
+        "independent inspection",
+        "rough-in inspection",
+        "pre-drywall inspection",
+        "final inspection",
+        "walkthrough inspection",
+        "builder walkthrough",
+        "quality control",
+    ),
     "site_exterior": (
         "grading",
         "drainage",
@@ -546,7 +559,7 @@ CONCERN_DOMAIN_HINTS: dict[str, tuple[str, ...]] = {
     "envelope": ("roof", "siding", "window", "door", "waterproof", "insulation", "flashing", "zip system", "sheathing", "membrane"),
     "structure": ("foundation", "framing", "structural", "beam", "load bearing", "slab", "truss", "rebar"),
     "mep": ("hvac", "plumb", "plumbing", "electrical", "wiring", "mechanical", "duct", "water heater", "tankless", "generator"),
-    "plans_code_permits": ("permit", "code", "inspection", "plan", "blueprint", "specification", "drawing", "zoning", "hoa"),
+    "plans_code_permits": ("permit", "code", "plan", "blueprint", "specification", "drawing", "zoning", "hoa"),
     "interiors_execution": (
         "tile layout",
         "cabinet install",
@@ -2005,6 +2018,31 @@ def _load_active_overrides(db: Db, asset_ids: list[str]) -> dict[str, list[dict[
     return out
 
 
+def _load_latest_fetched_source_link_enrichment(db: Db, asset_ids: list[str]) -> dict[str, sqlite3.Row]:
+    if not asset_ids:
+        return {}
+    placeholders = ",".join(["?"] * len(asset_ids))
+    rows = db.query(
+        f"""
+        select sle.*
+        from asset_source_link_enrichment sle
+        join (
+          select asset_id, max(created_at) as max_created_at
+          from asset_source_link_enrichment
+          where asset_id in ({placeholders})
+            and fetch_status = 'fetched'
+          group by asset_id
+        ) latest
+          on latest.asset_id = sle.asset_id
+         and latest.max_created_at = sle.created_at
+        where sle.asset_id in ({placeholders})
+          and sle.fetch_status = 'fetched'
+        """,
+        tuple(asset_ids + asset_ids),
+    )
+    return {str(row["asset_id"]): row for row in rows}
+
+
 def _manual_track_override(candidate: dict[str, Any]) -> tuple[str, str] | None:
     selected: tuple[str, str] | None = None
     for row in candidate.get("overrides") or []:
@@ -2132,6 +2170,44 @@ def _score_axis_hint_map_from_labels(
             )
 
 
+def _score_axis_hint_map_from_source_link(
+    *,
+    candidate: dict[str, Any],
+    axis_name: str,
+    hint_map: dict[str, tuple[str, ...]],
+    scores: Counter[str],
+    evidence: list[AxisEvidence],
+) -> None:
+    field_weights = {
+        "source_page_title": 1.0,
+        "source_page_og_title": 0.92,
+        "source_page_meta_description": 0.82,
+        "source_page_og_description": 0.82,
+        "source_page_text_excerpt": 0.95,
+    }
+    for field_name, text in _construction_source_link_fields(candidate):
+        cleaned = _normalize_space(text)
+        if not cleaned:
+            continue
+        field_weight = field_weights.get(field_name, 0.68)
+        for axis_value, hints in hint_map.items():
+            matches = _matching_hints(cleaned, hints)
+            if not matches:
+                continue
+            conf = min(0.96, 0.58 + 0.05 * len(matches))
+            _add_axis_contribution(
+                scores,
+                evidence,
+                axis_name=axis_name,
+                axis_value=axis_value,
+                evidence_type="source_link_text",
+                evidence_ref=f"field:{field_name}",
+                weight=field_weight * conf,
+                confidence=conf,
+                note=f"{field_name} matched {axis_name} terms: {', '.join(matches[:6])}",
+            )
+
+
 def _normalize_room_value(value: str) -> str:
     raw = _normalize_label(value).replace("_", " ")
     if not raw:
@@ -2216,6 +2292,16 @@ def _payload_values(payload: dict[str, Any], key: str) -> list[str]:
         seen.add(label)
         values.append(label)
     return values
+
+
+def _construction_source_link_fields(candidate: dict[str, Any]) -> list[tuple[str, str]]:
+    return [
+        ("source_page_title", str(candidate.get("source_page_title") or "")),
+        ("source_page_og_title", str(candidate.get("source_page_og_title") or "")),
+        ("source_page_meta_description", str(candidate.get("source_page_meta_description") or "")),
+        ("source_page_og_description", str(candidate.get("source_page_og_description") or "")),
+        ("source_page_text_excerpt", str(candidate.get("source_page_text_excerpt") or "")),
+    ]
 
 
 def _score_design_facets(candidate: dict[str, Any], scores: Counter[str], evidence: list[AxisEvidence]) -> None:
@@ -2465,6 +2551,11 @@ def _select_construction_axis_memberships(candidate: dict[str, Any]) -> tuple[li
     _score_axis_hint_map_from_text(candidate=candidate, axis_name="trade_system", hint_map=TRADE_SYSTEM_HINTS, scores=axis_scores["trade_system"], evidence=evidence)
     _score_axis_hint_map_from_text(candidate=candidate, axis_name="concern_class", hint_map=CONCERN_CLASS_HINTS, scores=axis_scores["concern_class"], evidence=evidence)
     _score_axis_hint_map_from_text(candidate=candidate, axis_name="product_system_focus", hint_map=PRODUCT_SYSTEM_HINTS, scores=axis_scores["product_system_focus"], evidence=evidence)
+    _score_axis_hint_map_from_source_link(candidate=candidate, axis_name="concern_domain", hint_map=CONCERN_DOMAIN_HINTS, scores=axis_scores["concern_domain"], evidence=evidence)
+    _score_axis_hint_map_from_source_link(candidate=candidate, axis_name="project_phase", hint_map=PROJECT_PHASE_HINTS, scores=axis_scores["project_phase"], evidence=evidence)
+    _score_axis_hint_map_from_source_link(candidate=candidate, axis_name="trade_system", hint_map=TRADE_SYSTEM_HINTS, scores=axis_scores["trade_system"], evidence=evidence)
+    _score_axis_hint_map_from_source_link(candidate=candidate, axis_name="concern_class", hint_map=CONCERN_CLASS_HINTS, scores=axis_scores["concern_class"], evidence=evidence)
+    _score_axis_hint_map_from_source_link(candidate=candidate, axis_name="product_system_focus", hint_map=PRODUCT_SYSTEM_HINTS, scores=axis_scores["product_system_focus"], evidence=evidence)
 
     labels = candidate.get("labels") or []
     _score_axis_hint_map_from_labels(axis_name="concern_domain", hint_map=CONCERN_DOMAIN_HINTS, labels=labels, scores=axis_scores["concern_domain"], evidence=evidence)
@@ -2679,8 +2770,15 @@ def collect_axis_candidates(
     for row in ai_rows:
         ai_by_asset[str(row["asset_id"])] = row
     overrides_by_asset = _load_active_overrides(db, asset_ids)
+    source_link_by_asset = _load_latest_fetched_source_link_enrichment(db, asset_ids)
     for candidate in candidates:
         ai_row = ai_by_asset.get(candidate["asset_id"])
+        source_link_row = source_link_by_asset.get(candidate["asset_id"])
+        candidate["source_page_title"] = str(source_link_row["page_title"] if source_link_row else "").strip()
+        candidate["source_page_og_title"] = str(source_link_row["og_title"] if source_link_row else "").strip()
+        candidate["source_page_meta_description"] = str(source_link_row["meta_description"] if source_link_row else "").strip()
+        candidate["source_page_og_description"] = str(source_link_row["og_description"] if source_link_row else "").strip()
+        candidate["source_page_text_excerpt"] = str(source_link_row["text_excerpt"] if source_link_row else "").strip()
         if not ai_row:
             candidate["asset_ai_id"] = ""
             candidate["ai_provider"] = ""

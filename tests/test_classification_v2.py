@@ -2138,6 +2138,215 @@ class TestClassificationV2(unittest.TestCase):
 
             self.assertNotIn("site_exterior", concern_domains)
 
+    def test_multi_axis_inference_v2_maps_builder_inspection_to_inspection_quality_control(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, board, description, imported_at)
+                    values (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "a1",
+                        "facebook",
+                        "fb://inspection",
+                        "Some builders actually care!",
+                        "Home Building Process",
+                        "Two men discuss a rough-in home inspection at a house under construction.",
+                        "2026-03-06T00:00:00+00:00",
+                    ),
+                )
+                db.exec(
+                    """
+                    insert into asset_ai (id, asset_id, provider, model, summary, json, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "ai1",
+                        "a1",
+                        "gemini",
+                        "gemini-2.5-flash",
+                        "Rough-in home inspection during construction",
+                        json.dumps({"tags": ["builder", "rough-in inspection", "home inspection", "construction"]}),
+                        "2026-03-06T00:02:00+00:00",
+                    ),
+                )
+                db.exec(
+                    """
+                    insert into classification_runs
+                      (id, schema_version, run_type, model_provider, model_name, prompt_version, config_json, created_at, notes)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "track_run_1",
+                        "curation_v2",
+                        "track_gate",
+                        "heuristic",
+                        "test",
+                        "",
+                        "{}",
+                        "2026-03-06T00:03:00+00:00",
+                        "test",
+                    ),
+                )
+                db.exec(
+                    """
+                    insert into asset_track_assessments
+                      (id, run_id, asset_id, track, confidence, is_ambiguous, decision_source, reason, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "assess1",
+                        "track_run_1",
+                        "a1",
+                        "construction_concern",
+                        0.95,
+                        0,
+                        "test",
+                        "seeded construction track",
+                        "2026-03-06T00:03:01+00:00",
+                    ),
+                )
+
+                report = run_multi_axis_inference_v2(db, track_run_id="track_run_1")
+                concern_domains = {
+                    str(row["axis_value"])
+                    for row in db.query(
+                        """
+                        select axis_value
+                        from asset_axis_memberships
+                        where run_id=? and asset_id=? and axis_name='concern_domain'
+                        """,
+                        (report["run_id"], "a1"),
+                    )
+                }
+
+            self.assertIn("inspection_quality_control", concern_domains)
+            self.assertNotIn("plans_code_permits", concern_domains)
+
+    def test_multi_axis_inference_v2_uses_source_link_text_for_inspection_domain(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at)
+                    values (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "a1",
+                        "facebook",
+                        "fb://inspection-source-link",
+                        "Bearded man in black polo shirt with logo",
+                        "2026-03-06T00:00:00+00:00",
+                    ),
+                )
+                db.exec(
+                    """
+                    insert into classification_runs
+                      (id, schema_version, run_type, model_provider, model_name, prompt_version, config_json, created_at, notes)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "source_run_1",
+                        "curation_v2",
+                        "source_link_enrichment",
+                        "test",
+                        "test",
+                        "",
+                        "{}",
+                        "2026-03-09T03:24:40+00:00",
+                        "test",
+                    ),
+                )
+                db.exec(
+                    """
+                    insert into asset_source_link_enrichment
+                      (id, run_id, asset_id, input_url, final_url, final_domain, canonical_url, og_image_url,
+                       page_title, og_title, meta_description, og_description, text_excerpt, content_type,
+                       http_status, redirect_count, truncated, fetch_status, error, content_hash, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "sle1",
+                        "source_run_1",
+                        "a1",
+                        "https://www.facebook.com/reel/873910842167631/",
+                        "https://www.facebook.com/reel/873910842167631",
+                        "facebook.com",
+                        "",
+                        "",
+                        "Facebook",
+                        "",
+                        "",
+                        "",
+                        "You’re paying for an inspection — not a builder’s to-do list. Buyers hire me to find what’s missed, wrong, broken, or not functioning. Texas Edge Home Inspections.",
+                        "browser/document",
+                        200,
+                        0,
+                        0,
+                        "fetched",
+                        "",
+                        "hash1",
+                        "2026-03-09T03:24:43+00:00",
+                    ),
+                )
+                db.exec(
+                    """
+                    insert into classification_runs
+                      (id, schema_version, run_type, model_provider, model_name, prompt_version, config_json, created_at, notes)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "track_run_1",
+                        "curation_v2",
+                        "track_gate",
+                        "heuristic",
+                        "test",
+                        "",
+                        "{}",
+                        "2026-03-06T00:03:00+00:00",
+                        "test",
+                    ),
+                )
+                db.exec(
+                    """
+                    insert into asset_track_assessments
+                      (id, run_id, asset_id, track, confidence, is_ambiguous, decision_source, reason, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "assess1",
+                        "track_run_1",
+                        "a1",
+                        "construction_concern",
+                        0.95,
+                        0,
+                        "test",
+                        "seeded construction track",
+                        "2026-03-06T00:03:01+00:00",
+                    ),
+                )
+
+                report = run_multi_axis_inference_v2(db, track_run_id="track_run_1")
+                concern_domains = {
+                    str(row["axis_value"])
+                    for row in db.query(
+                        """
+                        select axis_value
+                        from asset_axis_memberships
+                        where run_id=? and asset_id=? and axis_name='concern_domain'
+                        """,
+                        (report["run_id"], "a1"),
+                    )
+                }
+
+            self.assertIn("inspection_quality_control", concern_domains)
+            self.assertNotIn("plans_code_permits", concern_domains)
+
 
 if __name__ == "__main__":
     unittest.main()

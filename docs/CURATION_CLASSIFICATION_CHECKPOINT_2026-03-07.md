@@ -21,13 +21,11 @@ Related UX backlog document:
 These are the current reference runs for v2 classification:
 
 - `track_gate`
-  - previous run id: `5b4c7c6d-cd92-42a1-87bb-89cffd6ea41b`
-  - current run id: `3ba40a43-377a-4e38-9dc9-5f5f39cc7959`
-  - current notes: `maintenance_diy track final weight bump for explicit raw maintenance phrases`
+  - current run id: `9a308297-d1f1-4509-b29c-d071e2f2d66d`
+  - current notes: `raw irrelevant intent override, color-palette beauty carveout, and Leslie magazine clips style signal`
 - `multi_axis_inference`
-  - previous run id: `94f954b4-d90f-4fc8-9e36-f6c6590ac113`
-  - current run id: `d3720b8c-afd5-4f0c-8d5d-ec85eb27c853`
-  - current notes: `axis pass after final maintenance_diy weight bump`
+  - current run id: `98f95cbb-70bf-4223-9736-d1a23ecf94dc`
+  - current notes: `use source-link evidence for construction concern-domain inference after landscape and inspection review`
 
 ## What is complete
 
@@ -62,11 +60,11 @@ Current title handling now distinguishes between:
 
 Latest counts:
 
-- `style_product_decor = 4326`
-- `construction_concern = 167`
-- `home_maintenance_diy = 17`
-- `irrelevant = 159`
-- `ambiguous = 304`
+- `style_product_decor = 4301`
+- `construction_concern = 189`
+- `home_maintenance_diy = 7`
+- `irrelevant = 172`
+- `ambiguous = 282`
 
 This is a major improvement over the older curation logic, especially around the previous construction over-bucketing problem.
 
@@ -111,30 +109,28 @@ Generated files:
 
 ### Track counts
 
-- previous checkpoint:
-  - `style_product_decor = 4309`
-  - `construction_concern = 203`
-  - `irrelevant = 157`
-  - `ambiguous = 287`
 - current:
-  - `style_product_decor = 4326`
-  - `construction_concern = 167`
-  - `home_maintenance_diy = 17`
-  - `irrelevant = 159`
-  - `ambiguous = 304`
+  - `style_product_decor = 4301`
+  - `construction_concern = 189`
+  - `home_maintenance_diy = 7`
+  - `irrelevant = 172`
+  - `ambiguous = 282`
 
 ### Remaining review slices
 
-- previous checkpoint:
-  - `ambiguous_track = 287`
-  - `pinterest_construction = 13`
-  - `undifferentiated_envelope = 0`
 - current:
-  - `ambiguous_track = 304`
-  - `pinterest_construction = 8`
-  - `maintenance_diy_track = 17`
-  - `pinterest_maintenance_diy = 5`
+  - `ambiguous_track = 282`
+  - `ambiguous_low_signal_url = 20`
+  - `ambiguous_media_mismatch = 135`
+  - `ambiguous_media_link_mismatch = 30`
+  - `ambiguous_media_weak_thumbnail = 96`
+  - `ambiguous_true_contested = 127`
+  - `pinterest_construction = 24`
+  - `maintenance_diy_track = 7`
+  - `pinterest_maintenance_diy = 3`
   - `undifferentiated_envelope = 0`
+  - `source_link_conflicting = 158`
+  - `source_link_insufficient = 967`
 
 ### Why these slices matter
 
@@ -383,6 +379,16 @@ Likely work:
 - spot-check whether any of them are actually site-work / execution concerns
 - tighten the wording and examples so future review passes treat `landscape mood` and `lot landscaping task` as different things
 
+Current status after the focused review:
+
+- the dedicated landscaping follow-up collection is complete
+- final reviewed split:
+  - `construction_concern = 24`
+  - `style_product_decor = 3`
+- implication:
+  - the landscape ambiguity is real but bounded
+  - most of the reviewed slice was legitimately lot / site / execution work, not style mood/reference
+
 ## What is explicitly deferred to the UX sprint
 
 These items should not drive classifier changes directly.
@@ -447,8 +453,8 @@ Recent active overrides persisted during that pass window:
 
 Current active Jim track overrides overall:
 
-- `construction_concern = 157`
-- `style_product_decor = 22`
+- `construction_concern = 158`
+- `style_product_decor = 21`
 - `irrelevant = 11`
 - `home_maintenance_diy = 5`
 - total active Jim track overrides: `195`
@@ -470,29 +476,46 @@ Current landscaping-note counts across active Jim track overrides:
   - `construction_concern = 23`
   - `style_product_decor = 4`
 
-A follow-up collection has been created to make that review slice accessible in the app:
+A follow-up collection was created to make that review slice accessible in the app:
 
 - `Review: Landscaping Follow-Up - 2026-03-09`
 - collection id: `ba65d193-5dc4-4650-ae1a-be77db2e85e4`
 - item count: `27`
 
-This is intentionally a mixed slice.
+This was intentionally a mixed slice.
 
-Its purpose is to answer:
+It answered:
 
 - which items are landscape mood/reference and should stay on the style side
 - which items are site-work / drainage / irrigation / lot-landscaping concerns and should stay on the construction side
 
-### Inspection remains a taxonomy add
+Final reviewed result:
 
-No active Jim overrides currently carry an `Inspection` note.
+- `construction_concern = 24`
+- `style_product_decor = 3`
 
-That does not remove the need.
+### Inspection is now a live construction concern domain
 
-It means:
+`inspection_quality_control` is now a first-class `concern_domain` in the v2 model.
 
-- Jim correctly identified `Inspection` as a missing construction sub-category
-- but the current manual pass did not yet produce a reusable review slice large enough to export separately
+Latest axis count:
+
+- `inspection_quality_control = 2`
+
+What changed:
+
+- the focused inspection review confirmed the need
+- the classifier now maps strong inspection evidence into `inspection_quality_control`
+- stored source-link text is now used in construction-axis inference, which makes source-backed inspection/build topics usable even when the thumbnail/title are weak
+
+One unresolved wrinkle remains:
+
+- asset `5af0e064-01fd-43c9-91a1-4c4dc4ed5852` is still pinned to:
+  - `concern_domain = plans_code_permits`
+  - `project_phase = permit_code`
+- reason:
+  - it carries older active manual axis overrides from the earlier workflow
+  - those overrides were preserved rather than automatically removed
 
 ### One-by-one review is now materially safer
 
@@ -513,11 +536,11 @@ Validation completed:
 - `PYTHONPATH=src python3 -m unittest -v tests.test_server_api`
 - result: `65` tests passed
 
-### Morning starting point
+### Next starting point
 
 Recommended order for the next session:
 
 1. open the app
-2. inspect `Review: Landscaping Follow-Up - 2026-03-09`
-3. continue refining the style-vs-construction landscaping split
-4. only after that, return to the remaining source-link conflict review slices
+2. use the review workflow on the grouped source-link conflict slice
+3. decide whether to clear the one stale inspection-axis override that still pins an item to `plans_code_permits`
+4. once the source-link conflict slice is smaller, resume report-generation work on top of the v2 axes
