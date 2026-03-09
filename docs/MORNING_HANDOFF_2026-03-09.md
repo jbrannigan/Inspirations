@@ -29,6 +29,9 @@ Reason:
 - one-by-one keeps a local draft of the track + reason while Jim types
 - undo / go-back restores the prior item with its typed reason intact
 - `Mark irrelevant` is now the dedicated irrelevant action
+- both modal review and one-by-one review now include a structured `Review focus (optional)` field:
+  - `Landscaping`
+  - `Inspection`
 - the track dropdown now only lists:
   - `Style / Decor`
   - `Construction`
@@ -69,7 +72,7 @@ Landscaping notes across active Jim overrides:
 ## Recommended next order
 
 1. review the landscaping follow-up collection
-2. decide whether any remaining landscape items are truly style precedent instead of site work
+2. use `Review focus = Landscaping` instead of relying on free-text notes for new review decisions
 3. add `Inspection` as an explicit construction sub-category after the landscaping pass
 4. return to source-link conflicts only after the landscaping split feels stable
 

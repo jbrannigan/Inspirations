@@ -503,6 +503,9 @@ The overnight UX cleanup completed these review-mode changes:
 - the one-by-one review form keeps a local draft while Jim types
 - undo/go-back restores the saved review draft instead of dropping the typed reason
 - `Irrelevant` is now a dedicated action button rather than a duplicated dropdown choice
+- both review surfaces now include a structured `Review focus (optional)` field:
+  - `Landscaping`
+  - `Inspection`
 
 Validation completed:
 

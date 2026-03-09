@@ -113,6 +113,10 @@ const CLASSIFICATION_TRACK_LABELS = {
   home_maintenance_diy: "Maintenance / DIY",
   irrelevant: "Irrelevant",
 };
+const REVIEW_FOCUS_LABELS = {
+  landscaping: "Landscaping",
+  inspection: "Inspection",
+};
 const MOVABLE_CLASSIFICATION_TRACKS = [
   "style_product_decor",
   "construction_concern",
@@ -2747,6 +2751,11 @@ function _preferredMoveTrack(track, fallback = "style_product_decor") {
   return fallback;
 }
 
+function _reviewFocusLabel(value) {
+  const key = String(value || "").trim();
+  return REVIEW_FOCUS_LABELS[key] || key || "";
+}
+
 function _modalClassificationNeedsReview(review) {
   if (!review || typeof review !== "object") return false;
   if (Number(review.current_is_ambiguous || 0) > 0) return true;
@@ -2788,6 +2797,7 @@ function renderModalClassificationPanel(asset) {
   const overrideActor = String(review.active_override_actor || "").trim();
   const overrideNote = String(review.active_override_note || "").trim();
   const overrideCreatedAt = String(review.active_override_created_at || "").trim();
+  const overrideFocus = String(review.active_review_focus || "").trim();
   const effectiveTrack = _effectiveClassificationTrack(review);
   const needsReview = _modalClassificationNeedsReview(review);
   const statusText = _modalClassificationStatusText(review);
@@ -2841,8 +2851,14 @@ function renderModalClassificationPanel(asset) {
     overrideMetaEl.hidden = !parts.length;
   }
 
+  const focusRow = $("#modalClassificationFocusRow");
+  const focusEl = $("#modalClassificationFocus");
+  if (focusRow) focusRow.hidden = !overrideFocus;
+  if (focusEl) focusEl.textContent = overrideFocus ? _reviewFocusLabel(overrideFocus) : "";
+
   const editor = $("#modalClassificationEditor");
   const moveTo = $("#modalClassificationMoveTo");
+  const focusSelect = $("#modalClassificationFocusSelect");
   const comment = $("#modalClassificationComment");
   const keepBtn = $("#modalClassificationKeepBtn");
   const saveBtn = $("#modalClassificationSaveBtn");
@@ -2850,6 +2866,7 @@ function renderModalClassificationPanel(asset) {
   if (editor) editor.hidden = false;
   const defaultTrack = overrideTrack || (hasSourceConflict ? sourceTrack : currentTrack);
   if (moveTo) moveTo.value = _preferredMoveTrack(defaultTrack);
+  if (focusSelect) focusSelect.value = overrideFocus && REVIEW_FOCUS_LABELS[overrideFocus] ? overrideFocus : "";
   if (comment) comment.value = cleanedOverrideNote || "";
   if (keepBtn) keepBtn.disabled = !effectiveTrack;
   if (saveBtn) saveBtn.disabled = false;
@@ -2866,11 +2883,13 @@ async function saveModalClassificationReview(opts = {}) {
   const review = asset.classification_review || {};
   const currentTrack = _effectiveClassificationTrack(review);
   const moveTo = $("#modalClassificationMoveTo");
+  const focusSelect = $("#modalClassificationFocusSelect");
   const comment = $("#modalClassificationComment");
   const keepBtn = $("#modalClassificationKeepBtn");
   const saveBtn = $("#modalClassificationSaveBtn");
   const irrelevantBtn = $("#modalClassificationIrrelevantBtn");
   const track = String(opts.track || moveTo?.value || "").trim();
+  const reviewFocus = String(opts.reviewFocus ?? focusSelect?.value ?? "").trim();
   const note = String(comment?.value || "").trim();
   if (!track) {
     Shared.showToast("Choose a track first.", { type: "info" });
@@ -2880,11 +2899,12 @@ async function saveModalClassificationReview(opts = {}) {
   if (saveBtn) saveBtn.disabled = true;
   if (irrelevantBtn) irrelevantBtn.disabled = true;
   if (moveTo) moveTo.disabled = true;
+  if (focusSelect) focusSelect.disabled = true;
   if (comment) comment.disabled = true;
   try {
     const data = await api(`/api/assets/${encodeURIComponent(asset.id)}/classification-review`, {
       method: "PUT",
-      body: JSON.stringify({ track, note }),
+      body: JSON.stringify({ track, note, review_focus: reviewFocus }),
     });
     const updated = data.asset || null;
     if (!updated) throw new Error("Updated asset missing from response");
@@ -2903,6 +2923,7 @@ async function saveModalClassificationReview(opts = {}) {
     if (saveBtn) saveBtn.disabled = false;
     if (irrelevantBtn) irrelevantBtn.disabled = false;
     if (moveTo) moveTo.disabled = false;
+    if (focusSelect) focusSelect.disabled = false;
     if (comment) comment.disabled = false;
   }
 }
@@ -3903,6 +3924,7 @@ function renderReviewClassificationPanel(item) {
   const overrideActor = String(review.active_override_actor || "").trim();
   const overrideNote = String(review.active_override_note || "").trim();
   const overrideCreatedAt = String(review.active_override_created_at || "").trim();
+  const overrideFocus = String(review.active_review_focus || "").trim();
   const effectiveTrack = _effectiveClassificationTrack(review);
   const statusText = _modalClassificationStatusText(review);
   const cleanedOverrideNote = _isBoilerplateClassificationReviewNote(overrideNote) ? "" : overrideNote;
@@ -3955,8 +3977,14 @@ function renderReviewClassificationPanel(item) {
     overrideMetaEl.hidden = !parts.length;
   }
 
+  const focusRow = $("#reviewClassificationFocusRow");
+  const focusEl = $("#reviewClassificationFocus");
+  if (focusRow) focusRow.hidden = !overrideFocus;
+  if (focusEl) focusEl.textContent = overrideFocus ? _reviewFocusLabel(overrideFocus) : "";
+
   const editor = $("#reviewClassificationEditor");
   const moveTo = $("#reviewClassificationMoveTo");
+  const focusSelect = $("#reviewClassificationFocusSelect");
   const comment = $("#reviewClassificationComment");
   const keepBtn = $("#reviewClassificationKeepBtn");
   const saveBtn = $("#reviewClassificationSaveBtn");
@@ -3964,6 +3992,8 @@ function renderReviewClassificationPanel(item) {
   if (editor) editor.hidden = false;
   const defaultTrack = (draft && draft.track) || overrideTrack || (hasSourceConflict ? sourceTrack : currentTrack);
   if (moveTo) moveTo.value = _preferredMoveTrack(defaultTrack);
+  const defaultFocus = (draft && draft.focus) || overrideFocus;
+  if (focusSelect) focusSelect.value = defaultFocus && REVIEW_FOCUS_LABELS[defaultFocus] ? defaultFocus : "";
   if (comment) comment.value = draft && Object.prototype.hasOwnProperty.call(draft, "note") ? draft.note : (cleanedOverrideNote || "");
   if (keepBtn) keepBtn.disabled = !effectiveTrack;
   if (saveBtn) saveBtn.disabled = false;
@@ -3975,10 +4005,12 @@ function _persistCurrentReviewDraft() {
   const item = state.reviewItems[state.reviewIndex];
   if (!item || !item.id) return;
   const moveTo = $("#reviewClassificationMoveTo");
+  const focusSelect = $("#reviewClassificationFocusSelect");
   const comment = $("#reviewClassificationComment");
-  if (!moveTo && !comment) return;
+  if (!moveTo && !focusSelect && !comment) return;
   state.reviewDrafts[item.id] = {
     track: _preferredMoveTrack(moveTo?.value || ""),
+    focus: String(focusSelect?.value || "").trim(),
     note: String(comment?.value || ""),
   };
 }
@@ -4082,12 +4114,15 @@ async function saveReviewClassificationReview(opts = {}) {
   const currentTrack = _effectiveClassificationTrack(review);
   const previousOverrideTrack = String(review.active_override_track || "").trim();
   const previousOverrideNote = String(review.active_override_note || "").trim();
+  const previousOverrideFocus = String(review.active_review_focus || "").trim();
   const moveTo = $("#reviewClassificationMoveTo");
+  const focusSelect = $("#reviewClassificationFocusSelect");
   const comment = $("#reviewClassificationComment");
   const keepBtn = $("#reviewClassificationKeepBtn");
   const saveBtn = $("#reviewClassificationSaveBtn");
   const irrelevantBtn = $("#reviewClassificationIrrelevantBtn");
   const track = String(opts.track || moveTo?.value || "").trim();
+  const reviewFocus = String(opts.reviewFocus ?? focusSelect?.value ?? "").trim();
   const note = String(comment?.value || "").trim();
   if (!track) {
     Shared.showToast("Choose a track first.", { type: "info" });
@@ -4098,12 +4133,13 @@ async function saveReviewClassificationReview(opts = {}) {
   if (saveBtn) saveBtn.disabled = true;
   if (irrelevantBtn) irrelevantBtn.disabled = true;
   if (moveTo) moveTo.disabled = true;
+  if (focusSelect) focusSelect.disabled = true;
   if (comment) comment.disabled = true;
 
   try {
     const data = await api(`/api/assets/${encodeURIComponent(item.id)}/classification-review`, {
       method: "PUT",
-      body: JSON.stringify({ track, note }),
+      body: JSON.stringify({ track, note, review_focus: reviewFocus }),
     });
     const updated = data.asset || null;
     if (!updated) throw new Error("Updated asset missing from response");
@@ -4120,7 +4156,9 @@ async function saveReviewClassificationReview(opts = {}) {
       index: state.reviewIndex,
       previousOverrideTrack,
       previousOverrideNote,
+      previousOverrideFocus,
       appliedTrack: track,
+      appliedFocus: reviewFocus,
       appliedNote: note,
     });
     _incrementReviewDecisionCounter(kind);
@@ -4132,6 +4170,7 @@ async function saveReviewClassificationReview(opts = {}) {
     if (saveBtn) saveBtn.disabled = false;
     if (irrelevantBtn) irrelevantBtn.disabled = false;
     if (moveTo) moveTo.disabled = false;
+    if (focusSelect) focusSelect.disabled = false;
     if (comment) comment.disabled = false;
   }
 }
@@ -4159,7 +4198,7 @@ async function undoReview() {
   try {
     if (last.kind === "classification") {
       const payload = last.previousOverrideTrack
-        ? { track: last.previousOverrideTrack, note: last.previousOverrideNote }
+        ? { track: last.previousOverrideTrack, note: last.previousOverrideNote, review_focus: last.previousOverrideFocus || "" }
         : { clear: true };
       const data = await api(`/api/assets/${encodeURIComponent(last.id)}/classification-review`, {
         method: "PUT",
@@ -4175,6 +4214,7 @@ async function undoReview() {
       if (state.reviewDrafts && last.id) {
         state.reviewDrafts[last.id] = {
           track: String(last.appliedTrack || "").trim(),
+          focus: String(last.appliedFocus || "").trim(),
           note: String(last.appliedNote || ""),
         };
       }
@@ -4494,6 +4534,11 @@ if (reviewClassificationKeepBtn) {
 const reviewClassificationMoveTo = $("#reviewClassificationMoveTo");
 if (reviewClassificationMoveTo) {
   reviewClassificationMoveTo.addEventListener("change", _persistCurrentReviewDraft);
+}
+
+const reviewClassificationFocusSelect = $("#reviewClassificationFocusSelect");
+if (reviewClassificationFocusSelect) {
+  reviewClassificationFocusSelect.addEventListener("change", _persistCurrentReviewDraft);
 }
 
 const reviewClassificationComment = $("#reviewClassificationComment");

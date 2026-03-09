@@ -1271,6 +1271,25 @@ class TestServerApi(unittest.TestCase):
                     "2026-03-08T01:00:01+00:00",
                 ),
             )
+            db.exec(
+                """
+                insert into asset_overrides
+                  (id, asset_id, track, axis_name, axis_value, operation, actor, note, created_at, expires_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "focus-a1",
+                    "a1",
+                    "construction_concern",
+                    "review_focus",
+                    "landscaping",
+                    "set",
+                    "Jim",
+                    "",
+                    "2026-03-08T01:00:02+00:00",
+                    None,
+                ),
+            )
 
         status, body = self._request("/api/assets/a1")
         self.assertEqual(status, 200)
@@ -1278,6 +1297,7 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(review.get("current_track"), "style_product_decor")
         self.assertEqual(review.get("source_qc_inferred_track"), "construction_concern")
         self.assertEqual(review.get("source_qc_verdict"), "conflicting")
+        self.assertEqual(review.get("active_review_focus"), "landscaping")
 
     def test_owner_can_save_modal_classification_review(self):
         self._seed_v2_classification()
@@ -1313,13 +1333,14 @@ class TestServerApi(unittest.TestCase):
         status, body = self._request(
             "/api/assets/a1/classification-review",
             method="PUT",
-            payload={"track": "construction_concern", "note": "Keep for builder checklist"},
+            payload={"track": "construction_concern", "review_focus": "inspection", "note": "Keep for builder checklist"},
             headers={"X-Actor-Token": "owner-class-review-token"},
         )
         self.assertEqual(status, 200)
         review = (body.get("asset") or {}).get("classification_review") or {}
         self.assertEqual(review.get("active_override_track"), "construction_concern")
         self.assertEqual(review.get("active_override_note"), "Keep for builder checklist")
+        self.assertEqual(review.get("active_review_focus"), "inspection")
 
         with Db(self.db_path) as db:
             ensure_schema(db)
@@ -1331,9 +1352,19 @@ class TestServerApi(unittest.TestCase):
                 order by created_at asc
                 """
             )
+            focus_rows = db.query(
+                """
+                select axis_value, expires_at
+                from asset_overrides
+                where asset_id='a1' and axis_name='review_focus'
+                order by created_at asc
+                """
+            )
         self.assertEqual(str(rows[-1]["axis_value"]), "construction_concern")
         self.assertEqual(str(rows[-1]["note"]), "Keep for builder checklist")
         self.assertTrue(str(rows[0]["expires_at"] or "").strip())
+        self.assertEqual(str(focus_rows[-1]["axis_value"]), "inspection")
+        self.assertFalse(str(focus_rows[-1]["expires_at"] or "").strip())
 
     def test_owner_can_clear_modal_classification_review(self):
         self._seed_v2_classification()
@@ -1365,6 +1396,25 @@ class TestServerApi(unittest.TestCase):
                     None,
                 ),
             )
+            db.exec(
+                """
+                insert into asset_overrides
+                  (id, asset_id, track, axis_name, axis_value, operation, actor, note, created_at, expires_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "active-focus-a1",
+                    "a1",
+                    "style_product_decor",
+                    "review_focus",
+                    "landscaping",
+                    "set",
+                    "Jim",
+                    "",
+                    "2026-03-07T00:00:00+00:00",
+                    None,
+                ),
+            )
 
         status, body = self._request(
             "/api/assets/a1/classification-review",
@@ -1375,6 +1425,7 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         review = (body.get("asset") or {}).get("classification_review") or {}
         self.assertEqual(review.get("active_override_track"), "")
+        self.assertEqual(review.get("active_review_focus"), "")
 
         with Db(self.db_path) as db:
             ensure_schema(db)
@@ -1385,7 +1436,15 @@ class TestServerApi(unittest.TestCase):
                 where id='active-override-a1'
                 """
             )
+            focus_expires_at = db.query_value(
+                """
+                select expires_at
+                from asset_overrides
+                where id='active-focus-a1'
+                """
+            )
         self.assertTrue(str(expires_at or "").strip())
+        self.assertTrue(str(focus_expires_at or "").strip())
 
     def test_classification_review_requires_owner(self):
         self._seed_v2_classification()

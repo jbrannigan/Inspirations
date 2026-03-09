@@ -82,6 +82,11 @@ CLASSIFICATION_TRACK_OPTIONS = (
     "home_maintenance_diy",
     "irrelevant",
 )
+REVIEW_FOCUS_OPTIONS = (
+    "",
+    "landscaping",
+    "inspection",
+)
 
 # ── API key helpers ──────────────────────────────────────────────────────────────
 
@@ -1339,8 +1344,11 @@ class ApiHandler(BaseHTTPRequestHandler):
             clear_override = bool(body.get("clear"))
             track = str(body.get("track") or "").strip()
             note = str(body.get("note") or "").strip()
+            review_focus = str(body.get("review_focus") or body.get("focus") or "").strip()
             if not clear_override and track not in CLASSIFICATION_TRACK_OPTIONS:
                 return _send(self, 400, {"error": "track must be one of style_product_decor, construction_concern, home_maintenance_diy, irrelevant"})
+            if review_focus not in REVIEW_FOCUS_OPTIONS:
+                return _send(self, 400, {"error": "review_focus must be one of landscaping, inspection, or blank"})
             try:
                 if clear_override:
                     updated_asset = self._with_db(
@@ -1353,6 +1361,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                         asset_id=asset_id,
                         track=track,
                         note=note,
+                        review_focus=review_focus,
                         actor_name=str(actor.get("name") or "").strip() or "ui",
                     )
             except FileNotFoundError:
@@ -2460,9 +2469,23 @@ class ApiHandler(BaseHTTPRequestHandler):
             """,
             (asset_id, now_iso),
         )
+        focus_row = db.query(
+            """
+            select axis_value, actor, created_at
+            from asset_overrides
+            where asset_id=?
+              and axis_name='review_focus'
+              and operation='set'
+              and (expires_at is null or expires_at > ?)
+            order by created_at desc, id desc
+            limit 1
+            """,
+            (asset_id, now_iso),
+        )
         current = dict(track_row[0]) if track_row else {}
         source_qc = dict(source_qc_row[0]) if source_qc_row else {}
         override = dict(override_row[0]) if override_row else {}
+        focus = dict(focus_row[0]) if focus_row else {}
         return {
             "current_track": str(current.get("track") or "").strip(),
             "current_confidence": current.get("confidence"),
@@ -2481,6 +2504,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             "active_override_actor": str(override.get("actor") or "").strip(),
             "active_override_note": str(override.get("note") or "").strip(),
             "active_override_created_at": str(override.get("created_at") or "").strip(),
+            "active_review_focus": str(focus.get("axis_value") or "").strip(),
+            "active_review_focus_actor": str(focus.get("actor") or "").strip(),
+            "active_review_focus_created_at": str(focus.get("created_at") or "").strip(),
         }
 
     def _apply_modal_classification_review(
@@ -2490,6 +2516,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         asset_id: str,
         track: str,
         note: str,
+        review_focus: str,
         actor_name: str,
     ) -> dict:
         existing = db.query_value("select 1 from assets where id=? limit 1", (asset_id,))
@@ -2515,6 +2542,17 @@ class ApiHandler(BaseHTTPRequestHandler):
         )
         db.exec(
             """
+            update asset_overrides
+            set expires_at=?
+            where asset_id=?
+              and axis_name='review_focus'
+              and operation='set'
+              and expires_at is null
+            """,
+            (created_at, asset_id),
+        )
+        db.exec(
+            """
             insert into asset_overrides
               (id, asset_id, track, axis_name, axis_value, operation, actor, note, created_at, expires_at)
             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -2532,6 +2570,26 @@ class ApiHandler(BaseHTTPRequestHandler):
                 None,
             ),
         )
+        if review_focus:
+            db.exec(
+                """
+                insert into asset_overrides
+                  (id, asset_id, track, axis_name, axis_value, operation, actor, note, created_at, expires_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    asset_id,
+                    track,
+                    "review_focus",
+                    review_focus,
+                    "set",
+                    actor_name,
+                    "",
+                    created_at,
+                    None,
+                ),
+            )
         asset = self._get_asset_for_modal(db, asset_id=asset_id, include_hidden=True)
         if not asset:
             raise FileNotFoundError("asset not found")
@@ -2553,6 +2611,17 @@ class ApiHandler(BaseHTTPRequestHandler):
             set expires_at=?
             where asset_id=?
               and axis_name='track'
+              and operation='set'
+              and expires_at is null
+            """,
+            (cleared_at, asset_id),
+        )
+        db.exec(
+            """
+            update asset_overrides
+            set expires_at=?
+            where asset_id=?
+              and axis_name='review_focus'
               and operation='set'
               and expires_at is null
             """,

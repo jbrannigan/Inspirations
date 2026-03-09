@@ -238,6 +238,10 @@
                       <div id="reviewClassificationOverrideMeta" class="modal-title-note muted" hidden></div>
                     </div>
                   </div>
+                  <div id="reviewClassificationFocusRow" class="modal-classification-row" hidden>
+                    <div class="modal-classification-label">Review focus</div>
+                    <div id="reviewClassificationFocus" class="modal-classification-value"></div>
+                  </div>
                 </div>
                 <div id="reviewClassificationEditor" class="modal-title-editor" hidden>
                   <label for="reviewClassificationMoveTo" class="modal-title-edit-label">Set track to</label>
@@ -245,6 +249,12 @@
                     <option value="style_product_decor">Style / Decor</option>
                     <option value="construction_concern">Construction</option>
                     <option value="home_maintenance_diy">Maintenance / DIY</option>
+                  </select>
+                  <label for="reviewClassificationFocusSelect" class="modal-title-edit-label">Review focus (optional)</label>
+                  <select id="reviewClassificationFocusSelect" class="modal-classification-select">
+                    <option value="">None</option>
+                    <option value="landscaping">Landscaping</option>
+                    <option value="inspection">Inspection</option>
                   </select>
                   <label for="reviewClassificationComment" class="modal-title-edit-label">Reason (optional)</label>
                   <textarea id="reviewClassificationComment" class="modal-classification-comment" placeholder="Optional reason for this choice…"></textarea>
@@ -383,6 +393,10 @@
                     <div id="modalClassificationOverrideMeta" class="modal-title-note muted" hidden></div>
                   </div>
                 </div>
+                <div id="modalClassificationFocusRow" class="modal-classification-row" hidden>
+                  <div class="modal-classification-label">Review focus</div>
+                  <div id="modalClassificationFocus" class="modal-classification-value"></div>
+                </div>
               </div>
               <div id="modalClassificationEditor" class="modal-title-editor" hidden>
                 <label for="modalClassificationMoveTo" class="modal-title-edit-label">Set track to</label>
@@ -390,6 +404,12 @@
                   <option value="style_product_decor">Style / Decor</option>
                   <option value="construction_concern">Construction</option>
                   <option value="home_maintenance_diy">Maintenance / DIY</option>
+                </select>
+                <label for="modalClassificationFocusSelect" class="modal-title-edit-label">Review focus (optional)</label>
+                <select id="modalClassificationFocusSelect" class="modal-classification-select">
+                  <option value="">None</option>
+                  <option value="landscaping">Landscaping</option>
+                  <option value="inspection">Inspection</option>
                 </select>
                 <label for="modalClassificationComment" class="modal-title-edit-label">Reason (optional)</label>
                 <textarea id="modalClassificationComment" class="modal-classification-comment" placeholder="Optional reason for this choice…"></textarea>
@@ -592,6 +612,6 @@
     <script src="/app/shared.js?v=3"></script>
     <script src="/app/explorer.js?v=1"></script>
     <script src="/app/attractor-explorer.js?v=2"></script>
-    <script src="/app/app.js?v=35"></script>
+    <script src="/app/app.js?v=36"></script>
   </body>
 </html>
