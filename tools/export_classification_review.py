@@ -358,7 +358,18 @@ def _render_slice_html(
     axis_run_id: str,
     cwd: Path,
 ) -> None:
-    title = slice_name.replace("_", " ").title()
+    display_titles = {
+        "ambiguous_media_weak_thumbnail": "Media: Trust Title / Source",
+        "ambiguous_media_link_mismatch": "Media: Link / Thumbnail Mismatch",
+        "ambiguous_media_mismatch": "Media Mismatch",
+        "ambiguous_low_signal_url": "Ambiguous: Low-Signal URLs",
+        "ambiguous_true_contested": "Ambiguous: True Contested",
+        "maintenance_diy_track": "Maintenance / DIY Track",
+        "source_link_conflicting": "Source Link Conflicts",
+        "source_link_insufficient": "Source Link Insufficient",
+        "source_link_platform_wrapper": "Source Link Platform Wrappers",
+    }
+    title = display_titles.get(slice_name, slice_name.replace("_", " ").title())
     cards: list[str] = []
     for row in rows:
         asset = {
@@ -556,11 +567,22 @@ def _render_index_html(
     manifest: dict[str, Any],
     html_files: dict[str, Path],
 ) -> None:
+    display_titles = {
+        "ambiguous_media_weak_thumbnail": "Media: Trust Title / Source",
+        "ambiguous_media_link_mismatch": "Media: Link / Thumbnail Mismatch",
+        "ambiguous_media_mismatch": "Media Mismatch",
+        "ambiguous_low_signal_url": "Ambiguous: Low-Signal URLs",
+        "ambiguous_true_contested": "Ambiguous: True Contested",
+        "maintenance_diy_track": "Maintenance / DIY Track",
+        "source_link_conflicting": "Source Link Conflicts",
+        "source_link_insufficient": "Source Link Insufficient",
+        "source_link_platform_wrapper": "Source Link Platform Wrappers",
+    }
     entries = []
     for slice_name, count in manifest["counts"].items():
         html_path = html_files.get(slice_name)
         entries.append(
-            f'<li><a href="{html.escape(html_path.name if html_path else "")}">{html.escape(slice_name.replace("_", " ").title())}</a> <span>{int(count)}</span></li>'
+            f'<li><a href="{html.escape(html_path.name if html_path else "")}">{html.escape(display_titles.get(slice_name, slice_name.replace("_", " ").title()))}</a> <span>{int(count)}</span></li>'
         )
     doc = f"""<!doctype html>
 <html lang="en">

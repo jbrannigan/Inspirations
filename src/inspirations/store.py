@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from .db import Db
+from .db import Db, infer_collection_provenance
 from .title_workflow import enrich_assets_with_title_info
 
 _SCAN_REF_RE = re.compile(r"^scan://([a-f0-9]{64})(?:#p(\d+))?$", re.IGNORECASE)
@@ -67,10 +67,77 @@ _SCAN_AUTOGEN_TOKENS = {
     "untitled",
 }
 _MAX_SCAN_DOC_COLLAPSE_PAGES = 6
+_COLLECTION_PROVENANCE_LABELS = {
+    "human_curated": "Human-curated",
+    "source_mirror": "Mirrored source",
+    "ai_derived_representative": "AI-derived representative",
+    "workflow_review": "Workflow review",
+    "workflow_cohort": "Workflow cohort",
+    "system_hidden": "System",
+}
+_COLLECTION_PROVENANCE_BADGES = {
+    "source_mirror": "Mirror",
+    "ai_derived_representative": "AI set",
+    "workflow_review": "Review",
+    "workflow_cohort": "Workflow",
+    "system_hidden": "System",
+}
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def collection_provenance_label(kind: str) -> str:
+    key = str(kind or "").strip()
+    return _COLLECTION_PROVENANCE_LABELS.get(key, "Collection")
+
+
+def collection_provenance_badge(kind: str) -> str:
+    key = str(kind or "").strip()
+    return _COLLECTION_PROVENANCE_BADGES.get(key, "")
+
+
+def _collection_workflow_variant(record: dict[str, Any]) -> tuple[str, str, str]:
+    kind = str(record.get("provenance_kind") or "").strip()
+    name = str(record.get("name") or "").strip()
+    if kind != "workflow_cohort":
+        return (
+            collection_provenance_label(kind),
+            collection_provenance_badge(kind),
+            str(record.get("provenance_note") or "").strip(),
+        )
+    lower = name.lower()
+    if lower.endswith("(cleaned)"):
+        return (
+            "Working cohort",
+            "Working",
+            "Cleaned working subset kept for active use.",
+        )
+    if lower.endswith("(excluded)"):
+        return (
+            "Excluded cohort",
+            "Excluded",
+            "Excluded provenance subset preserved for reversibility.",
+        )
+    return (
+        "Imported cohort",
+        "Raw",
+        "Raw imported batch preserved for provenance.",
+    )
+
+
+def decorate_collection_record(record: dict[str, Any]) -> dict[str, Any]:
+    kind = str(record.get("provenance_kind") or "").strip() or "human_curated"
+    record["provenance_kind"] = kind
+    record["provenance_note"] = str(record.get("provenance_note") or "").strip()
+    label, badge, note = _collection_workflow_variant(record)
+    record["provenance_label"] = label
+    record["provenance_badge"] = badge
+    if note:
+        record["provenance_note"] = note
+    record["curator"] = str(record.get("curator") or "").strip()
+    return record
 
 
 def _csv_values(raw: str) -> list[str]:
@@ -333,10 +400,12 @@ def _build_asset_filter(
     include_hidden: bool = False,
     classification_axis: str = "",
     classification_value: str = "",
+    exclude_tracks: str = "",
 ) -> tuple[str, str, list]:
     """Build WHERE and JOIN clauses for asset queries. Returns (join_sql, where, params)."""
     clauses: list[str] = []
     params: list[Any] = []
+    join_params: list[Any] = []
     joins: list[str] = []
     if ids:
         id_list = [s.strip() for s in ids.split(",") if s.strip()]
@@ -444,6 +513,7 @@ def _build_asset_filter(
         params.extend(collection_ids)
     axis_name = str(classification_axis or "").strip().lower()
     axis_values = [s.strip() for s in str(classification_value or "").split(",") if s.strip()]
+    exclude_track_values = [s.strip() for s in str(exclude_tracks or "").split(",") if s.strip()]
     if axis_name:
         if axis_name == "track":
             run_id = _latest_classification_run_id(db, "track_gate")
@@ -452,7 +522,7 @@ def _build_asset_filter(
             else:
                 now_iso = datetime.now(timezone.utc).isoformat()
                 joins.append("join asset_track_assessments ata on ata.asset_id = a.id and ata.run_id = ?")
-                params.append(run_id)
+                join_params.append(run_id)
                 joins.append(
                     """
                     left join (
@@ -474,7 +544,7 @@ def _build_asset_filter(
                     ) ato on ato.asset_id = a.id
                     """
                 )
-                params.extend([now_iso, now_iso])
+                join_params.extend([now_iso, now_iso])
                 if axis_values:
                     clauses.append("coalesce(ato.axis_value, ata.track) in (%s)" % ",".join(["?"] * len(axis_values)))
                     params.extend(axis_values)
@@ -486,10 +556,43 @@ def _build_asset_filter(
                 joins.append(
                     "join asset_axis_memberships aam on aam.asset_id = a.id and aam.run_id = ? and aam.axis_name = ?"
                 )
-                params.extend([run_id, axis_name])
+                join_params.extend([run_id, axis_name])
                 if axis_values:
                     clauses.append("aam.axis_value in (%s)" % ",".join(["?"] * len(axis_values)))
                     params.extend(axis_values)
+    if exclude_track_values:
+        run_id = _latest_classification_run_id(db, "track_gate")
+        if run_id:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            joins.append("left join asset_track_assessments atx on atx.asset_id = a.id and atx.run_id = ?")
+            join_params.append(run_id)
+            joins.append(
+                """
+                left join (
+                  select ao.asset_id, ao.axis_value
+                  from asset_overrides ao
+                  join (
+                    select asset_id, max(created_at) as max_created_at
+                    from asset_overrides
+                    where axis_name='track'
+                      and operation='set'
+                      and (expires_at is null or expires_at > ?)
+                    group by asset_id
+                  ) latest
+                    on latest.asset_id = ao.asset_id
+                   and latest.max_created_at = ao.created_at
+                  where ao.axis_name='track'
+                    and ao.operation='set'
+                    and (ao.expires_at is null or ao.expires_at > ?)
+                ) otx on otx.asset_id = a.id
+                """
+            )
+            join_params.extend([now_iso, now_iso])
+            clauses.append(
+                "coalesce(otx.axis_value, atx.track, '') not in (%s)"
+                % ",".join(["?"] * len(exclude_track_values))
+            )
+            params.extend(exclude_track_values)
     if triage_status:
         statuses = [s.strip() for s in triage_status.split(",") if s.strip()]
         if "pending" in statuses:
@@ -521,7 +624,7 @@ def _build_asset_filter(
         params.append(hidden_collection_id)
     where = "where " + " and ".join(clauses) if clauses else ""
     join_sql = "\n    " + "\n    ".join(joins) if joins else ""
-    return join_sql, where, params
+    return join_sql, where, [*join_params, *params]
 
 
 def list_asset_ids(db: Db, **kwargs) -> list[str]:
@@ -552,6 +655,7 @@ def list_assets(
     include_hidden: bool = False,
     classification_axis: str = "",
     classification_value: str = "",
+    exclude_tracks: str = "",
     limit: int = 200,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
@@ -562,6 +666,7 @@ def list_assets(
         category=category, needs_annotation=needs_annotation, flagged_only=flagged_only,
         tagged_only=tagged_only, include_hidden=include_hidden,
         classification_axis=classification_axis, classification_value=classification_value,
+        exclude_tracks=exclude_tracks,
     )
 
     # Total count (same filters, no limit/offset)
@@ -575,10 +680,6 @@ def list_assets(
              (select ai.summary from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1),
              a.ai_summary
            ) as ai_summary,
-           (select ai.json from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_json,
-           (select ai.model from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_model,
-           (select ai.provider from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_provider,
-           (select ai.created_at from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_created_at,
            a.created_at, a.imported_at, a.image_url, a.stored_path, a.thumb_path,
            a.triage_status, a.needs_annotation, a.source_url, a.seo_alt_text,
            a.post_text, a.hashtags, a.engagement_json, a.dominant_color,
@@ -984,6 +1085,9 @@ def list_collections(db: Db, *, include_hidden: bool = False) -> list[dict[str, 
             c.description,
             c.created_at,
             c.updated_at,
+            c.provenance_kind,
+            c.provenance_note,
+            c.curator,
             coalesce(c.hidden, 0) as hidden,
             c.hidden_at,
             (
@@ -1011,7 +1115,7 @@ def list_collections(db: Db, *, include_hidden: bool = False) -> list[dict[str, 
     rows = db.query(sql, tuple(params))
     out = []
     for r in rows:
-        d = dict(r)
+        d = decorate_collection_record(dict(r))
         d["count_total"] = int(d.get("count_total") or 0)
         d["count_visible"] = int(d.get("count_visible") or 0)
         d["count"] = d["count_visible"]
@@ -1023,11 +1127,41 @@ def list_collections(db: Db, *, include_hidden: bool = False) -> list[dict[str, 
 def create_collection(db: Db, *, name: str, description: str = "") -> dict[str, Any]:
     cid = str(uuid.uuid4())
     now = _now_iso()
+    provenance_kind, curator, provenance_note = infer_collection_provenance(name)
     db.exec(
-        "insert into collections (id, name, description, created_at, updated_at) values (?, ?, ?, ?, ?)",
-        (cid, name, description or None, now, now),
+        """
+        insert into collections
+          (id, name, description, created_at, updated_at, provenance_kind, provenance_note, curator)
+        values (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            cid,
+            name,
+            description or None,
+            now,
+            now,
+            provenance_kind,
+            provenance_note,
+            curator,
+        ),
     )
-    return {"id": cid, "name": name, "description": description or "", "created_at": now, "updated_at": now, "count": 0}
+    return decorate_collection_record(
+        {
+            "id": cid,
+            "name": name,
+            "description": description or "",
+            "created_at": now,
+            "updated_at": now,
+            "count": 0,
+            "count_total": 0,
+            "count_visible": 0,
+            "hidden": 0,
+            "hidden_at": None,
+            "provenance_kind": provenance_kind,
+            "provenance_note": provenance_note,
+            "curator": curator,
+        }
+    )
 
 
 def add_items_to_collection(db: Db, *, collection_id: str, asset_ids: list[str]) -> int:

@@ -11,6 +11,7 @@ from http.server import HTTPServer
 from pathlib import Path
 from unittest import mock
 
+from inspirations.catalog import generate_catalog
 from inspirations.db import Db, ensure_schema
 from inspirations.server import ApiHandler, run_server
 
@@ -916,6 +917,33 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(int(c1.get("count_visible") or 0), 0)
         self.assertEqual(int(c1.get("count_total") or 0), 2)
 
+    def test_collections_endpoint_exposes_provenance_for_cb_collection(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into collections (id, name, description, created_at, updated_at)
+                values (?, ?, ?, ?, ?)
+                """,
+                (
+                    "cb1",
+                    "CB: Kitchen",
+                    "Kitchen layouts, cabinets, countertops, appliances.",
+                    "2026-03-10T00:00:00+00:00",
+                    "2026-03-10T00:00:00+00:00",
+                ),
+            )
+            ensure_schema(db)
+
+        status, body = self._request("/api/collections")
+        self.assertEqual(status, 200)
+        cb1 = next((c for c in body.get("collections", []) if c.get("id") == "cb1"), None)
+        self.assertIsNotNone(cb1)
+        self.assertEqual(cb1.get("provenance_kind"), "ai_derived_representative")
+        self.assertEqual(cb1.get("provenance_badge"), "AI set")
+        self.assertEqual(cb1.get("provenance_label"), "AI-derived representative")
+        self.assertIn("Not a human-curated final selection", str(cb1.get("provenance_note") or ""))
+
     def test_catalog_endpoints_include_hidden_require_owner(self):
         visible_id = "feedface-0000-0000-0000-000000000000"
         hidden_id = "deadbeef-0000-0000-0000-000000000000"
@@ -1023,7 +1051,7 @@ class TestServerApi(unittest.TestCase):
             headers={"X-Actor-Token": "collab-scope-token-1"},
         )
         self.assertEqual(status, 200)
-        self.assertEqual({a["id"] for a in body.get("assets", [])}, {"a1", "a2"})
+        self.assertEqual({a["id"] for a in body.get("assets", [])}, {"a1"})
 
     def test_collaborator_catalog_tree_hides_other_dimension(self):
         with Db(self.db_path) as db:
@@ -1079,6 +1107,158 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         collab_ids = {str(n.get("id") or "") for n in body.get("tree", [])}
         self.assertNotIn("dimension:other", collab_ids)
+
+    def test_collaborator_catalog_tree_source_counts_exclude_non_home_and_irrelevant(self):
+        self._seed_v2_classification()
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-tree-2", "Collab", "collab-tree-token-2", "collaborator"),
+            )
+            db.exec(
+                """
+                insert into assets (id, source, source_ref, title, imported_at, board, category)
+                values (?, ?, ?, ?, datetime('now'), ?, ?)
+                """,
+                ("a3", "facebook", "fb://3", "Other Board Item", "Builder Brigade", "other"),
+            )
+            db.exec(
+                """
+                insert into assets (id, source, source_ref, title, imported_at, board, category)
+                values (?, ?, ?, ?, datetime('now'), ?, ?)
+                """,
+                ("a4", "facebook", "fb://4", "Irrelevant Home Item", "Builder Brigade", "home_design"),
+            )
+            db.exec(
+                """
+                insert into assets (id, source, source_ref, title, imported_at, board, category)
+                values (?, ?, ?, ?, datetime('now'), ?, ?)
+                """,
+                ("a5", "facebook", "fb://5", "Valid Home Item", "Builder Brigade", "home_design"),
+            )
+            db.exec(
+                """
+                insert into asset_track_assessments
+                  (id, run_id, asset_id, track, confidence, is_ambiguous, decision_source, reason, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "track-a3-collab-tree",
+                    "track-run-test",
+                    "a3",
+                    "style_product_decor",
+                    0.88,
+                    0,
+                    "test",
+                    "other category",
+                    "2026-03-07T06:00:03+00:00",
+                ),
+            )
+            db.exec(
+                """
+                insert into asset_track_assessments
+                  (id, run_id, asset_id, track, confidence, is_ambiguous, decision_source, reason, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "track-a4-collab-tree",
+                    "track-run-test",
+                    "a4",
+                    "irrelevant",
+                    0.92,
+                    0,
+                    "test",
+                    "irrelevant home item",
+                    "2026-03-07T06:00:04+00:00",
+                ),
+            )
+            db.exec(
+                """
+                insert into asset_track_assessments
+                  (id, run_id, asset_id, track, confidence, is_ambiguous, decision_source, reason, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "track-a5-collab-tree",
+                    "track-run-test",
+                    "a5",
+                    "style_product_decor",
+                    0.95,
+                    0,
+                    "test",
+                    "valid home item",
+                    "2026-03-07T06:00:05+00:00",
+                ),
+            )
+
+        catalog_dir = self.tmp_path / "catalog-tree-source-filter"
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            generate_catalog(db, catalog_dir)
+        self.server.catalog_dir = catalog_dir
+
+        status, body = self._request(
+            "/api/catalog/tree",
+            headers={"X-Actor-Token": "collab-tree-token-2"},
+        )
+        self.assertEqual(status, 200)
+        tree = body.get("tree", [])
+        facebook_node = next((node for node in tree if node.get("type") == "source" and str(node.get("label") or "").lower() == "facebook"), None)
+        self.assertIsNotNone(facebook_node)
+        self.assertEqual(int(facebook_node.get("count") or 0), 1)
+
+    def test_collaborator_assets_exclude_irrelevant_and_maintenance_tracks(self):
+        self._seed_v2_classification()
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-track-1", "Collab", "collab-track-token-1", "collaborator"),
+            )
+            db.exec(
+                """
+                insert into assets (id, source, source_ref, title, imported_at, category)
+                values (?, ?, ?, ?, datetime('now'), ?)
+                """,
+                ("a3", "facebook", "fb://irrelevant", "Irrelevant Home Item", "home_design"),
+            )
+            db.exec(
+                """
+                insert into assets (id, source, source_ref, title, imported_at, category)
+                values (?, ?, ?, ?, datetime('now'), ?)
+                """,
+                ("a4", "facebook", "fb://maintenance", "Maintenance Item", "home_design"),
+            )
+            for row in [
+                ("track-a3-collab-assets", "a3", "irrelevant", "irrelevant"),
+                ("track-a4-collab-assets", "a4", "home_maintenance_diy", "maintenance"),
+            ]:
+                db.exec(
+                    """
+                    insert into asset_track_assessments
+                      (id, run_id, asset_id, track, confidence, is_ambiguous, decision_source, reason, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        row[0],
+                        "track-run-test",
+                        row[1],
+                        row[2],
+                        0.91,
+                        0,
+                        "test",
+                        row[3],
+                        "2026-03-07T06:00:05+00:00",
+                    ),
+                )
+
+        status, body = self._request(
+            "/api/assets?limit=20",
+            headers={"X-Actor-Token": "collab-track-token-1"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual({a["id"] for a in body.get("assets", [])}, {"a1", "a2"})
 
     def test_collaborator_catalog_endpoints_hide_other_files(self):
         other_id = "bead0001-0000-0000-0000-000000000000"
@@ -1404,7 +1584,12 @@ class TestServerApi(unittest.TestCase):
         status, body = self._request(
             "/api/assets/a1/classification-review",
             method="PUT",
-            payload={"track": "construction_concern", "review_focus": "inspection", "note": "Keep for builder checklist"},
+            payload={
+                "track": "construction_concern",
+                "review_focus": "inspection",
+                "media_reliability": "trust_title_source",
+                "note": "Keep for builder checklist",
+            },
             headers={"X-Actor-Token": "owner-class-review-token"},
         )
         self.assertEqual(status, 200)
@@ -1412,6 +1597,7 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(review.get("active_override_track"), "construction_concern")
         self.assertEqual(review.get("active_override_note"), "Keep for builder checklist")
         self.assertEqual(review.get("active_review_focus"), "inspection")
+        self.assertEqual(review.get("active_media_reliability"), "trust_title_source")
 
         with Db(self.db_path) as db:
             ensure_schema(db)
@@ -1431,11 +1617,21 @@ class TestServerApi(unittest.TestCase):
                 order by created_at asc
                 """
             )
+            media_rows = db.query(
+                """
+                select axis_value, expires_at
+                from asset_overrides
+                where asset_id='a1' and axis_name='media_reliability'
+                order by created_at asc
+                """
+            )
         self.assertEqual(str(rows[-1]["axis_value"]), "construction_concern")
         self.assertEqual(str(rows[-1]["note"]), "Keep for builder checklist")
         self.assertTrue(str(rows[0]["expires_at"] or "").strip())
         self.assertEqual(str(focus_rows[-1]["axis_value"]), "inspection")
         self.assertFalse(str(focus_rows[-1]["expires_at"] or "").strip())
+        self.assertEqual(str(media_rows[-1]["axis_value"]), "trust_title_source")
+        self.assertFalse(str(media_rows[-1]["expires_at"] or "").strip())
 
     def test_owner_can_clear_modal_classification_review(self):
         self._seed_v2_classification()
@@ -1486,6 +1682,25 @@ class TestServerApi(unittest.TestCase):
                     None,
                 ),
             )
+            db.exec(
+                """
+                insert into asset_overrides
+                  (id, asset_id, track, axis_name, axis_value, operation, actor, note, created_at, expires_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "active-media-a1",
+                    "a1",
+                    "style_product_decor",
+                    "media_reliability",
+                    "thumbnail_mismatch",
+                    "set",
+                    "Jim",
+                    "",
+                    "2026-03-07T00:00:00+00:00",
+                    None,
+                ),
+            )
 
         status, body = self._request(
             "/api/assets/a1/classification-review",
@@ -1497,6 +1712,7 @@ class TestServerApi(unittest.TestCase):
         review = (body.get("asset") or {}).get("classification_review") or {}
         self.assertEqual(review.get("active_override_track"), "")
         self.assertEqual(review.get("active_review_focus"), "")
+        self.assertEqual(review.get("active_media_reliability"), "")
 
         with Db(self.db_path) as db:
             ensure_schema(db)
@@ -1514,8 +1730,109 @@ class TestServerApi(unittest.TestCase):
                 where id='active-focus-a1'
                 """
             )
+            media_expires_at = db.query_value(
+                """
+                select expires_at
+                from asset_overrides
+                where id='active-media-a1'
+                """
+            )
         self.assertTrue(str(expires_at or "").strip())
         self.assertTrue(str(focus_expires_at or "").strip())
+        self.assertTrue(str(media_expires_at or "").strip())
+
+    def test_owner_can_capture_source_link_candidate(self):
+        self._seed_v2_classification()
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into actors (id, name, token, role, created_at)
+                values (?, ?, ?, ?, datetime('now'))
+                """,
+                ("owner-source-candidate", "Jim", "owner-source-candidate-token", "owner"),
+            )
+
+        with mock.patch(
+            "inspirations.server.capture_source_link_candidate_for_asset",
+            return_value={
+                "ok": True,
+                "run_id": "run-capture-1",
+                "asset_id": "a1",
+                "fetch_status": "fetched",
+                "page_title": "Builder Brigade",
+                "hero_image_url": "https://cdn.example.com/hero.jpg",
+                "hero_image_alt": "Builder Brigade hero",
+                "hero_text_excerpt": "What is the best wall assembly?",
+                "promoted_source_url": "",
+                "promoted_hero_image": False,
+            },
+        ), mock.patch.object(
+            ApiHandler,
+            "_get_asset_for_modal",
+            return_value={
+                "id": "a1",
+                "classification_review": {},
+                "source_link_candidate": {
+                    "run_id": "run-capture-1",
+                    "page_title": "Builder Brigade",
+                    "hero_image_url": "https://cdn.example.com/hero.jpg",
+                    "hero_image_alt": "Builder Brigade hero",
+                    "hero_text_excerpt": "What is the best wall assembly?",
+                    "fetch_status": "fetched",
+                },
+            },
+        ):
+            status, body = self._request(
+                "/api/assets/a1/source-link-candidate",
+                method="PUT",
+                payload={"action": "capture"},
+                headers={"X-Actor-Token": "owner-source-candidate-token"},
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual((body.get("result") or {}).get("fetch_status"), "fetched")
+        self.assertEqual(((body.get("asset") or {}).get("source_link_candidate") or {}).get("hero_image_url"), "https://cdn.example.com/hero.jpg")
+
+    def test_owner_can_promote_source_link_candidate(self):
+        self._seed_v2_classification()
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into actors (id, name, token, role, created_at)
+                values (?, ?, ?, ?, datetime('now'))
+                """,
+                ("owner-source-promote", "Jim", "owner-source-promote-token", "owner"),
+            )
+
+        with mock.patch(
+            "inspirations.server.promote_latest_hero_image_for_asset",
+            return_value={
+                "ok": True,
+                "asset_id": "a1",
+                "hero_image_url": "https://cdn.example.com/hero.jpg",
+                "promoted": True,
+            },
+        ), mock.patch.object(
+            ApiHandler,
+            "_get_asset_for_modal",
+            return_value={
+                "id": "a1",
+                "classification_review": {},
+                "source_link_candidate": {
+                    "hero_image_url": "https://cdn.example.com/hero.jpg",
+                    "fetch_status": "fetched",
+                },
+            },
+        ):
+            status, body = self._request(
+                "/api/assets/a1/source-link-candidate",
+                method="PUT",
+                payload={"action": "promote"},
+                headers={"X-Actor-Token": "owner-source-promote-token"},
+            )
+        self.assertEqual(status, 200)
+        self.assertTrue(bool((body.get("result") or {}).get("promoted")))
 
     def test_classification_review_requires_owner(self):
         self._seed_v2_classification()
@@ -1795,6 +2112,40 @@ class TestServerApi(unittest.TestCase):
             ensure_schema(db)
             resolved = db.query_value("select resolved from annotations where id='ann-q-1'")
         self.assertEqual(resolved, 1)
+
+    def test_asset_notes_update_requires_owner(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-notes-1", "Owner", "owner-notes-token-1", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-notes-1", "Collab", "collab-notes-token-1", "collaborator"),
+            )
+
+        status, body = self._request(
+            "/api/assets/a1",
+            method="PUT",
+            payload={"notes": "collaborator note"},
+            headers={"X-Actor-Token": "collab-notes-token-1"},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(body.get("error"), "owner access required")
+
+        status, _ = self._request(
+            "/api/assets/a1",
+            method="PUT",
+            payload={"notes": "owner note"},
+            headers={"X-Actor-Token": "owner-notes-token-1"},
+        )
+        self.assertEqual(status, 200)
+
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            notes = db.query_value("select notes from assets where id='a1'")
+        self.assertEqual(notes, "owner note")
 
     def test_questions_dashboard_owner_only_and_lists_open_questions(self):
         with Db(self.db_path) as db:

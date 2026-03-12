@@ -11,8 +11,8 @@
  *   - Velocity damping
  *   - Grid-hash collision avoidance
  *
- * Default mode: pre-computed physics. Run N ticks synchronously → render once.
- * "Live" checkbox enables continuous render loop with per-frame force ticks.
+ * Default mode: live physics. Continuous render loop with per-frame force ticks.
+ * Users can still switch back to settled/pre-computed behavior via the Live checkbox.
  *
  * Sets window.AttractorExplorer3D with the same public API shape as AttractorExplorer.
  */
@@ -70,7 +70,9 @@
   let _repulsion = 6;
   let _nodeSize = 8;             // world units (scene spans ±350)
   let _restPull = 0.02;          // return-to-rest strength when no attractors are active
-  let _liveMode = false;
+  let _liveMode = true;
+  let _liveDefaultEnabled = true;
+  let _liveUntil = 0;
 
   // Tween
   let _tweenStart = 0;
@@ -84,6 +86,7 @@
   const SETTLE_TICKS = 200;
   const RETICK = 150;
   const LOAD_SETTLE_DEFER_MS = 2500;
+  const LIVE_BURST_MS = 6500;
 
   // Texture loading
   const _texCache = {};
@@ -96,7 +99,7 @@
   let _maxTextureOverlays = 0;
   let _texPrefetchCount = 180;
   const OVERLAY_SYNC_MIN_MS = 90;
-  const SETTINGS_KEY = "inspirations.attractor3d.settings.v2";
+  const SETTINGS_KEY = "inspirations.attractor3d.settings.v3";
   const MAX_PRESET_NAME_LEN = 32;
   const MAX_PRESET_COUNT = 12;
   const MIN_REST_PULL = 0.002;
@@ -240,6 +243,10 @@
   function _bgColor() {
     const style = getComputedStyle(document.documentElement);
     return style.getPropertyValue("--bg").trim() || "#faf8f5";
+  }
+
+  function _isOwnerRole() {
+    return String(document.documentElement?.dataset?.actorRole || "").trim().toLowerCase() === "owner";
   }
 
   function _armClickSuppression() {
@@ -438,7 +445,10 @@
       _restPull = _clamp(look.restPull, MIN_REST_PULL, MAX_REST_PULL, _restPull);
     }
     if (typeof look?.focusedMode === "boolean") _focusedMode = look.focusedMode;
-    if (typeof look?.liveMode === "boolean") _liveMode = look.liveMode;
+    if (typeof look?.liveMode === "boolean") {
+      _liveDefaultEnabled = look.liveMode;
+      _liveMode = look.liveMode;
+    }
     if (typeof look?.showThumbs === "boolean") _showThumbs = look.showThumbs;
   }
 
@@ -470,7 +480,10 @@
       }
       if (typeof s.focusedMode === "boolean") _focusedMode = s.focusedMode;
       if (typeof s.showThumbs === "boolean") _showThumbs = s.showThumbs;
-      if (typeof s.liveMode === "boolean") _liveMode = s.liveMode;
+      if (typeof s.liveMode === "boolean") {
+        _liveDefaultEnabled = s.liveMode;
+        _liveMode = s.liveMode;
+      }
       if (Array.isArray(s.presets)) {
         _presets = s.presets
           .map((p) => _normalizePreset(p))
@@ -498,7 +511,7 @@
         restPull: _restPull,
         focusedMode: _focusedMode,
         showThumbs: _showThumbs,
-        liveMode: _liveMode,
+        liveMode: _liveDefaultEnabled,
         presets: _presets.map((p) => ({
           name: p.name,
           strength: p.strength,
@@ -514,6 +527,45 @@
     } catch (_) {
       // Ignore localStorage failures
     }
+  }
+
+  function _syncLiveToggleUi() {
+    const liveToggle = _controlsEl?.querySelector("#_attr3dLive");
+    if (liveToggle) liveToggle.checked = !!_liveMode;
+  }
+
+  function _armLiveBurst(durationMs = LIVE_BURST_MS) {
+    if (!_liveDefaultEnabled) {
+      _liveMode = false;
+      _liveUntil = 0;
+      _syncLiveToggleUi();
+      return;
+    }
+    _liveMode = true;
+    _liveUntil = performance.now() + Math.max(1000, Number(durationMs) || LIVE_BURST_MS);
+    _liveCalm = 0;
+    _syncLiveToggleUi();
+  }
+
+  function _endLiveBurst({ settle = true } = {}) {
+    if (!_liveMode && _liveUntil === 0) return;
+    _liveMode = false;
+    _liveUntil = 0;
+    _syncLiveToggleUi();
+    if (!settle) return;
+    if (_activeAttractors.length > 0) {
+      _settleSimulation(_retickTicksForNodeCount(_nodes.length));
+    } else {
+      for (const node of _nodes) {
+        node.vx = 0;
+        node.vy = 0;
+        node.vz = 0;
+      }
+      _markSceneDirty();
+    }
+    _syncInstanceMesh();
+    _queueNearTextures();
+    _syncTextureOverlays(true);
   }
 
   function _resetNodesToRest() {
@@ -801,6 +853,7 @@
     _normalizeRestLayoutToScene();
     _allNodes = _nodes.slice();
     _liveCalm = 0;
+    _liveUntil = 0;
 
     if (!_hasSavedNodeSize && !_sizeManuallySet) {
       _nodeSize = _defaultNodeSizeForCount(_nodes.length);
@@ -826,6 +879,7 @@
     // Queue nearby textures and build initial overlay set
     _queueNearTextures();
     _syncTextureOverlays(true);
+    _armLiveBurst();
   }
 
   function _disposeInstanceMesh() {
@@ -1168,8 +1222,8 @@
     }
     _liveCalm = 0;
 
-    if (_liveMode) {
-      // Live mode: render loop handles ticking
+    if (_liveDefaultEnabled) {
+      _armLiveBurst();
     } else {
       const useDeferredSettle = _shouldDeferSettleNow();
       _settleAndTween(_retickTicksForNodeCount(_nodes.length), { defer: useDeferredSettle });
@@ -1250,6 +1304,10 @@
       if (_paused) return;
 
       if (_controls) _controls.update();
+
+      if (_liveMode && _liveUntil > 0 && performance.now() >= _liveUntil) {
+        _endLiveBurst({ settle: true });
+      }
 
       // Billboard orientation changes
       if (!_camera.quaternion.equals(_lastCameraQuat)) {
@@ -1745,25 +1803,27 @@
       </label>
       <label class="physics-toggle">Focus <input type="checkbox" id="_attr3dFocus" ${_focusedMode ? "checked" : ""}></label>
       <label class="physics-toggle">Live <input type="checkbox" id="_attr3dLive" ${_liveMode ? "checked" : ""}></label>
-      <label class="physics-toggle">Thumbs <input type="checkbox" id="_attr3dThumbs" ${_showThumbs ? "checked" : ""}></label>
+      ${_isOwnerRole() ? `<label class="physics-toggle">Thumbs <input type="checkbox" id="_attr3dThumbs" ${_showThumbs ? "checked" : ""}></label>` : ""}
     `;
     _controlsEl.appendChild(slidersRow);
 
-    const presetsRow = document.createElement("div");
-    presetsRow.className = "attractor-presets-row";
-    presetsRow.innerHTML = `
-      <span class="preset-label">Looks</span>
-      <select id="_attr3dPresetSelect" class="attractor-preset-select" aria-label="3D presets">
-        <option value="">Looks…</option>
-      </select>
-      <button type="button" class="attractor-preset-btn" id="_attr3dPresetSave">Save</button>
-      <button type="button" class="attractor-preset-btn" id="_attr3dPresetDelete" disabled>Delete</button>
-      <label class="attractor-preset-startup">
-        <input type="checkbox" id="_attr3dPresetStartup" disabled>
-        Startup
-      </label>
-    `;
-    _controlsEl.appendChild(presetsRow);
+    if (_isOwnerRole()) {
+      const presetsRow = document.createElement("div");
+      presetsRow.className = "attractor-presets-row";
+      presetsRow.innerHTML = `
+        <span class="preset-label">Looks</span>
+        <select id="_attr3dPresetSelect" class="attractor-preset-select" aria-label="3D presets">
+          <option value="">Looks…</option>
+        </select>
+        <button type="button" class="attractor-preset-btn" id="_attr3dPresetSave">Save</button>
+        <button type="button" class="attractor-preset-btn" id="_attr3dPresetDelete" disabled>Delete</button>
+        <label class="attractor-preset-startup">
+          <input type="checkbox" id="_attr3dPresetStartup" disabled>
+          Startup
+        </label>
+      `;
+      _controlsEl.appendChild(presetsRow);
+    }
 
     // Chip groups in hover-reveal section
     const chipsSection = document.createElement("div");
@@ -1910,26 +1970,14 @@
     const liveToggle = _controlsEl.querySelector("#_attr3dLive");
     if (liveToggle)
       liveToggle.addEventListener("change", (e) => {
+        _liveDefaultEnabled = e.target.checked;
         _liveMode = e.target.checked;
         _liveCalm = 0;
         _saveSettings();
-        if (!_liveMode) {
-          if (_activeAttractors.length > 0) {
-            _settleSimulation(_retickTicksForNodeCount(_nodes.length));
-          } else {
-            // Preserve the current geometry when exiting Live mode.
-            // Hard-resetting to rest coordinates makes the map "ball up" and
-            // loses local clustering context the user was exploring.
-            for (const node of _nodes) {
-              node.vx = 0;
-              node.vy = 0;
-              node.vz = 0;
-            }
-            _markSceneDirty();
-          }
-          _syncInstanceMesh();
-          _queueNearTextures();
-          _syncTextureOverlays(true);
+        if (_liveDefaultEnabled) {
+          _armLiveBurst();
+        } else {
+          _endLiveBurst({ settle: true });
         }
       });
 
@@ -2153,7 +2201,9 @@
       _updateAttractorForces();
     } else {
       _resetNodesToRest();
+      _updatePoleMarkers();
       _syncInstanceMesh();
+      if (_liveDefaultEnabled) _armLiveBurst();
     }
 
     _markVisualsDirty();
@@ -2174,6 +2224,7 @@
       _rebuildForFocusedMode();
     } else {
       _markVisualsDirty();
+      if (_liveDefaultEnabled) _armLiveBurst();
     }
   }
 

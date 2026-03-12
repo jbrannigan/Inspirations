@@ -342,6 +342,33 @@ class TestTreeContract(unittest.TestCase):
         self.assertIsNotNone(target, "collection should appear in collections group")
         self.assertEqual(int(target.get("count") or 0), 1)
 
+    def test_collections_group_exposes_collection_provenance(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into collections (id, name, description, created_at, updated_at, hidden)
+                values (?, ?, ?, ?, ?, 0)
+                """,
+                (
+                    "c-cb",
+                    "CB: Kitchen",
+                    "Kitchen layouts, cabinets, countertops, appliances.",
+                    "2026-03-01T00:00:00+00:00",
+                    "2026-03-02T00:00:00+00:00",
+                ),
+            )
+            ensure_schema(db)
+
+        tree = self._get("/api/catalog/tree")["tree"]
+        collections_node = next((n for n in tree if n.get("type") == "collections_group"), None)
+        self.assertIsNotNone(collections_node, "collections group should be present")
+        child = next((c for c in collections_node.get("children", []) if c.get("collection_id") == "c-cb"), None)
+        self.assertIsNotNone(child, "CB collection should appear in collections group")
+        self.assertEqual(child.get("provenance_kind"), "ai_derived_representative")
+        self.assertEqual(child.get("provenance_badge"), "AI set")
+        self.assertEqual(child.get("provenance_label"), "AI-derived representative")
+
     def test_scan_source_exposes_subtype_branches(self):
         tree = self._get("/api/catalog/tree")["tree"]
         scan = next((n for n in tree if n.get("type") == "source" and n.get("label", "").lower() == "scan"), None)

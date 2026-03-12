@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inspirations!</title>
-    <link rel="stylesheet" href="/app/styles.css?v=18" />
+    <link rel="stylesheet" href="/app/styles.css?v=27" />
     <script type="importmap">
       {
         "imports": {
@@ -148,7 +148,13 @@
             <button class="filter-chip" data-triage="flagged" id="flaggedChip" hidden>Flagged</button>
           </div>
         </div>
-        <div class="sidebar-section sidebar-tree-section">
+        <div class="sidebar-section sidebar-collections-section" id="collectionSidebarSection">
+          <h3 class="sidebar-heading">Collections</h3>
+          <div id="collectionTree" class="catalog-tree">
+            <div class="muted sidebar-loading">Loading…</div>
+          </div>
+        </div>
+        <div class="sidebar-section sidebar-tree-section" id="browseSidebarSection">
           <h3 class="sidebar-heading">Browse</h3>
           <div id="catalogTree" class="catalog-tree">
             <div class="muted sidebar-loading">Loading…</div>
@@ -163,6 +169,7 @@
           <button id="manageCollections" class="new-item-btn new-item-btn-secondary" type="button">Manage Collections</button>
         </div>
       </aside>
+      <div id="sidebarResizeHandle" class="sidebar-resize-handle" title="Resize sidebar" aria-hidden="true"></div>
 
       <!-- Main content -->
       <main class="content">
@@ -208,6 +215,7 @@
 
           <div id="reviewCard" class="review-card">
             <div class="review-image">
+              <div id="reviewMediaOverlay" class="media-reliability-overlay" hidden></div>
               <img id="reviewImg" alt="" />
             </div>
             <div class="review-info">
@@ -242,6 +250,10 @@
                     <div class="modal-classification-label">Review focus</div>
                     <div id="reviewClassificationFocus" class="modal-classification-value"></div>
                   </div>
+                  <div id="reviewClassificationMediaRow" class="modal-classification-row" hidden>
+                    <div class="modal-classification-label">Media issue</div>
+                    <div id="reviewClassificationMedia" class="modal-classification-value"></div>
+                  </div>
                 </div>
                 <div id="reviewClassificationEditor" class="modal-title-editor" hidden>
                   <label for="reviewClassificationMoveTo" class="modal-title-edit-label">Set track to</label>
@@ -255,6 +267,13 @@
                     <option value="">None</option>
                     <option value="landscaping">Landscaping</option>
                     <option value="inspection">Inspection</option>
+                  </select>
+                  <label for="reviewClassificationMediaSelect" class="modal-title-edit-label">Media issue (optional)</label>
+                  <select id="reviewClassificationMediaSelect" class="modal-classification-select">
+                    <option value="">None</option>
+                    <option value="trust_title_source">Trust title / source</option>
+                    <option value="thumbnail_placeholder">Thumbnail is placeholder</option>
+                    <option value="thumbnail_mismatch">Thumbnail mismatches content</option>
                   </select>
                   <label for="reviewClassificationComment" class="modal-title-edit-label">Reason (optional)</label>
                   <textarea id="reviewClassificationComment" class="modal-classification-comment" placeholder="Optional reason for this choice…"></textarea>
@@ -329,11 +348,15 @@
           <button id="closeModal" class="modalCloseX" type="button" aria-label="Close">&times;</button>
         </div>
         <div class="modalBody">
-          <div class="imageStage" id="imageStage">
+          <div class="imageStageWrap">
+            <div id="modalStagePrompt" class="modal-stage-prompt" hidden></div>
+            <div class="imageStage" id="imageStage">
+            <div id="modalMediaOverlay" class="media-reliability-overlay" hidden></div>
             <img id="modalImage" alt="" />
             <video id="modalVideo" controls playsinline preload="metadata" hidden></video>
             <div id="floatingNote" class="floatingNote hidden">
               <textarea id="floatingText" placeholder="Type note…"></textarea>
+            </div>
             </div>
           </div>
           <div class="notes">
@@ -397,6 +420,10 @@
                   <div class="modal-classification-label">Review focus</div>
                   <div id="modalClassificationFocus" class="modal-classification-value"></div>
                 </div>
+                <div id="modalClassificationMediaRow" class="modal-classification-row" hidden>
+                  <div class="modal-classification-label">Media issue</div>
+                  <div id="modalClassificationMedia" class="modal-classification-value"></div>
+                </div>
               </div>
               <div id="modalClassificationEditor" class="modal-title-editor" hidden>
                 <label for="modalClassificationMoveTo" class="modal-title-edit-label">Set track to</label>
@@ -411,6 +438,13 @@
                   <option value="landscaping">Landscaping</option>
                   <option value="inspection">Inspection</option>
                 </select>
+                <label for="modalClassificationMediaSelect" class="modal-title-edit-label">Media issue (optional)</label>
+                <select id="modalClassificationMediaSelect" class="modal-classification-select">
+                  <option value="">None</option>
+                  <option value="trust_title_source">Trust title / source</option>
+                  <option value="thumbnail_placeholder">Thumbnail is placeholder</option>
+                  <option value="thumbnail_mismatch">Thumbnail mismatches content</option>
+                </select>
                 <label for="modalClassificationComment" class="modal-title-edit-label">Reason (optional)</label>
                 <textarea id="modalClassificationComment" class="modal-classification-comment" placeholder="Optional reason for this choice…"></textarea>
                 <div class="modal-title-actions">
@@ -420,18 +454,45 @@
                 </div>
               </div>
             </div>
+            <div id="modalSourceCandidatePanel" class="modal-classification-panel" hidden>
+              <div class="sectionTitle">Source Candidate</div>
+              <div id="modalSourceCandidateStatus" class="modal-classification-status muted" hidden></div>
+              <div id="modalSourceCandidateImageWrap" class="modal-source-candidate-image-wrap" hidden>
+                <img id="modalSourceCandidateImage" class="modal-source-candidate-image" alt="" />
+              </div>
+              <div class="modal-classification-rows">
+                <div id="modalSourceCandidateTitleRow" class="modal-classification-row" hidden>
+                  <div class="modal-classification-label">Page title</div>
+                  <div id="modalSourceCandidateTitle" class="modal-classification-value"></div>
+                </div>
+                <div id="modalSourceCandidateHeroTextRow" class="modal-classification-row" hidden>
+                  <div class="modal-classification-label">Hero text</div>
+                  <div id="modalSourceCandidateHeroText" class="modal-classification-value"></div>
+                </div>
+                <div id="modalSourceCandidateTextRow" class="modal-classification-row" hidden>
+                  <div class="modal-classification-label">Page excerpt</div>
+                  <div id="modalSourceCandidateText" class="modal-classification-value"></div>
+                </div>
+              </div>
+              <div class="modal-title-actions">
+                <button id="modalSourceCandidateCaptureBtn" class="header-btn modal-utility-btn" type="button">Capture candidate</button>
+                <button id="modalSourceCandidatePromoteBtn" class="header-btn modal-utility-btn" type="button">Use candidate image</button>
+              </div>
+            </div>
             <div id="modalDescription" class="modal-description" hidden></div>
             <div id="modalHashtags" class="modal-hashtags" hidden></div>
+            <div id="modalLabelsTitle" class="sectionTitle" hidden>Labels</div>
             <div id="modalLabels" class="modal-labels" hidden></div>
             <div id="modalEngagement" class="modal-engagement muted" hidden></div>
             <div id="modalDimensions" class="modal-dimensions muted" hidden></div>
-            <div class="sectionTitle">Annotations</div>
+            <div id="modalAnnotationsTitle" class="sectionTitle">Annotations</div>
             <div id="annList" class="list"></div>
             <div class="muted ann-hint-row">
-              Click on the image to add a note.
-              <label class="ann-question-label"><input type="checkbox" id="annQuestionToggle"> Question</label>
+              <span id="annHintText">Click on the image to add a note.</span>
+              <label id="annQuestionLabel" class="ann-question-label"><input type="checkbox" id="annQuestionToggle"> Question</label>
             </div>
             <div class="sectionTitle mt-3">Notes</div>
+            <div id="assetNotesHint" class="muted ann-readonly-note" hidden></div>
             <textarea id="assetNotes" placeholder="General notes about this image…"></textarea>
           </div>
         </div>
@@ -612,6 +673,6 @@
     <script src="/app/shared.js?v=3"></script>
     <script src="/app/explorer.js?v=1"></script>
     <script src="/app/attractor-explorer.js?v=2"></script>
-    <script src="/app/app.js?v=37"></script>
+    <script src="/app/app.js?v=58"></script>
   </body>
 </html>

@@ -89,6 +89,13 @@ class TestBuildRoutingPrompt(unittest.TestCase):
         self.assertIn("clear_filters", prompt)
         self.assertIn("bulk_triage", prompt)
 
+    def test_prompt_describes_cb_collections_as_ai_derived(self):
+        prompt = _build_routing_prompt("(empty)")
+        self.assertIn('"CB:" prefix = AI-derived', prompt)
+        self.assertIn("not deliberate human-curated highest-intent selections", prompt)
+        self.assertNotIn("Human-curated groupings", prompt)
+        self.assertNotIn("most refined, intentional selections", prompt)
+
 
 class TestProcessChatMessage(unittest.TestCase):
     """Test the main chat function with mocked Claude API."""

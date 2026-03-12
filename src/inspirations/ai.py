@@ -51,6 +51,7 @@ KEYWORDS = [
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 DEFAULT_GEMINI_RECITATION_FALLBACK_MODEL = "gemini-2.0-flash"
 DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001"
+GEMINI_KEYCHAIN_SERVICE = "inspirations_gemini_api_key"
 _FACEBOOK_ENGAGEMENT_PREFIX_RE = re.compile(
     r"^\s*(?:(?:\d[\d.,]*\s*[kmb]?)\s*"
     r"(?:views?|reactions?|shares?|comments?|likes?|saves?)\s*(?:[·•]\s*)?){1,5}\|\s*",
@@ -97,6 +98,30 @@ _SCAN_AUTOGEN_EXACT = {
     "file",
     "files",
 }
+
+_keychain_cache: dict[str, str] = {}
+
+
+def _keychain_get(service: str) -> str:
+    if service in _keychain_cache:
+        return _keychain_cache[service]
+    try:
+        value = subprocess.check_output(
+            ["security", "find-generic-password", "-s", service, "-w"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except Exception:
+        value = ""
+    _keychain_cache[service] = value
+    return value
+
+
+def get_gemini_api_key(explicit: str = "") -> str:
+    key = str(explicit or "").strip() or os.environ.get("GEMINI_API_KEY", "").strip()
+    if key:
+        return key
+    return _keychain_get(GEMINI_KEYCHAIN_SERVICE)
 _SCAN_AUTOGEN_TOKENS = {
     "scan",
     "scans",
@@ -1256,9 +1281,12 @@ def run_ai_labeler(db: Db, *, provider: str, limit: int = 0, **kwargs: Any) -> d
     if provider == "mock":
         return run_mock_labeler(db, limit=limit)
     if provider == "gemini":
-        api_key = kwargs.get("api_key") or os.environ.get("GEMINI_API_KEY") or ""
+        api_key = get_gemini_api_key(str(kwargs.get("api_key") or ""))
         if not api_key:
-            raise ValueError("Gemini API key required (set GEMINI_API_KEY or pass --api-key)")
+            raise ValueError(
+                "Gemini API key required (set GEMINI_API_KEY, pass --api-key, "
+                "or store in macOS Keychain service inspirations_gemini_api_key)."
+            )
         model = kwargs.get("model") or DEFAULT_GEMINI_MODEL
         return run_gemini_image_labeler(
             db,
@@ -1496,7 +1524,7 @@ def download_facebook_reels(
 ) -> dict[str, Any]:
     """Download Facebook reel videos via yt-dlp.
 
-    Stores MP4 files at store_dir/reels/facebook/{asset_id}.mp4
+    Stores video files at store_dir/reels/facebook/{asset_id}.*
     Updates assets with stored_video_path, video_duration, title, post_text, creator_name.
     """
     reels_dir = store_dir / "reels" / "facebook"
@@ -1511,6 +1539,12 @@ def download_facebook_reels(
     skipped = 0
     errors: list[dict[str, str]] = []
 
+    def _find_video_file(asset_id: str) -> Path | None:
+        for candidate in sorted(reels_dir.glob(f"{asset_id}.*")):
+            if candidate.suffix.lower() in {".mp4", ".webm", ".mkv", ".mov"}:
+                return candidate
+        return None
+
     for r in rows:
         if limit and attempted >= limit:
             break
@@ -1520,58 +1554,84 @@ def download_facebook_reels(
             errors.append({"id": asset_id, "error": "No source_ref URL"})
             continue
 
-        mp4_path = reels_dir / f"{asset_id}.mp4"
+        video_path = _find_video_file(asset_id)
         info_path = reels_dir / f"{asset_id}.info.json"
 
         # Skip if already downloaded
-        if mp4_path.exists() and not force:
+        if video_path and not force:
             # Still update DB if not set
             if not db.query_value(
                 "select stored_video_path from assets where id=? and stored_video_path is not null",
                 (asset_id,),
             ):
-                _update_reel_from_files(db, asset_id, mp4_path, info_path)
+                _update_reel_from_files(db, asset_id, video_path, info_path)
             skipped += 1
             continue
 
+        if force:
+            for stale in reels_dir.glob(f"{asset_id}.*"):
+                try:
+                    stale.unlink()
+                except Exception:
+                    pass
+
         attempted += 1
         try:
-            # yt-dlp download
-            cmd = [
+            output_template = reels_dir / f"{asset_id}.%(ext)s"
+            default_cmd = [
                 "yt-dlp",
-                "-o", str(mp4_path),
+                "-o", str(output_template),
                 "--write-info-json",
                 "--no-playlist",
                 "--max-filesize", "50m",
-                "--no-overwrites",
+                "--force-overwrites" if force else "--no-overwrites",
                 "--quiet",
                 source_ref,
             ]
             result = subprocess.run(
-                cmd,
+                default_cmd,
                 capture_output=True,
                 text=True,
                 timeout=120,
             )
+            error_parts: list[str] = []
             if result.returncode != 0:
                 err_msg = (result.stderr or "").strip()[:500]
-                errors.append({"id": asset_id, "error": f"yt-dlp exit {result.returncode}: {err_msg}"})
+                if err_msg:
+                    error_parts.append(f"default: yt-dlp exit {result.returncode}: {err_msg}")
+
+            video_path = _find_video_file(asset_id)
+            if not video_path:
+                fallback_cmd = [
+                    "yt-dlp",
+                    "-f", "hd/sd/best",
+                    "--merge-output-format", "mp4",
+                    "-o", str(output_template),
+                    "--write-info-json",
+                    "--no-playlist",
+                    "--max-filesize", "50m",
+                    "--force-overwrites",
+                    "--quiet",
+                    source_ref,
+                ]
+                fallback = subprocess.run(
+                    fallback_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                if fallback.returncode != 0:
+                    err_msg = (fallback.stderr or "").strip()[:500]
+                    if err_msg:
+                        error_parts.append(f"fallback: yt-dlp exit {fallback.returncode}: {err_msg}")
+                video_path = _find_video_file(asset_id)
+
+            if not video_path:
+                detail = "; ".join(error_parts) or "yt-dlp ran but no video file found"
+                errors.append({"id": asset_id, "error": detail})
                 continue
 
-            if not mp4_path.exists():
-                # yt-dlp may save as .webm or other format — check for alternatives
-                alt_files = list(reels_dir.glob(f"{asset_id}.*"))
-                video_file = next(
-                    (f for f in alt_files if f.suffix.lower() in (".mp4", ".webm", ".mkv")),
-                    None,
-                )
-                if video_file:
-                    mp4_path = video_file
-                else:
-                    errors.append({"id": asset_id, "error": "yt-dlp ran but no video file found"})
-                    continue
-
-            _update_reel_from_files(db, asset_id, mp4_path, info_path)
+            _update_reel_from_files(db, asset_id, video_path, info_path)
             downloaded += 1
 
             if attempted % 25 == 0:

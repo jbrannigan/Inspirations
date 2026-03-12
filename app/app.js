@@ -57,6 +57,7 @@ const state = {
   modalScanPages: null,
   modalScanPageIndex: 0,
   modalScanStartPage: 1,         // absolute page number in master scan PDF for group index 0
+  modalLoadSeq: 0,
 
   // Imports
   scanImportBusy: false,
@@ -105,6 +106,7 @@ const escapeHtml = Shared.escapeHtml;
 const api = Shared.api;
 const formatApiError = Shared.formatApiError;
 const SIDEBAR_VISIBILITY_KEY = "inspirations.ui.sidebar.hidden.v1";
+const SIDEBAR_WIDTH_KEY = "inspirations.ui.sidebar.width.v1";
 const VIEW_MODE_KEY = "inspirations.ui.view.mode.v1";
 const CONTEXT_LINK_BANNER_DEFAULT = "Use this shared context link to review the referenced item.";
 const CLASSIFICATION_TRACK_LABELS = {
@@ -117,11 +119,18 @@ const REVIEW_FOCUS_LABELS = {
   landscaping: "Landscaping",
   inspection: "Inspection",
 };
+const MEDIA_RELIABILITY_LABELS = {
+  trust_title_source: "Trust title / source",
+  thumbnail_placeholder: "Thumbnail is placeholder",
+  thumbnail_mismatch: "Thumbnail mismatches content",
+};
 const MOVABLE_CLASSIFICATION_TRACKS = [
   "style_product_decor",
   "construction_concern",
   "home_maintenance_diy",
 ];
+const SIDEBAR_MIN_WIDTH = 220;
+const SIDEBAR_MAX_WIDTH = 420;
 
 const IMAGE_SUFFIX_RE = /\.(jpg|jpeg|png|webp|gif|bmp|svg)(\?.*)?$/i;
 const VIDEO_SUFFIX_RE = /\.(mp4|mov|m4v|webm|avi|mkv|mpeg|mpg|wmv|3gp)(\?.*)?$/i;
@@ -373,6 +382,41 @@ function normalizeSourceKey(source) {
     return "scan";
   }
   return key;
+}
+
+function normalizeOtherDimensionLabel(label) {
+  const raw = String(label || "").trim();
+  const key = raw.toLowerCase();
+  if (key === "uncategorized") return "Other / ?";
+  if (key === "(small groups)") return "Small Groups";
+  return raw;
+}
+
+function describeSourceCatchall(child) {
+  const file = String(child?.file || "").trim().toLowerCase();
+  const label = String(child?.label || "").trim();
+  if (file.endsWith("_unboarded-reel.md")) {
+    return { label: "Unsorted Reels", note: "Cleanup bucket from source import; not a deliberate board." };
+  }
+  if (file.endsWith("_unboarded-post.md")) {
+    return { label: "Unsorted Posts", note: "Cleanup bucket from source import; not a deliberate board." };
+  }
+  if (file.endsWith("_unboarded.md")) {
+    return { label: "Unsorted Houzz Photos", note: "Cleanup bucket from source import; not a deliberate board." };
+  }
+  if (file.endsWith("_unboarded-scan.md")) {
+    return { label: "Unsorted Scans", note: "Cleanup bucket from source import; scan grouping still needs refinement." };
+  }
+  if (file.endsWith("_unboarded-video.md")) {
+    return { label: "Unsorted Videos", note: "Cleanup bucket from source import; not a deliberate board." };
+  }
+  if (file.endsWith("_small.md")) {
+    return { label: "Small Groups", note: "Catch-all bucket for low-count source groups." };
+  }
+  if (label.startsWith("(") && label.endsWith(")")) {
+    return { label: label.slice(1, -1), note: "Catch-all source bucket." };
+  }
+  return null;
 }
 
 function setContextLinkBanner(message, { error = false } = {}) {
@@ -1014,8 +1058,7 @@ function _applyCollaboratorCollectionsDefaultScope() {
   if (hasExistingScope) return;
 
   if (!_setCollaboratorSharedCollectionsScope()) return;
-  state.allItemsTreeCollapsed = true;
-  state.collaboratorTreeUnlocked = false;
+  state.expandedTreeNodes.add("collections");
   renderCatalogTree();
 }
 
@@ -1199,10 +1242,12 @@ function applySidebarVisibility() {
   const sidebar = $("aside.sidebar");
   const collapseBtn = $("#sidebarCollapseHandle");
   const expandBtn = $("#sidebarExpandHandle");
+  const resizeHandle = $("#sidebarResizeHandle");
   if (layout) layout.classList.toggle("sidebar-hidden", state.sidebarHidden);
   if (sidebar) sidebar.hidden = !!state.sidebarHidden;
   if (collapseBtn) collapseBtn.hidden = !!state.sidebarHidden;
   if (expandBtn) expandBtn.hidden = !state.sidebarHidden;
+  if (resizeHandle) resizeHandle.hidden = !!state.sidebarHidden || !_canResizeSidebar();
 }
 
 function setSidebarHidden(hidden, { persist = true } = {}) {
@@ -1225,6 +1270,74 @@ function wireSidebarToggle() {
       setSidebarHidden(false);
     });
   }
+}
+
+function _canResizeSidebar() {
+  return window.matchMedia("(min-width: 901px) and (hover: hover) and (pointer: fine)").matches;
+}
+
+function _readSidebarWidthPref() {
+  try {
+    const raw = window.localStorage.getItem(SIDEBAR_WIDTH_KEY);
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return null;
+    return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, parsed));
+  } catch {
+    return null;
+  }
+}
+
+function _writeSidebarWidthPref(width) {
+  try {
+    if (Number.isFinite(width)) window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(width)));
+  } catch {
+    // no-op
+  }
+}
+
+function _applySidebarWidth(width, { persist = true } = {}) {
+  const next = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, Number(width) || SIDEBAR_MIN_WIDTH));
+  document.documentElement.style.setProperty("--sidebar-width", `${next}px`);
+  if (persist) _writeSidebarWidthPref(next);
+}
+
+function wireSidebarResize() {
+  const handle = $("#sidebarResizeHandle");
+  const layout = $(".layout");
+  const applySavedWidth = () => {
+    const saved = _readSidebarWidthPref();
+    _applySidebarWidth(saved || 240, { persist: false });
+    applySidebarVisibility();
+  };
+  applySavedWidth();
+  window.addEventListener("resize", applySavedWidth);
+  if (!handle || !layout) return;
+  let dragging = false;
+  const onPointerMove = (event) => {
+    if (!dragging || !_canResizeSidebar()) return;
+    const width = event.clientX - layout.getBoundingClientRect().left;
+    _applySidebarWidth(width);
+  };
+  const stopDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    layout.classList.remove("sidebar-resizing");
+    document.body.style.cursor = "";
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", stopDrag);
+    window.removeEventListener("pointercancel", stopDrag);
+  };
+  handle.addEventListener("pointerdown", (event) => {
+    if (!_canResizeSidebar() || state.sidebarHidden) return;
+    dragging = true;
+    layout.classList.add("sidebar-resizing");
+    document.body.style.cursor = "col-resize";
+    handle.setPointerCapture?.(event.pointerId);
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", stopDrag);
+    window.addEventListener("pointercancel", stopDrag);
+    event.preventDefault();
+  });
 }
 
 // ─── Asset loading ─────────────────────────────────────────────────────────────
@@ -1612,27 +1725,31 @@ function resetTriageFilter() {
 
 function renderCatalogTree() {
   const wrap = $("#catalogTree");
+  const collectionWrap = $("#collectionTree");
+  const collectionSection = $("#collectionSidebarSection");
   if (!wrap) return;
   wrap.innerHTML = "";
+  if (collectionWrap) collectionWrap.innerHTML = "";
 
   const tree = state.catalogTree || [];
   if (!tree.length) {
     wrap.innerHTML = '<div class="muted sidebar-loading">No catalog yet.</div>';
+    if (collectionSection) collectionSection.hidden = true;
     return;
   }
 
   const allItemsActive = isAllItemsScopeActive();
-  const collaboratorLockedTree = isCollaboratorActor() && !state.collaboratorTreeUnlocked;
-  const collapseRest = (allItemsActive && !!state.allItemsTreeCollapsed) || collaboratorLockedTree;
+  const collapseRest = allItemsActive && !!state.allItemsTreeCollapsed;
 
   // "All items" node (root order differs for collaborator view)
   const allBtn = document.createElement("button");
   allBtn.className = `tree-toggle tree-toggle-root${allItemsActive ? " active" : ""}${!collapseRest ? " expanded" : ""}`;
   allBtn.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label">All Items</span>`;
+  allBtn.title = "All Items";
   allBtn.onclick = () => {
     if (shouldIgnorePostBrowseUnlockTreeClick()) return;
     const wasAllItemsActive = isAllItemsScopeActive();
-    if (wasAllItemsActive && !collaboratorLockedTree) {
+    if (wasAllItemsActive) {
       state.allItemsTreeCollapsed = !state.allItemsTreeCollapsed;
       renderCatalogTree();
       return;
@@ -1644,10 +1761,6 @@ function renderCatalogTree() {
     clearCollectionFilter();
     clearCatalogFilter();
     clearClassificationFilter();
-    if (isCollaboratorActor()) {
-      state.collaboratorTreeUnlocked = true;
-      state.allItemsTreeCollapsed = false;
-    }
     state.currentTreeNodeId = null;
     state.offset = 0;
     renderCatalogTree();
@@ -1655,79 +1768,156 @@ function renderCatalogTree() {
   };
   const appendAllItemsRoot = () => wrap.appendChild(allBtn);
   const collectionsNodes = tree.filter((n) => n.type === "collections_group");
-  const appendCollectionsRoots = () => {
-    if (!collectionsNodes.length) return;
-    const collectionsBranch = document.createElement("div");
-    collectionsBranch.className = "collections-branch";
-    for (const node of collectionsNodes) {
-      collectionsBranch.appendChild(buildCollectionsGroupNode(node));
+  if (collectionWrap && collectionSection) {
+    if (collectionsNodes.length) {
+      collectionSection.hidden = false;
+      for (const node of collectionsNodes) {
+        collectionWrap.appendChild(buildCollectionsGroupNode(node));
+      }
+    } else {
+      collectionSection.hidden = true;
     }
-    wrap.appendChild(collectionsBranch);
-  };
-
-  // Collaborator IA: Collections first, then All Items.
-  if (isCollaboratorActor()) {
-    appendCollectionsRoots();
-    appendAllItemsRoot();
-  } else {
-    appendAllItemsRoot();
-    appendCollectionsRoots();
   }
 
-  if (isCollaboratorActor()) {
-    const browseBtn = document.createElement("button");
-    browseBtn.type = "button";
-    browseBtn.className = "browse-owner-tree-btn";
-    browseBtn.textContent = collaboratorLockedTree
-      ? "Browse more from Leslie collection ..."
-      : "Hide extra folders";
-    browseBtn.onclick = (e) => {
-      if (e) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
-      if (collaboratorLockedTree) {
-        state.collaboratorTreeUnlocked = true;
-        state.allItemsTreeCollapsed = false;
-        state.expandedTreeNodes.add("collections");
-        state.lastCollaboratorBrowseUnlockAt = Date.now();
-        renderCatalogTree();
-        return;
-      }
-      const scopedToCollections = _setCollaboratorSharedCollectionsScope();
-      state.collaboratorTreeUnlocked = false;
-      state.allItemsTreeCollapsed = true;
-      state.lastCollaboratorBrowseUnlockAt = 0;
-      state.offset = 0;
-      renderCatalogTree();
-      if (scopedToCollections) {
-        loadAssets();
-        syncExplorerFilter();
-      }
-    };
-    wrap.appendChild(browseBtn);
-  }
+  appendAllItemsRoot();
 
   if (!collapseRest) {
+    const sourceNodes = tree.filter((n) => n.type === "source");
+    const classificationNodes = tree.filter((n) => n.type === "classification");
+    const otherNode = tree.find((n) => String(n?.id || "").trim().toLowerCase() === "dimension:other") || null;
+    const nonHomeTrackValues = new Set(["home_maintenance_diy"]);
+    const discardTrackValues = new Set(["irrelevant"]);
+    const primaryClassificationNodes = [];
+    const nonHomeNodes = [];
+    const discardNodes = [];
+
+    for (const node of classificationNodes) {
+      if (String(node.axis_name || "").trim() !== "track") {
+        primaryClassificationNodes.push(node);
+        continue;
+      }
+      const children = Array.isArray(node.children) ? node.children : [];
+      const visibleChildren = children.filter((child) => {
+        const value = String(child.axis_value || "").trim();
+        return !nonHomeTrackValues.has(value) && !discardTrackValues.has(value);
+      });
+      const nonHomeChildren = children.filter((child) => nonHomeTrackValues.has(String(child.axis_value || "").trim()));
+      const discardChildren = children.filter((child) => discardTrackValues.has(String(child.axis_value || "").trim()));
+      if (visibleChildren.length) {
+        primaryClassificationNodes.unshift({
+          ...node,
+          count: visibleChildren.reduce((sum, child) => sum + Number(child.count || 0), 0),
+          children: visibleChildren,
+        });
+      }
+      if (nonHomeChildren.length) {
+        nonHomeNodes.push({
+          ...node,
+          id: "classification:non_home_tracks",
+          label: "Track",
+          count: nonHomeChildren.reduce((sum, child) => sum + Number(child.count || 0), 0),
+          children: nonHomeChildren,
+        });
+      }
+      if (discardChildren.length) {
+        discardNodes.push({
+          ...node,
+          id: "classification:discard_tracks",
+          label: "Track",
+          count: discardChildren.reduce((sum, child) => sum + Number(child.count || 0), 0),
+          children: discardChildren,
+        });
+      }
+    }
+    if (otherNode) {
+      nonHomeNodes.push({
+        ...otherNode,
+        children: (otherNode.children || []).map((child) => ({
+          ...child,
+          label: normalizeOtherDimensionLabel(child.label),
+        })),
+      });
+    }
+
     const allItemsBranch = document.createElement("div");
     allItemsBranch.className = "all-items-branch";
-    for (const node of tree) {
-      if (node.type === "source") {
-        allItemsBranch.appendChild(buildSourceNode(node));
-      } else if (node.type === "classification") {
-        allItemsBranch.appendChild(buildClassificationNode(node));
-      } else if (node.type === "dimension") {
-        allItemsBranch.appendChild(buildDimensionNode(node));
-      }
+    const groups = [
+      {
+        id: "browse-group:classification",
+        label: "Classification",
+        nodes: primaryClassificationNodes,
+        defaultExpanded: true,
+        builder: (node) => buildClassificationNode(node),
+      },
+      {
+        id: "browse-group:sources",
+        label: "Sources",
+        nodes: sourceNodes,
+        defaultExpanded: false,
+        builder: (node) => buildSourceNode(node),
+      },
+    ];
+    if (!isCollaboratorActor()) {
+      groups.splice(1, 0,
+        {
+          id: "browse-group:non-home",
+          label: "Other / Non-Home-Design",
+          nodes: nonHomeNodes,
+          defaultExpanded: false,
+          builder: (node) => node.type === "dimension" ? buildDimensionNode(node) : buildClassificationNode(node),
+        },
+        {
+          id: "browse-group:discards",
+          label: "Irrelevant / Discarded",
+          nodes: discardNodes,
+          defaultExpanded: false,
+          builder: (node) => buildClassificationNode(node),
+        },
+      );
+    }
+    for (const group of groups) {
+      if (!group.nodes.length) continue;
+      allItemsBranch.appendChild(buildBrowseGroupNode(group));
     }
     if (allItemsBranch.childElementCount) {
       wrap.appendChild(allItemsBranch);
     }
   }
 
-  // Re-append hidden tree (owner-only) — it lives inside catalogTree
-  // and gets wiped by innerHTML="" above
-  if (!collapseRest && isOwner() && state.hiddenTree) renderHiddenTree();
+  updateSidebarModeVisibility();
+}
+
+function _treeNodeContainsActiveSelection(node) {
+  if (!node) return false;
+  if (state.currentTreeNodeId && state.currentTreeNodeId === node.id) return true;
+  return Array.isArray(node.children) && node.children.some((child) => _treeNodeContainsActiveSelection(child));
+}
+
+function buildBrowseGroupNode({ id, label, nodes, builder, defaultExpanded = false }) {
+  const el = document.createElement("div");
+  el.className = "tree-node";
+  const toggle = document.createElement("button");
+  const hasActiveChild = (nodes || []).some((node) => _treeNodeContainsActiveSelection(node));
+  const expanded = state.expandedTreeNodes.has(id) || hasActiveChild || defaultExpanded;
+  if (expanded) state.expandedTreeNodes.add(id);
+  toggle.className = `tree-toggle${expanded ? " expanded" : ""}`;
+  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label">${escapeHtml(label)}</span>`;
+  toggle.title = label;
+  const children = document.createElement("div");
+  children.className = "tree-children";
+  _setTreeNodeExpanded(id, toggle, children, expanded);
+  toggle.onclick = () => {
+    const nextExpanded = !children.classList.contains("open");
+    if (nextExpanded) state.expandedTreeNodes.add(id);
+    else state.expandedTreeNodes.delete(id);
+    _setTreeNodeExpanded(id, toggle, children, nextExpanded);
+  };
+  for (const node of nodes || []) {
+    children.appendChild(builder(node));
+  }
+  el.appendChild(toggle);
+  el.appendChild(children);
+  return el;
 }
 
 function buildSourceNode(node) {
@@ -1736,7 +1926,9 @@ function buildSourceNode(node) {
 
   const nodeKey = node.id;
   const sourceKey = sourceKeyFromNode(node);
-  const sourceLabel = sourceDisplayName(sourceKey) || node.label;
+  const sourceLabel = sourceKey === "pinterest"
+    ? "Pinterest Boards"
+    : (sourceDisplayName(sourceKey) || node.label);
   const selectedCatalogFiles = getCatalogFilterFiles();
   const selectedCatalogSet = new Set(selectedCatalogFiles);
   const isActiveSource = state.currentTreeNodeId === node.id
@@ -1750,6 +1942,7 @@ function buildSourceNode(node) {
   const toggle = document.createElement("button");
   toggle.className = `tree-toggle${isActiveSource ? " active" : ""}`;
   toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label">${escapeHtml(sourceLabel)}</span><span class="tree-count">${node.count}</span>`;
+  toggle.title = sourceLabel;
 
   const children = document.createElement("div");
   children.className = "tree-children";
@@ -1806,6 +1999,7 @@ function buildSourceNode(node) {
       );
       subtypeLeaf.className = `tree-leaf${isSubtypeActive ? " active" : ""}`;
       subtypeLeaf.innerHTML = `<span>${escapeHtml(child.label)}</span><span class="tree-count">${child.count}</span>`;
+      subtypeLeaf.title = child.label;
       subtypeLeaf.onclick = () => {
         if (shouldIgnorePostBrowseUnlockTreeClick()) return;
       resetTriageFilter();
@@ -1828,7 +2022,8 @@ function buildSourceNode(node) {
     }
 
     const leaf = document.createElement("button");
-    const boardName = child.label;
+    const catchall = describeSourceCatchall(child);
+    const boardName = catchall?.label || child.label;
     const boardDbName = child.board_name || "";  // original board name from DB
     const isCatchAll = boardDbName.startsWith("(");  // (small boards), (unsorted reels), etc.
 
@@ -1841,6 +2036,8 @@ function buildSourceNode(node) {
 
     leaf.className = `tree-leaf${isActive ? " active" : ""}`;
     leaf.innerHTML = `<span>${escapeHtml(boardName)}</span><span class="tree-count">${child.count}</span>`;
+    leaf.title = catchall?.note ? `${boardName} — ${catchall.note}` : boardName;
+    leaf.title = boardName;
     leaf.onclick = () => {
       if (shouldIgnorePostBrowseUnlockTreeClick()) return;
       resetTriageFilter();
@@ -1894,6 +2091,8 @@ function buildDimensionNode(node) {
   const toggle = document.createElement("button");
   toggle.className = `tree-toggle${isActiveHeader ? " active" : ""}`;
   toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label">${escapeHtml(node.label)}</span><span class="tree-count">${node.count}</span>`;
+  toggle.title = node.label;
+  toggle.title = node.label;
 
   const children = document.createElement("div");
   children.className = "tree-children";
@@ -1926,6 +2125,8 @@ function buildDimensionNode(node) {
     const isActive = selectedCatalogFiles.length === 1 && selectedCatalogFiles[0] === child.file;
     leaf.className = `tree-leaf${isActive ? " active" : ""}`;
     leaf.innerHTML = `<span>${escapeHtml(child.label)}</span><span class="tree-count">${child.count}</span>`;
+    leaf.title = child.label;
+    leaf.title = child.label;
     leaf.onclick = () => {
       if (shouldIgnorePostBrowseUnlockTreeClick()) return;
       resetTriageFilter();
@@ -2032,15 +2233,14 @@ function buildCollectionsGroupNode(node) {
   const toggle = document.createElement("button");
   toggle.className = `tree-toggle${isActiveHeader ? " active" : ""}`;
   toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label">Collections</span><span class="tree-count">${node.count}</span>`;
+  toggle.title = "Collections";
 
   const children = document.createElement("div");
   children.className = "tree-children";
 
   const hasActiveChild = (node.children || []).some((c) => selectedCollectionSet.has(c.collection_id));
-  if (isCollaboratorActor() && !state.collaboratorTreeUnlocked) {
-    state.expandedTreeNodes.add(nodeKey);
-  }
-  if (hasActiveChild || isActiveHeader) state.expandedTreeNodes.add(nodeKey);
+  const collaboratorDefaultExpanded = isCollaboratorActor();
+  if (hasActiveChild || isActiveHeader || collaboratorDefaultExpanded) state.expandedTreeNodes.add(nodeKey);
   _setTreeNodeExpanded(nodeKey, toggle, children, state.expandedTreeNodes.has(nodeKey));
   _wireTreeArrowToggle(toggle, nodeKey, children);
 
@@ -2061,8 +2261,15 @@ function buildCollectionsGroupNode(node) {
   for (const child of (node.children || [])) {
     const leaf = document.createElement("button");
     const isActive = selectedCollectionIds.length === 1 && selectedCollectionIds[0] === child.collection_id;
+    const badge = child.provenance_badge
+      ? `<span class="tree-collection-badge" title="${escapeHtml(child.provenance_label || "")}">${escapeHtml(child.provenance_badge)}</span>`
+      : "";
+    const titleBits = [String(child.label || "")];
+    if (child.provenance_label) titleBits.push(String(child.provenance_label));
+    if (child.provenance_note) titleBits.push(String(child.provenance_note));
     leaf.className = `tree-leaf${isActive ? " active" : ""}`;
-    leaf.innerHTML = `<span>${escapeHtml(child.label)}</span><span class="tree-count">${child.count}</span>`;
+    leaf.title = titleBits.join(" — ");
+    leaf.innerHTML = `<span class="tree-leaf-main"><span class="tree-leaf-text">${escapeHtml(child.label)}</span>${badge}</span><span class="tree-count">${child.count}</span>`;
     leaf.onclick = () => {
       resetTriageFilter();
       state.currentSource = null;
@@ -2231,98 +2438,7 @@ async function loadHiddenTree() {
 }
 
 function renderHiddenTree() {
-  const wrap = $("#catalogTree");
-  if (!wrap || !state.hiddenTree) return;
-  const tree = state.hiddenTree;
-  if (!tree.total) return;
-
-  // Keep a single hidden section even when multiple render paths run.
-  wrap.querySelectorAll(".tree-hidden-section").forEach((n) => n.remove());
-
-  const el = document.createElement("div");
-  el.className = "tree-node tree-hidden-section";
-
-  const toggle = document.createElement("button");
-  const allHidden = state.triageFilter === "hidden"
-    && !state.currentSource
-    && !state.currentBoard
-    && !state.currentContentKind
-    && !hasCollectionFilter()
-    && !hasCatalogFilter();
-  toggle.className = `tree-toggle${allHidden ? " active" : ""}`;
-  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label tree-hidden-label">&#128065;&#xFE0E; Hidden</span><span class="tree-count">${tree.total}</span>`;
-
-  const children = document.createElement("div");
-  children.className = "tree-children";
-
-  // "All Hidden" leaf
-  const allLeaf = document.createElement("button");
-  allLeaf.className = `tree-leaf tree-hidden-folder${allHidden ? " active" : ""}`;
-  allLeaf.innerHTML = `<span>All Hidden</span><span class="tree-count">${tree.total}</span>`;
-  allLeaf.onclick = () => {
-    state.currentSource = null;
-    state.currentBoard = null;
-    state.currentContentKind = null;
-    clearCollectionFilter();
-    clearCatalogFilter();
-    state.currentTreeNodeId = null;
-    state.triageFilter = "hidden";
-    state.offset = 0;
-    renderCatalogTree();
-    loadAssets();
-    syncExplorerFilter();
-  };
-  children.appendChild(allLeaf);
-
-  for (const src of (tree.sources || [])) {
-    for (const b of (src.boards || [])) {
-      const leaf = document.createElement("button");
-      const hiddenSource = normalizeSourceKey(src.source);
-      const isActive = state.triageFilter === "hidden" && state.currentSource === hiddenSource && state.currentBoard === b.board;
-      leaf.className = `tree-leaf tree-hidden-folder${isActive ? " active" : ""}`;
-      leaf.innerHTML = `<span>${escapeHtml(sourceDisplayName(src.source) || src.source)} / ${escapeHtml(b.board)}</span><span class="tree-count">${b.count}</span>`;
-      leaf.onclick = () => {
-        state.currentSource = hiddenSource;
-        state.currentBoard = b.board;
-        state.currentContentKind = null;
-        clearCollectionFilter();
-        clearCatalogFilter();
-        state.currentTreeNodeId = null;
-        state.triageFilter = "hidden";
-        state.offset = 0;
-        renderCatalogTree();
-        loadAssets();
-        syncExplorerFilter();
-      };
-      children.appendChild(leaf);
-    }
-  }
-
-  const nodeKey = "hidden-tree";
-  if (allHidden || state.triageFilter === "hidden") {
-    state.expandedTreeNodes.add(nodeKey);
-  }
-  _setTreeNodeExpanded(nodeKey, toggle, children, state.expandedTreeNodes.has(nodeKey));
-  _wireTreeArrowToggle(toggle, nodeKey, children);
-
-  // Hidden root header click applies "all hidden" filter.
-  toggle.onclick = () => {
-    state.currentSource = null;
-    state.currentBoard = null;
-    state.currentContentKind = null;
-    clearCollectionFilter();
-    clearCatalogFilter();
-    state.currentTreeNodeId = null;
-    state.triageFilter = "hidden";
-    state.offset = 0;
-    renderCatalogTree();
-    loadAssets();
-    syncExplorerFilter();
-  };
-
-  el.appendChild(toggle);
-  el.appendChild(children);
-  wrap.appendChild(el);
+  if (isReviewModeActive()) renderReviewSidebarSummary();
 }
 
 // ─── Question badge + polling (owner-only) ──────────────────────────────────────
@@ -2498,10 +2614,19 @@ function _renderCollectionBulkList(kind) {
     const checked = selected.has(id) ? "checked" : "";
     const name = escapeHtml(String(c.name || "Untitled collection"));
     const count = Number(c.count || 0);
+    const provenanceBadge = escapeHtml(String(c.provenance_badge || ""));
+    const provenanceLabel = escapeHtml(String(c.provenance_label || ""));
+    const provenanceNote = escapeHtml(String(c.provenance_note || ""));
+    const badgeHtml = provenanceBadge
+      ? `<span class="collectionProvenanceBadge" title="${provenanceLabel}">${provenanceBadge}</span>`
+      : "";
+    const metaHtml = provenanceBadge || provenanceNote
+      ? `<span class="collectionBulkMeta">${provenanceLabel}${provenanceNote ? ` · ${provenanceNote}` : ""}</span>`
+      : "";
     return (
       `<label class="collectionBulkRow">`
       + `<input type="checkbox" data-kind="${isHidden ? "hidden" : "active"}" data-id="${escapeHtml(id)}" ${checked} />`
-      + `<span class="collectionBulkName">${name}</span>`
+      + `<span class="collectionBulkNameWrap"><span class="collectionBulkNameLine"><span class="collectionBulkName">${name}</span>${badgeHtml}</span>${metaHtml}</span>`
       + `<span class="collectionBulkCount">${count}</span>`
       + `</label>`
     );
@@ -2752,6 +2877,66 @@ async function hydrateModalAsset(asset) {
   return asset;
 }
 
+function _isCurrentModalLoad(assetId, seq) {
+  return (
+    seq === Number(state.modalLoadSeq || 0) &&
+    !!state.modalAsset &&
+    String(state.modalAsset.id || "") === String(assetId || "") &&
+    !$("#modal")?.classList.contains("hidden")
+  );
+}
+
+function _renderModalLabels(labels) {
+  const labelsEl = $("#modalLabels");
+  const labelsTitleEl = $("#modalLabelsTitle");
+  if (!labelsEl) return;
+  labelsEl.innerHTML = "";
+  labelsEl.hidden = true;
+  labelsEl.classList.remove("expanded");
+  if (labelsTitleEl) labelsTitleEl.hidden = true;
+  if (!Array.isArray(labels) || !labels.length) return;
+  const INITIAL_SHOW = 30;
+  const chips = labels.map((l) =>
+    `<span class="label-chip" data-source="${escapeHtml(l.source || "")}" title="${escapeHtml(l.source || "")}">${escapeHtml(l.label)}</span>`
+  );
+  labelsEl.innerHTML = chips.slice(0, INITIAL_SHOW).join(" ");
+  if (labels.length > INITIAL_SHOW) {
+    const toggleBtn = document.createElement("button");
+    toggleBtn.className = "labels-toggle";
+    toggleBtn.textContent = `+${labels.length - INITIAL_SHOW} more`;
+    toggleBtn.onclick = () => {
+      labelsEl.innerHTML = chips.join(" ");
+      labelsEl.classList.add("expanded");
+    };
+    labelsEl.appendChild(toggleBtn);
+  }
+  labelsEl.hidden = false;
+  if (labelsTitleEl) labelsTitleEl.hidden = false;
+}
+
+async function _loadModalLabels(assetId, seq) {
+  try {
+    const resp = await fetch(`/api/assets/${encodeURIComponent(assetId)}/labels`);
+    if (!resp.ok || !_isCurrentModalLoad(assetId, seq)) return;
+    const data = await resp.json();
+    if (!_isCurrentModalLoad(assetId, seq)) return;
+    _renderModalLabels(data.labels || []);
+  } catch {}
+}
+
+async function _loadModalAnnotations(assetId, seq) {
+  try {
+    const data = await api(`/api/annotations?asset_id=${encodeURIComponent(assetId)}`);
+    if (!_isCurrentModalLoad(assetId, seq)) return;
+    state.annotations = data.annotations || [];
+  } catch {
+    if (!_isCurrentModalLoad(assetId, seq)) return;
+    state.annotations = [];
+  }
+  renderAnnotations();
+  renderMarkers();
+}
+
 function _isBoilerplateClassificationReviewNote(note) {
   const text = String(note || "").trim().toLowerCase();
   if (!text) return false;
@@ -2772,6 +2957,106 @@ function _preferredMoveTrack(track, fallback = "style_product_decor") {
 function _reviewFocusLabel(value) {
   const key = String(value || "").trim();
   return REVIEW_FOCUS_LABELS[key] || key || "";
+}
+
+function _mediaReliabilityLabel(value) {
+  const key = String(value || "").trim();
+  return MEDIA_RELIABILITY_LABELS[key] || key || "";
+}
+
+function _renderMediaReliabilityOverlay(elementId, value) {
+  const el = $(elementId);
+  if (!el) return;
+  const label = _mediaReliabilityLabel(value);
+  el.textContent = label;
+  el.hidden = !label;
+}
+
+function renderModalSourceCandidatePanel(asset) {
+  const panel = $("#modalSourceCandidatePanel");
+  if (!panel) return;
+  if (!isOwner()) {
+    panel.hidden = true;
+    return;
+  }
+  const candidate = asset?.source_link_candidate || {};
+  const fetchStatus = String(candidate.fetch_status || "").trim();
+  const pageTitle = String(candidate.page_title || "").trim();
+  const heroImageUrl = String(candidate.hero_image_url || "").trim();
+  const heroImageAlt = String(candidate.hero_image_alt || "").trim();
+  const heroText = String(candidate.hero_text_excerpt || "").trim();
+  const textExcerpt = String(candidate.text_excerpt || "").trim();
+  const error = String(candidate.error || "").trim();
+
+  panel.hidden = false;
+  const statusEl = $("#modalSourceCandidateStatus");
+  if (statusEl) {
+    const parts = [];
+    if (fetchStatus) parts.push(fetchStatus);
+    if (error) parts.push(error);
+    statusEl.textContent = parts.join(" · ");
+    statusEl.hidden = !parts.length;
+  }
+  const imageWrap = $("#modalSourceCandidateImageWrap");
+  const imageEl = $("#modalSourceCandidateImage");
+  if (imageWrap) imageWrap.hidden = !heroImageUrl;
+  if (imageEl) {
+    imageEl.src = heroImageUrl || "";
+    imageEl.alt = heroImageAlt || pageTitle || "Source candidate";
+  }
+  const titleRow = $("#modalSourceCandidateTitleRow");
+  const titleEl = $("#modalSourceCandidateTitle");
+  if (titleRow) titleRow.hidden = !pageTitle;
+  if (titleEl) titleEl.textContent = pageTitle;
+  const heroTextRow = $("#modalSourceCandidateHeroTextRow");
+  const heroTextEl = $("#modalSourceCandidateHeroText");
+  if (heroTextRow) heroTextRow.hidden = !heroText;
+  if (heroTextEl) heroTextEl.textContent = heroText;
+  const textRow = $("#modalSourceCandidateTextRow");
+  const textEl = $("#modalSourceCandidateText");
+  if (textRow) textRow.hidden = !textExcerpt;
+  if (textEl) textEl.textContent = textExcerpt;
+
+  const captureBtn = $("#modalSourceCandidateCaptureBtn");
+  const promoteBtn = $("#modalSourceCandidatePromoteBtn");
+  if (captureBtn) captureBtn.disabled = false;
+  if (promoteBtn) promoteBtn.disabled = !heroImageUrl;
+}
+
+async function runModalSourceCandidateAction(action) {
+  const asset = state.modalAsset;
+  if (!asset || !asset.id) return;
+  if (!isOwner()) {
+    Shared.showToast("Source candidate tools are owner-only.", { type: "info" });
+    return;
+  }
+  const captureBtn = $("#modalSourceCandidateCaptureBtn");
+  const promoteBtn = $("#modalSourceCandidatePromoteBtn");
+  if (captureBtn) captureBtn.disabled = true;
+  if (promoteBtn) promoteBtn.disabled = true;
+  try {
+    const data = await api(`/api/assets/${encodeURIComponent(asset.id)}/source-link-candidate`, {
+      method: "PUT",
+      body: JSON.stringify({ action }),
+    });
+    const updated = data.asset || null;
+    if (!updated) throw new Error("Updated asset missing from response");
+    replaceAssetInState(updated);
+    state.modalAsset = updated;
+    renderModalSourceCandidatePanel(updated);
+    if (action === "promote") {
+      renderGrid();
+      await openModal(updated);
+      Shared.showToast("Candidate image promoted.", { type: "success", duration: 1800 });
+    } else {
+      Shared.showToast("Source candidate captured.", { type: "success", duration: 1800 });
+    }
+  } catch (e) {
+    Shared.showToast(formatApiError(e), { type: "error", duration: 3200 });
+  } finally {
+    if (captureBtn) captureBtn.disabled = false;
+    if (promoteBtn) promoteBtn.disabled = false;
+  }
 }
 
 function _modalClassificationNeedsReview(review) {
@@ -2816,6 +3101,7 @@ function renderModalClassificationPanel(asset) {
   const overrideNote = String(review.active_override_note || "").trim();
   const overrideCreatedAt = String(review.active_override_created_at || "").trim();
   const overrideFocus = String(review.active_review_focus || "").trim();
+  const overrideMedia = String(review.active_media_reliability || "").trim();
   const effectiveTrack = _effectiveClassificationTrack(review);
   const needsReview = _modalClassificationNeedsReview(review);
   const statusText = _modalClassificationStatusText(review);
@@ -2873,10 +3159,15 @@ function renderModalClassificationPanel(asset) {
   const focusEl = $("#modalClassificationFocus");
   if (focusRow) focusRow.hidden = !overrideFocus;
   if (focusEl) focusEl.textContent = overrideFocus ? _reviewFocusLabel(overrideFocus) : "";
+  const mediaRow = $("#modalClassificationMediaRow");
+  const mediaEl = $("#modalClassificationMedia");
+  if (mediaRow) mediaRow.hidden = !overrideMedia;
+  if (mediaEl) mediaEl.textContent = overrideMedia ? _mediaReliabilityLabel(overrideMedia) : "";
 
   const editor = $("#modalClassificationEditor");
   const moveTo = $("#modalClassificationMoveTo");
   const focusSelect = $("#modalClassificationFocusSelect");
+  const mediaSelect = $("#modalClassificationMediaSelect");
   const comment = $("#modalClassificationComment");
   const keepBtn = $("#modalClassificationKeepBtn");
   const saveBtn = $("#modalClassificationSaveBtn");
@@ -2885,6 +3176,7 @@ function renderModalClassificationPanel(asset) {
   const defaultTrack = overrideTrack || (hasSourceConflict ? sourceTrack : currentTrack);
   if (moveTo) moveTo.value = _preferredMoveTrack(defaultTrack);
   if (focusSelect) focusSelect.value = overrideFocus && REVIEW_FOCUS_LABELS[overrideFocus] ? overrideFocus : "";
+  if (mediaSelect) mediaSelect.value = overrideMedia && MEDIA_RELIABILITY_LABELS[overrideMedia] ? overrideMedia : "";
   if (comment) comment.value = cleanedOverrideNote || "";
   if (keepBtn) keepBtn.disabled = !effectiveTrack;
   if (saveBtn) saveBtn.disabled = false;
@@ -2902,12 +3194,14 @@ async function saveModalClassificationReview(opts = {}) {
   const currentTrack = _effectiveClassificationTrack(review);
   const moveTo = $("#modalClassificationMoveTo");
   const focusSelect = $("#modalClassificationFocusSelect");
+  const mediaSelect = $("#modalClassificationMediaSelect");
   const comment = $("#modalClassificationComment");
   const keepBtn = $("#modalClassificationKeepBtn");
   const saveBtn = $("#modalClassificationSaveBtn");
   const irrelevantBtn = $("#modalClassificationIrrelevantBtn");
   const track = String(opts.track || moveTo?.value || "").trim();
   const reviewFocus = String(opts.reviewFocus ?? focusSelect?.value ?? "").trim();
+  const mediaReliability = String(opts.mediaReliability ?? mediaSelect?.value ?? "").trim();
   const note = String(comment?.value || "").trim();
   if (!track) {
     Shared.showToast("Choose a track first.", { type: "info" });
@@ -2918,11 +3212,12 @@ async function saveModalClassificationReview(opts = {}) {
   if (irrelevantBtn) irrelevantBtn.disabled = true;
   if (moveTo) moveTo.disabled = true;
   if (focusSelect) focusSelect.disabled = true;
+  if (mediaSelect) mediaSelect.disabled = true;
   if (comment) comment.disabled = true;
   try {
     const data = await api(`/api/assets/${encodeURIComponent(asset.id)}/classification-review`, {
       method: "PUT",
-      body: JSON.stringify({ track, note, review_focus: reviewFocus }),
+      body: JSON.stringify({ track, note, review_focus: reviewFocus, media_reliability: mediaReliability }),
     });
     const updated = data.asset || null;
     if (!updated) throw new Error("Updated asset missing from response");
@@ -2942,6 +3237,7 @@ async function saveModalClassificationReview(opts = {}) {
     if (irrelevantBtn) irrelevantBtn.disabled = false;
     if (moveTo) moveTo.disabled = false;
     if (focusSelect) focusSelect.disabled = false;
+    if (mediaSelect) mediaSelect.disabled = false;
     if (comment) comment.disabled = false;
   }
 }
@@ -2992,8 +3288,10 @@ async function saveWorkingTitleFromModal(opts = {}) {
   }
 }
 
-async function openModal(asset) {
-  asset = await hydrateModalAsset(asset);
+async function openModal(asset, options = {}) {
+  const shouldHydrate = options.hydrate !== false;
+  const modalSeq = (Number(state.modalLoadSeq || 0) + 1);
+  state.modalLoadSeq = modalSeq;
   state.modalAsset = asset;
 
   const title = displayTitle(asset);
@@ -3041,6 +3339,8 @@ async function openModal(asset) {
   }
   renderModalTitlePanel(asset);
   renderModalClassificationPanel(asset);
+  renderModalSourceCandidatePanel(asset);
+  _renderMediaReliabilityOverlay("#modalMediaOverlay", asset?.classification_review?.active_media_reliability || "");
   const titleSaveBtn = $("#modalTitleSaveBtn");
   if (titleSaveBtn) titleSaveBtn.onclick = () => saveWorkingTitleFromModal({ useSuggested: false });
   const titleSuggestedBtn = $("#modalTitleUseSuggestedBtn");
@@ -3057,6 +3357,10 @@ async function openModal(asset) {
   if (classificationIrrelevantBtn) {
     classificationIrrelevantBtn.onclick = () => saveModalClassificationReview({ track: "irrelevant" });
   }
+  const sourceCandidateCaptureBtn = $("#modalSourceCandidateCaptureBtn");
+  if (sourceCandidateCaptureBtn) sourceCandidateCaptureBtn.onclick = () => runModalSourceCandidateAction("capture");
+  const sourceCandidatePromoteBtn = $("#modalSourceCandidatePromoteBtn");
+  if (sourceCandidatePromoteBtn) sourceCandidatePromoteBtn.onclick = () => runModalSourceCandidateAction("promote");
 
   const img = $("#modalImage");
   const video = $("#modalVideo");
@@ -3139,32 +3443,9 @@ async function openModal(asset) {
     labelsEl.innerHTML = "";
     labelsEl.hidden = true;
     labelsEl.classList.remove("expanded");
-    try {
-      const resp = await fetch(`/api/assets/${asset.id}/labels`);
-      if (resp.ok) {
-        const data = await resp.json();
-        const labels = data.labels || [];
-        if (labels.length > 0) {
-          const INITIAL_SHOW = 30;
-          const chips = labels.map(l =>
-            `<span class="label-chip" data-source="${escapeHtml(l.source || "")}" title="${escapeHtml(l.source || "")}">${escapeHtml(l.label)}</span>`
-          );
-          labelsEl.innerHTML = chips.slice(0, INITIAL_SHOW).join(" ");
-          if (labels.length > INITIAL_SHOW) {
-            const toggleBtn = document.createElement("button");
-            toggleBtn.className = "labels-toggle";
-            toggleBtn.textContent = `+${labels.length - INITIAL_SHOW} more`;
-            toggleBtn.onclick = () => {
-              labelsEl.innerHTML = chips.join(" ");
-              labelsEl.classList.add("expanded");
-            };
-            labelsEl.appendChild(toggleBtn);
-          }
-          labelsEl.hidden = false;
-        }
-      }
-    } catch {}
   }
+  const labelsTitleEl = $("#modalLabelsTitle");
+  if (labelsTitleEl) labelsTitleEl.hidden = true;
 
   // Engagement stats
   const engagementEl = $("#modalEngagement");
@@ -3204,12 +3485,63 @@ async function openModal(asset) {
   if (printBtn) printBtn.onclick = () => printModalAsset(asset);
   wireModalShareActions(asset);
 
+  const annHintText = $("#annHintText");
+  const annQuestionToggle = $("#annQuestionToggle");
+  const annQuestionLabel = $("#annQuestionLabel");
+  const annotationsTitle = $("#modalAnnotationsTitle");
+  const stagePrompt = $("#modalStagePrompt");
+  const collaboratorOnlyQuestions = !!(state.actor && state.actor.role !== "owner");
+  if (annHintText) {
+    annHintText.textContent = collaboratorOnlyQuestions
+      ? "Click on the image to ask a question."
+      : "Click on the image to add a note.";
+  }
+  if (annQuestionToggle) {
+    annQuestionToggle.checked = collaboratorOnlyQuestions ? true : !!annQuestionToggle.checked;
+    annQuestionToggle.disabled = collaboratorOnlyQuestions;
+  }
+  if (annQuestionLabel) {
+    annQuestionLabel.hidden = collaboratorOnlyQuestions;
+  }
+  if (annotationsTitle) {
+    annotationsTitle.textContent = collaboratorOnlyQuestions ? "Questions" : "Annotations";
+    annotationsTitle.classList.toggle("sectionTitle-questions", collaboratorOnlyQuestions);
+    annotationsTitle.classList.toggle("sectionTitle-annotations", !collaboratorOnlyQuestions);
+  }
+  if (stagePrompt) {
+    if (collaboratorOnlyQuestions) {
+      stagePrompt.innerHTML = `
+        <div class="modal-stage-prompt-title">Questions</div>
+        <div class="modal-stage-prompt-text">Click on the image to ask a question.</div>
+      `;
+      stagePrompt.hidden = false;
+    } else {
+      stagePrompt.hidden = true;
+      stagePrompt.innerHTML = "";
+    }
+  }
+  const annHintRow = annHintText ? annHintText.closest(".ann-hint-row") : null;
+  if (annHintRow) {
+    annHintRow.hidden = collaboratorOnlyQuestions;
+  }
+
   // Notes
   const notesArea = $("#assetNotes");
+  const notesHint = $("#assetNotesHint");
   if (notesArea) {
     notesArea.value = asset.notes || "";
-    notesArea.oninput = () => scheduleNotesUpdate(asset.id, notesArea.value);
-    notesArea.onblur = () => { void persistAssetNotesNow(asset.id, notesArea.value); };
+    const editable = canEditAssetNotes();
+    notesArea.readOnly = !editable;
+    notesArea.disabled = false;
+    notesArea.oninput = editable ? () => scheduleNotesUpdate(asset.id, notesArea.value) : null;
+    notesArea.onblur = editable ? () => { void persistAssetNotesNow(asset.id, notesArea.value); } : null;
+    notesArea.onfocus = () => { clearActiveAnnotationSelection(); };
+    if (notesHint) {
+      notesHint.hidden = editable;
+      notesHint.textContent = editable
+        ? ""
+        : "General notes are owner-only. Use annotations or questions to leave feedback.";
+    }
   }
 
   // Flag button
@@ -3326,9 +3658,20 @@ async function openModal(asset) {
   renderModalSourceLinks(state.modalAsset || asset);
 
   $("#modal").classList.remove("hidden");
-  await loadAnnotations(asset.id);
+  state.annotations = [];
   renderAnnotations();
   renderMarkers();
+  void _loadModalLabels(asset.id, modalSeq);
+  void _loadModalAnnotations(asset.id, modalSeq);
+  if (shouldHydrate) {
+    void (async () => {
+      const hydrated = await hydrateModalAsset(asset);
+      if (!_isCurrentModalLoad(asset.id, modalSeq)) return;
+      const merged = hydrated && typeof hydrated === "object" ? { ...asset, ...hydrated } : asset;
+      state.modalAsset = merged;
+      await openModal(merged, { hydrate: false });
+    })();
+  }
 }
 
 async function removeAssetsFromCollections(assetIds, collectionIds) {
@@ -3359,7 +3702,7 @@ async function addAssetsToCollections(assetIds, collectionIds) {
 function closeModal() {
   const currentAsset = state.modalAsset;
   const notesArea = $("#assetNotes");
-  if (currentAsset && notesArea) {
+  if (currentAsset && notesArea && canEditAssetNotes()) {
     void persistAssetNotesNow(currentAsset.id, notesArea.value);
   }
   const activeAnnId = state.activeAnnotationId;
@@ -3367,6 +3710,7 @@ function closeModal() {
   if (activeAnnId && floatingTextEl) {
     void persistAnnotationNow(activeAnnId, { text: floatingTextEl.value });
   }
+  clearActiveAnnotationSelection();
   $("#modal").classList.add("hidden");
   state.modalAsset = null;
   state.annotations = [];
@@ -3438,6 +3782,10 @@ function canManageAnnotation(ann) {
   const actorId = String(state.actor?.id || "").trim();
   const annActorId = String(ann.actor_id || "").trim();
   return !!actorId && !!annActorId && actorId === annActorId;
+}
+
+function canEditAssetNotes() {
+  return !!(state.actor && state.actor.role === "owner");
 }
 
 function annotationActorClass(ann) {
@@ -3559,6 +3907,17 @@ function setActiveAnnotation(annId, options = {}) {
   renderMarkers();
   renderFloatingNote();
   if (focusEditor) focusActiveAnnotationEditor();
+}
+
+function clearActiveAnnotationSelection() {
+  if (!state.activeAnnotationId) {
+    renderFloatingNote();
+    return;
+  }
+  state.activeAnnotationId = null;
+  renderAnnotations();
+  renderMarkers();
+  renderFloatingNote();
 }
 
 function syncFloatingText(annId, value) {
@@ -3859,6 +4218,9 @@ async function enterReview() {
     Shared.showToast("No items to review.", { type: "info" });
     return;
   }
+  if (isExplorerViewActive()) {
+    setViewMode("grid", { persist: false });
+  }
   state.view = "review";
   state.reviewItems = reviewItems;
   state.reviewIndex = 0;
@@ -3890,6 +4252,7 @@ async function enterReview() {
   const actionBar = $("#canvasActionBar");
   if (actionBar) actionBar.hidden = true;
 
+  updateSidebarModeVisibility();
   await renderReviewCard();
 }
 
@@ -3908,6 +4271,7 @@ function exitReview() {
   } else {
     loadAssets();
   }
+  updateSidebarModeVisibility();
 }
 
 async function hydrateReviewItem(index = state.reviewIndex) {
@@ -3943,6 +4307,7 @@ function renderReviewClassificationPanel(item) {
   const overrideNote = String(review.active_override_note || "").trim();
   const overrideCreatedAt = String(review.active_override_created_at || "").trim();
   const overrideFocus = String(review.active_review_focus || "").trim();
+  const overrideMedia = String(review.active_media_reliability || "").trim();
   const effectiveTrack = _effectiveClassificationTrack(review);
   const statusText = _modalClassificationStatusText(review);
   const cleanedOverrideNote = _isBoilerplateClassificationReviewNote(overrideNote) ? "" : overrideNote;
@@ -3999,10 +4364,15 @@ function renderReviewClassificationPanel(item) {
   const focusEl = $("#reviewClassificationFocus");
   if (focusRow) focusRow.hidden = !overrideFocus;
   if (focusEl) focusEl.textContent = overrideFocus ? _reviewFocusLabel(overrideFocus) : "";
+  const mediaRow = $("#reviewClassificationMediaRow");
+  const mediaEl = $("#reviewClassificationMedia");
+  if (mediaRow) mediaRow.hidden = !overrideMedia;
+  if (mediaEl) mediaEl.textContent = overrideMedia ? _mediaReliabilityLabel(overrideMedia) : "";
 
   const editor = $("#reviewClassificationEditor");
   const moveTo = $("#reviewClassificationMoveTo");
   const focusSelect = $("#reviewClassificationFocusSelect");
+  const mediaSelect = $("#reviewClassificationMediaSelect");
   const comment = $("#reviewClassificationComment");
   const keepBtn = $("#reviewClassificationKeepBtn");
   const saveBtn = $("#reviewClassificationSaveBtn");
@@ -4012,6 +4382,8 @@ function renderReviewClassificationPanel(item) {
   if (moveTo) moveTo.value = _preferredMoveTrack(defaultTrack);
   const defaultFocus = (draft && draft.focus) || overrideFocus;
   if (focusSelect) focusSelect.value = defaultFocus && REVIEW_FOCUS_LABELS[defaultFocus] ? defaultFocus : "";
+  const defaultMedia = (draft && draft.mediaReliability) || overrideMedia;
+  if (mediaSelect) mediaSelect.value = defaultMedia && MEDIA_RELIABILITY_LABELS[defaultMedia] ? defaultMedia : "";
   if (comment) comment.value = draft && Object.prototype.hasOwnProperty.call(draft, "note") ? draft.note : (cleanedOverrideNote || "");
   if (keepBtn) keepBtn.disabled = !effectiveTrack;
   if (saveBtn) saveBtn.disabled = false;
@@ -4024,11 +4396,13 @@ function _persistCurrentReviewDraft() {
   if (!item || !item.id) return;
   const moveTo = $("#reviewClassificationMoveTo");
   const focusSelect = $("#reviewClassificationFocusSelect");
+  const mediaSelect = $("#reviewClassificationMediaSelect");
   const comment = $("#reviewClassificationComment");
   if (!moveTo && !focusSelect && !comment) return;
   state.reviewDrafts[item.id] = {
     track: _preferredMoveTrack(moveTo?.value || ""),
     focus: String(focusSelect?.value || "").trim(),
+    mediaReliability: String(mediaSelect?.value || "").trim(),
     note: String(comment?.value || ""),
   };
 }
@@ -4092,6 +4466,7 @@ async function renderReviewCard() {
 
   const descEl = $("#reviewDesc");
   if (descEl) descEl.textContent = item.seo_alt_text || item.ai_summary || item.description || "";
+  _renderMediaReliabilityOverlay("#reviewMediaOverlay", item?.classification_review?.active_media_reliability || "");
 
   const link = $("#reviewSourceLink");
   if (link) {
@@ -4146,14 +4521,17 @@ async function saveReviewClassificationReview(opts = {}) {
   const previousOverrideTrack = String(review.active_override_track || "").trim();
   const previousOverrideNote = String(review.active_override_note || "").trim();
   const previousOverrideFocus = String(review.active_review_focus || "").trim();
+  const previousOverrideMediaReliability = String(review.active_media_reliability || "").trim();
   const moveTo = $("#reviewClassificationMoveTo");
   const focusSelect = $("#reviewClassificationFocusSelect");
+  const mediaSelect = $("#reviewClassificationMediaSelect");
   const comment = $("#reviewClassificationComment");
   const keepBtn = $("#reviewClassificationKeepBtn");
   const saveBtn = $("#reviewClassificationSaveBtn");
   const irrelevantBtn = $("#reviewClassificationIrrelevantBtn");
   const track = String(opts.track || moveTo?.value || "").trim();
   const reviewFocus = String(opts.reviewFocus ?? focusSelect?.value ?? "").trim();
+  const mediaReliability = String(opts.mediaReliability ?? mediaSelect?.value ?? "").trim();
   const note = String(comment?.value || "").trim();
   if (!track) {
     Shared.showToast("Choose a track first.", { type: "info" });
@@ -4165,12 +4543,13 @@ async function saveReviewClassificationReview(opts = {}) {
   if (irrelevantBtn) irrelevantBtn.disabled = true;
   if (moveTo) moveTo.disabled = true;
   if (focusSelect) focusSelect.disabled = true;
+  if (mediaSelect) mediaSelect.disabled = true;
   if (comment) comment.disabled = true;
 
   try {
     const data = await api(`/api/assets/${encodeURIComponent(item.id)}/classification-review`, {
       method: "PUT",
-      body: JSON.stringify({ track, note, review_focus: reviewFocus }),
+      body: JSON.stringify({ track, note, review_focus: reviewFocus, media_reliability: mediaReliability }),
     });
     const updated = data.asset || null;
     if (!updated) throw new Error("Updated asset missing from response");
@@ -4188,8 +4567,10 @@ async function saveReviewClassificationReview(opts = {}) {
       previousOverrideTrack,
       previousOverrideNote,
       previousOverrideFocus,
+      previousOverrideMediaReliability,
       appliedTrack: track,
       appliedFocus: reviewFocus,
+      appliedMediaReliability: mediaReliability,
       appliedNote: note,
     });
     _incrementReviewDecisionCounter(kind);
@@ -4202,6 +4583,7 @@ async function saveReviewClassificationReview(opts = {}) {
     if (irrelevantBtn) irrelevantBtn.disabled = false;
     if (moveTo) moveTo.disabled = false;
     if (focusSelect) focusSelect.disabled = false;
+    if (mediaSelect) mediaSelect.disabled = false;
     if (comment) comment.disabled = false;
   }
 }
@@ -4229,7 +4611,12 @@ async function undoReview() {
   try {
     if (last.kind === "classification") {
       const payload = last.previousOverrideTrack
-        ? { track: last.previousOverrideTrack, note: last.previousOverrideNote, review_focus: last.previousOverrideFocus || "" }
+        ? {
+            track: last.previousOverrideTrack,
+            note: last.previousOverrideNote,
+            review_focus: last.previousOverrideFocus || "",
+            media_reliability: last.previousOverrideMediaReliability || "",
+          }
         : { clear: true };
       const data = await api(`/api/assets/${encodeURIComponent(last.id)}/classification-review`, {
         method: "PUT",
@@ -4246,6 +4633,7 @@ async function undoReview() {
         state.reviewDrafts[last.id] = {
           track: String(last.appliedTrack || "").trim(),
           focus: String(last.appliedFocus || "").trim(),
+          mediaReliability: String(last.appliedMediaReliability || "").trim(),
           note: String(last.appliedNote || ""),
         };
       }
@@ -4344,6 +4732,7 @@ function enterCanvasReview() {
 
   updateReviewScopeChips();
   updateCanvasSelectionCount();
+  updateSidebarModeVisibility();
   Shared.showToast(
     switchedFromExplorer
       ? "Review actions are grid-only for safety. Switched to Grid review mode."
@@ -4367,6 +4756,7 @@ function exitCanvasReview() {
   if (gridBtn) gridBtn.classList.remove("reviewing");
 
   $$(".card.canvas-selected").forEach((c) => c.classList.remove("canvas-selected"));
+  updateSidebarModeVisibility();
 }
 
 function toggleCanvasSelection(id, cardEl) {
@@ -5176,7 +5566,7 @@ let _explorerMode = "3d";   // "2d" | "3d"
 let _ExplorerImpl = null;
 let _disable3DForSession = false;
 let _explorer3DLoadPromise = null;
-const EXPLORER_3D_MODULE_URL = "/app/attractor-explorer-3d.js?v=33";
+const EXPLORER_3D_MODULE_URL = "/app/attractor-explorer-3d.js?v=39";
 // Hard refresh in Safari can cold-load Three.js from CDN; allow enough
 // headroom so we do not incorrectly drop into 2D fallback.
 const EXPLORER_3D_READY_WAIT_MS = 12000;
@@ -5241,6 +5631,9 @@ let _explorerPayloadIncludesHidden = false;
 let _explorerScopeReloading = false;
 let _busyCursorDepth = 0;
 let _explorerBusyDepth = 0;
+let _explorerBusyStartedAt = 0;
+let _explorerBusyToken = 0;
+const EXPLORER_MIN_BUSY_MS = 280;
 
 function _setGlobalBusyCursor(cursor) {
   if (document.body) document.body.style.cursor = cursor;
@@ -5271,19 +5664,37 @@ function _setExplorerBusyOverlay(visible, text = "") {
   explorerBusyOverlay.hidden = !visible;
 }
 
-function _beginExplorerBusy(message) {
-  _explorerBusyDepth += 1;
-  _pushBusyCursor();
-  _setExplorerBusyOverlay(true, message);
-  if (viewExplorerBtn) viewExplorerBtn.disabled = true;
+function _setExplorerFrozen(visible) {
+  const explorerView = $("#explorerView");
+  if (!explorerView) return;
+  explorerView.classList.toggle("explorer-frozen", !!visible);
 }
 
-function _endExplorerBusy() {
-  _explorerBusyDepth = Math.max(0, _explorerBusyDepth - 1);
-  if (_explorerBusyDepth === 0) {
-    _setExplorerBusyOverlay(false);
-    if (viewExplorerBtn) viewExplorerBtn.disabled = false;
+function _beginExplorerBusy(message) {
+  _explorerBusyDepth += 1;
+  if (_explorerBusyDepth === 1) {
+    _explorerBusyStartedAt = performance.now();
+    _explorerBusyToken += 1;
+    _pushBusyCursor();
+    _setExplorerFrozen(true);
+    if (viewExplorerBtn) viewExplorerBtn.disabled = true;
   }
+  _setExplorerBusyOverlay(true, message);
+}
+
+async function _endExplorerBusy() {
+  _explorerBusyDepth = Math.max(0, _explorerBusyDepth - 1);
+  if (_explorerBusyDepth !== 0) return;
+  const token = _explorerBusyToken;
+  const elapsed = Math.max(0, performance.now() - _explorerBusyStartedAt);
+  const waitMs = Math.max(0, EXPLORER_MIN_BUSY_MS - elapsed);
+  if (waitMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+  }
+  if (_explorerBusyDepth !== 0 || token !== _explorerBusyToken) return;
+  _setExplorerBusyOverlay(false);
+  _setExplorerFrozen(false);
+  if (viewExplorerBtn) viewExplorerBtn.disabled = false;
   _popBusyCursor();
 }
 
@@ -5443,7 +5854,10 @@ function _resetExplorerViewInstance() {
 
 function setViewMode(mode, options = {}) {
   const { persist = true } = options;
-  if (state.canvasReview) exitCanvasReview();
+  if (mode === "explorer" && isReviewModeActive()) {
+    Shared.showToast("Exit review mode before opening 3D Explorer.", { type: "info", duration: 3000 });
+    return;
+  }
   const browseView = $("#browseView");
   const explorerView = $("#explorerView");
   const sidebarEl = $("aside.sidebar");
@@ -5501,7 +5915,7 @@ async function loadExplorerView({ allow2DFallback = true } = {}) {
     });
     explorerLoaded = true;
   } else {
-    _ExplorerImpl.resume();
+    if (typeof _ExplorerImpl.pause === "function") _ExplorerImpl.pause();
   }
 
   // Load data from appropriate endpoint
@@ -5521,6 +5935,7 @@ async function loadExplorerView({ allow2DFallback = true } = {}) {
     _explorerPayloadIncludesHidden = includeHidden;
     _explorerFilterCount = Array.isArray(data?.assets) ? data.assets.length : null;
     _ExplorerImpl.loadData(data, { deferSettle: _explorerMode === "3d" });
+    if (typeof _ExplorerImpl.resume === "function") _ExplorerImpl.resume();
     syncExplorerFilter();   // apply any active grid filters as dim
     updateStats();
   } catch (e) {
@@ -5539,7 +5954,7 @@ async function loadExplorerView({ allow2DFallback = true } = {}) {
     }
     Shared.showToast(`Explorer: ${formatApiError(e)}`, { type: "error" });
   } finally {
-    _endExplorerBusy();
+    await _endExplorerBusy();
   }
 }
 
@@ -5565,48 +5980,92 @@ function _hasActiveFilters() {
 
 async function syncExplorerFilter() {
   if (!_ExplorerImpl || !explorerLoaded) return;
-
-  // Sync header search text into explorer's local title search
-  if (typeof _ExplorerImpl.setSearch === "function") {
-    _ExplorerImpl.setSearch(state.q || "");
+  const explorerActive = state.view === "explorer" && !$("#explorerView")?.hidden;
+  if (explorerActive) {
+    _beginExplorerBusy("Updating your map…");
+    if (typeof _ExplorerImpl.pause === "function") _ExplorerImpl.pause();
+    await _nextPaint();
   }
 
-  // Hidden data is loaded only for owner hidden view.
-  const wantsHiddenPayload = _shouldExplorerIncludeHiddenData();
-  if (_explorerPayloadIncludesHidden !== wantsHiddenPayload) {
-    if (_explorerScopeReloading) return;
-    _explorerScopeReloading = true;
-    try {
-      await loadExplorerView();
-    } finally {
-      _explorerScopeReloading = false;
+  try {
+
+    // Sync header search text into explorer's local title search
+    if (typeof _ExplorerImpl.setSearch === "function") {
+      _ExplorerImpl.setSearch(state.q || "");
     }
-    return;
-  }
 
-  // No filters → show everything
-  if (!_hasActiveFilters()) {
-    _ExplorerImpl.setFilter(null);
-    _explorerFilterCount = Array.isArray(explorerData?.assets) ? explorerData.assets.length : null;
-    updateStats();
-    return;
-  }
+    // Hidden data is loaded only for owner hidden view.
+    const wantsHiddenPayload = _shouldExplorerIncludeHiddenData();
+    if (_explorerPayloadIncludesHidden !== wantsHiddenPayload) {
+      if (_explorerScopeReloading) return;
+      _explorerScopeReloading = true;
+      try {
+        await loadExplorerView();
+      } finally {
+        _explorerScopeReloading = false;
+      }
+      return;
+    }
 
-  // Chat-curated items: highlight only those IDs
-  if (state.chatItemIds) {
-    _ExplorerImpl.setFilter(state.chatItemIds);
-    _explorerFilterCount = state.chatItemIds.length;
-    updateStats();
-    return;
-  }
+    // No filters → show everything
+    if (!_hasActiveFilters()) {
+      _ExplorerImpl.setFilter(null);
+      _explorerFilterCount = Array.isArray(explorerData?.assets) ? explorerData.assets.length : null;
+      updateStats();
+      return;
+    }
 
-  const catalogFiles = getCatalogFilterFiles();
-  if (catalogFiles.length) {
-    const catalogParams = new URLSearchParams();
-    for (const file of catalogFiles) catalogParams.append("file", file);
+    // Chat-curated items: highlight only those IDs
+    if (state.chatItemIds) {
+      _ExplorerImpl.setFilter(state.chatItemIds);
+      _explorerFilterCount = state.chatItemIds.length;
+      updateStats();
+      return;
+    }
+
+    const catalogFiles = getCatalogFilterFiles();
+    if (catalogFiles.length) {
+      const catalogParams = new URLSearchParams();
+      for (const file of catalogFiles) catalogParams.append("file", file);
+      const seq = ++_explorerFilterSeq;
+      try {
+        const data = await api(`/api/catalog/asset-ids?${catalogParams}`);
+        if (seq !== _explorerFilterSeq) return; // stale
+        _ExplorerImpl.setFilter(data.ids || []);
+        _explorerFilterCount = Array.isArray(data.ids) ? data.ids.length : 0;
+        updateStats();
+      } catch (e) {
+        // Silently ignore — filter dim is a nice-to-have
+      }
+      return;
+    }
+
+    // Build the same filter params the grid uses
+    const params = new URLSearchParams();
+    if (state.q && state.q.trim()) params.set("q", state.q.trim());
+    if (state.currentSource) params.set("source", state.currentSource);
+    if (state.currentBoard) params.set("board", state.currentBoard);
+    if (state.currentContentKind) params.set("content_kind", state.currentContentKind);
+    if (state.currentClassificationAxis) params.set("classification_axis", state.currentClassificationAxis);
+    if (state.currentClassificationValue) params.set("classification_value", state.currentClassificationValue);
+    const collectionIds = getCollectionFilterIds();
+    if (collectionIds.length) params.set("collection_id", collectionIds.join(","));
+    if (state.triageFilter === "needs-comment") {
+      params.set("needs_annotation", "1");
+      if (isOwner()) params.set("include_hidden", "1");
+    } else if (state.triageFilter === "hidden") {
+      params.set("triage_status", "hidden");
+      if (_shouldExplorerIncludeHiddenData()) params.set("include_hidden", "1");
+    } else if (state.triageFilter === "flagged") {
+      params.set("flagged", "1");
+      if (isOwner()) params.set("include_hidden", "1");
+    } else if (state.triageFilter) {
+      params.set("triage_status", state.triageFilter);
+    }
+
     const seq = ++_explorerFilterSeq;
     try {
-      const data = await api(`/api/catalog/asset-ids?${catalogParams}`);
+      const data = await api(`/api/asset-ids?${params}`);
       if (seq !== _explorerFilterSeq) return; // stale
       _ExplorerImpl.setFilter(data.ids || []);
       _explorerFilterCount = Array.isArray(data.ids) ? data.ids.length : 0;
@@ -5614,41 +6073,11 @@ async function syncExplorerFilter() {
     } catch (e) {
       // Silently ignore — filter dim is a nice-to-have
     }
-    return;
-  }
-
-  // Build the same filter params the grid uses
-  const params = new URLSearchParams();
-  if (state.q && state.q.trim()) params.set("q", state.q.trim());
-  if (state.currentSource) params.set("source", state.currentSource);
-  if (state.currentBoard) params.set("board", state.currentBoard);
-  if (state.currentContentKind) params.set("content_kind", state.currentContentKind);
-  if (state.currentClassificationAxis) params.set("classification_axis", state.currentClassificationAxis);
-  if (state.currentClassificationValue) params.set("classification_value", state.currentClassificationValue);
-  const collectionIds = getCollectionFilterIds();
-  if (collectionIds.length) params.set("collection_id", collectionIds.join(","));
-  if (state.triageFilter === "needs-comment") {
-    params.set("needs_annotation", "1");
-    if (isOwner()) params.set("include_hidden", "1");
-  } else if (state.triageFilter === "hidden") {
-    params.set("triage_status", "hidden");
-    if (_shouldExplorerIncludeHiddenData()) params.set("include_hidden", "1");
-  } else if (state.triageFilter === "flagged") {
-    params.set("flagged", "1");
-    if (isOwner()) params.set("include_hidden", "1");
-  } else if (state.triageFilter) {
-    params.set("triage_status", state.triageFilter);
-  }
-
-  const seq = ++_explorerFilterSeq;
-  try {
-    const data = await api(`/api/asset-ids?${params}`);
-    if (seq !== _explorerFilterSeq) return; // stale
-    _ExplorerImpl.setFilter(data.ids || []);
-    _explorerFilterCount = Array.isArray(data.ids) ? data.ids.length : 0;
-    updateStats();
-  } catch (e) {
-    // Silently ignore — filter dim is a nice-to-have
+  } finally {
+    if (explorerActive) {
+      if (typeof _ExplorerImpl.resume === "function") _ExplorerImpl.resume();
+      await _endExplorerBusy();
+    }
   }
 }
 
@@ -6143,6 +6572,7 @@ refreshIngestTagPickers();
 
 wireStatusChips();
 wireSidebarToggle();
+wireSidebarResize();
 
 function isOwner() {
   return state.actor && state.actor.role === "owner";
@@ -6157,15 +6587,87 @@ function canUseTag() {
   return false;
 }
 
+function isReviewModeActive() {
+  return state.view === "review" || !!state.canvasReview;
+}
+
+function renderReviewSidebarSummary() {
+  const section = $("#dynamicSidebarSection");
+  const headingEl = $("#dynamicSidebarHeading");
+  const content = $("#dynamicSidebarContent");
+  if (!section || !headingEl || !content) return;
+  const scope = getReviewScopeInfo();
+  const modeLabel = state.view === "review" ? "One-by-one review" : "Grid review";
+  const hiddenMarkup = _buildReviewHiddenMarkup();
+  headingEl.textContent = "Review";
+  content.innerHTML = `
+    <div class="review-sidebar-summary">
+      <div class="review-sidebar-row"><span class="muted">Scope</span><strong>${escapeHtml(scope.label || "Entire library")}</strong></div>
+      <div class="review-sidebar-row"><span class="muted">Mode</span><strong>${escapeHtml(modeLabel)}</strong></div>
+      ${hiddenMarkup}
+      <div class="review-sidebar-note muted">Status filters apply to the current review scope. Normal browse folders are hidden while review is active.</div>
+    </div>
+  `;
+  section.hidden = false;
+}
+
+function _buildReviewHiddenMarkup() {
+  if (!isOwner() || !state.hiddenTree || !Number(state.hiddenTree.total || 0)) return "";
+  const sources = Array.isArray(state.hiddenTree.sources) ? state.hiddenTree.sources : [];
+  const rows = [
+    `<div class="review-hidden-row"><span class="review-hidden-label">All hidden</span><span class="tree-count">${Number(state.hiddenTree.total || 0)}</span></div>`,
+  ];
+  for (const src of sources) {
+    const sourceName = escapeHtml(sourceDisplayName(src.source) || String(src.source || ""));
+    rows.push(
+      `<div class="review-hidden-row review-hidden-source"><span class="review-hidden-label">${sourceName}</span><span class="tree-count">${Number(src.total || 0)}</span></div>`
+    );
+    for (const board of (src.boards || [])) {
+      rows.push(
+        `<div class="review-hidden-row review-hidden-board"><span class="review-hidden-label">${sourceName} / ${escapeHtml(String(board.board || ""))}</span><span class="tree-count">${Number(board.count || 0)}</span></div>`
+      );
+    }
+  }
+  return `
+    <div class="review-hidden-section">
+      <div class="review-sidebar-subtitle">Hidden</div>
+      <div class="review-hidden-list">
+        ${rows.join("")}
+      </div>
+    </div>
+  `;
+}
+
+function updateSidebarModeVisibility() {
+  const owner = isOwner();
+  const inReview = owner && isReviewModeActive();
+  const statusSection = $("#statusChips")?.closest(".sidebar-section");
+  const treeSection = $("#catalogTree")?.closest(".sidebar-section");
+  const collectionsSection = $("#collectionTree")?.closest(".sidebar-section");
+  const collectionActionsSection = $("#newCollection")?.closest(".sidebar-section");
+
+  if (statusSection) statusSection.hidden = !inReview;
+  if (treeSection) treeSection.hidden = inReview;
+  if (collectionsSection) collectionsSection.hidden = inReview;
+  if (collectionActionsSection) collectionActionsSection.hidden = inReview;
+
+  if (inReview) {
+    renderReviewSidebarSummary();
+  } else {
+    hideDynamicSidebar();
+  }
+}
+
 function applyRoleVisibility() {
   const owner = isOwner();
+  const role = String(state.actor?.role || "").trim().toLowerCase();
+  if (document.documentElement) {
+    if (role) document.documentElement.dataset.actorRole = role;
+    else delete document.documentElement.dataset.actorRole;
+  }
   if (state.allItemsTreeCollapsed === null) {
     state.allItemsTreeCollapsed = !!(state.actor && !owner);
   }
-
-  // Status chips: hide triage-specific chips for collaborators
-  const statusSection = $("#statusChips")?.closest(".sidebar-section");
-  if (statusSection) statusSection.hidden = !owner;
 
   // Review button, import buttons, admin link — owner-only
   const reviewBtnEl = $("#reviewBtn");
@@ -6199,10 +6701,11 @@ function applyRoleVisibility() {
   // Annotation question toggle — available to all (collaborators ask questions)
   // Notes textarea — available to all
 
-  // New collection button — available to all logged-in actors
+  // New collection button — owner-only
   const newCollBtn = $("#newCollection");
-  if (newCollBtn) newCollBtn.hidden = !state.actor;
+  if (newCollBtn) newCollBtn.hidden = !owner;
   updateReviewScopeChips();
+  updateSidebarModeVisibility();
 }
 
 async function checkFlaggedCount() {
@@ -6225,9 +6728,13 @@ async function checkFlaggedCount() {
     // Apply role-based visibility before rendering
     applyRoleVisibility();
 
-    await Promise.all([loadCollections(), loadFacets(), loadCatalogTree()]);
+    const collectionsPromise = loadCollections();
+    const facetsPromise = loadFacets();
+    const catalogTreePromise = loadCatalogTree();
+    await collectionsPromise;
     _applyCollaboratorCollectionsDefaultScope();
     await loadAssets();
+    await Promise.all([facetsPromise, catalogTreePromise]);
     const viewFromUrl = _readViewModeFromUrl();
     const hasContextLink = !!_contextLinkPayloadFromUrl();
     let preferredView = viewFromUrl || _readViewModePref();

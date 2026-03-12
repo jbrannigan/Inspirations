@@ -61,10 +61,40 @@ def _ensure_columns(db: Db, table: str, columns: dict[str, str]) -> None:
 
 _IMAGE_REF_RE = re.compile(r"\.(jpg|jpeg|png|webp|gif|bmp|svg)(?:\?.*)?$", re.IGNORECASE)
 _SCAN_AUTOGEN_TITLE_RE = re.compile(r"\s-\sdoc\s+\d+(?:\s+p\d+)?\s*$", re.IGNORECASE)
+_CB_DESCRIPTION_PREFIX = "AI-derived representative set from high-confidence descriptions/tagging."
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def infer_collection_provenance(name: str) -> tuple[str, str | None, str | None]:
+    text = (name or "").strip()
+    lower = text.lower()
+    if lower == "hidden":
+        return ("system_hidden", "system", "System collection for globally hidden items.")
+    if lower.startswith("review:"):
+        return ("workflow_review", "workflow", "Workflow review collection created during curation and cleanup.")
+    if lower.startswith("cohort:"):
+        return ("workflow_cohort", "workflow", "Workflow cohort collection created to review or track a specific subset.")
+    if lower.startswith("pins:"):
+        return ("source_mirror", "source_import", "Mirrored source board collection.")
+    if lower.startswith("cb:"):
+        return (
+            "ai_derived_representative",
+            "claude_code_session",
+            "AI-derived representative set from high-confidence descriptions/tagging. Not a human-curated final selection.",
+        )
+    return ("human_curated", "human", None)
+
+
+def _normalize_cb_description(description: str) -> str:
+    text = (description or "").strip()
+    if not text:
+        return _CB_DESCRIPTION_PREFIX
+    if text.startswith(_CB_DESCRIPTION_PREFIX):
+        return text
+    return f"{_CB_DESCRIPTION_PREFIX} {text}"
 
 
 def _looks_like_image_ref(value: str) -> bool:
@@ -284,6 +314,68 @@ def _backfill_title_field_provenance(db: Db) -> None:
         )
 
 
+def _backfill_collection_metadata(db: Db) -> None:
+    rows = db.query(
+        """
+        select id, name, description,
+               coalesce(provenance_kind, '') as provenance_kind,
+               coalesce(provenance_note, '') as provenance_note,
+               coalesce(curator, '') as curator
+        from collections
+        """
+    )
+    updates: list[tuple[str | None, str | None, str | None, str | None, str]] = []
+    for row in rows:
+        name = str(row["name"] or "")
+        current_kind = str(row["provenance_kind"] or "").strip()
+        current_note = str(row["provenance_note"] or "").strip()
+        current_curator = str(row["curator"] or "").strip()
+        current_description = str(row["description"] or "").strip()
+        inferred_kind, inferred_curator, inferred_note = infer_collection_provenance(name)
+
+        special_named = (
+            name.strip().lower() == "hidden"
+            or name.lower().startswith("review:")
+            or name.lower().startswith("cohort:")
+            or name.lower().startswith("pins:")
+            or name.lower().startswith("cb:")
+        )
+
+        next_kind = inferred_kind if (special_named or not current_kind) else current_kind
+        next_curator = (inferred_curator or "") if (special_named or not current_curator) else current_curator
+        next_note = (inferred_note or "") if (special_named or (not current_note and inferred_note)) else current_note
+        next_description = _normalize_cb_description(current_description) if name.lower().startswith("cb:") else current_description
+
+        if (
+            next_kind != current_kind
+            or next_curator != current_curator
+            or next_note != current_note
+            or next_description != current_description
+        ):
+            updates.append(
+                (
+                    next_kind or None,
+                    next_note or None,
+                    next_curator or None,
+                    next_description or None,
+                    str(row["id"] or ""),
+                )
+            )
+
+    if updates:
+        db.executemany(
+            """
+            update collections
+            set provenance_kind=?,
+                provenance_note=?,
+                curator=?,
+                description=?
+            where id=?
+            """,
+            updates,
+        )
+
+
 def ensure_schema(db: Db) -> None:
     db.exec(
         """
@@ -370,9 +462,13 @@ def ensure_schema(db: Db) -> None:
         {
             "hidden": "integer default 0",
             "hidden_at": "text",
+            "provenance_kind": "text",
+            "provenance_note": "text",
+            "curator": "text",
         },
     )
     db.exec("create index if not exists ix_collections_hidden on collections(hidden);")
+    db.exec("create index if not exists ix_collections_provenance_kind on collections(provenance_kind);")
     db.exec(
         """
         create table if not exists collection_items (
@@ -809,6 +905,9 @@ def ensure_schema(db: Db) -> None:
           meta_description text,
           og_description text,
           text_excerpt text,
+          hero_image_url text,
+          hero_image_alt text,
+          hero_text_excerpt text,
           content_type text,
           http_status integer,
           redirect_count integer not null default 0,
@@ -839,6 +938,15 @@ def ensure_schema(db: Db) -> None:
         create index if not exists ix_asset_source_link_enrichment_status
         on asset_source_link_enrichment(fetch_status);
         """
+    )
+    _ensure_columns(
+        db,
+        "asset_source_link_enrichment",
+        {
+            "hero_image_url": "text",
+            "hero_image_alt": "text",
+            "hero_text_excerpt": "text",
+        },
     )
 
     db.exec(
@@ -880,3 +988,4 @@ def ensure_schema(db: Db) -> None:
 
     _backfill_assets_metadata(db)
     _backfill_title_field_provenance(db)
+    _backfill_collection_metadata(db)

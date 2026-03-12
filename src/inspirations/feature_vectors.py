@@ -445,7 +445,11 @@ def _apply_text(vec: list[float], text: str, weight: float = 0.3) -> None:
             _set_dim(vec, dim_name, weight)
 
 
-def _apply_high_df_idf(vectors: list[list[float]], threshold_ratio: float = 0.5) -> dict[str, float]:
+def _apply_high_df_idf(
+    vectors: list[list[float]],
+    dim_labels: list[str] | tuple[str, ...] | None = None,
+    threshold_ratio: float = 0.5,
+) -> dict[str, float]:
     """Downweight dimensions that appear in most items using log(N / df)."""
     if not vectors:
         return {}
@@ -453,6 +457,9 @@ def _apply_high_df_idf(vectors: list[list[float]], threshold_ratio: float = 0.5)
     d = len(vectors[0]) if vectors[0] else 0
     if n <= 1 or d == 0:
         return {}
+    labels = list(dim_labels or ALL_DIMS)
+    if len(labels) < d:
+        labels = labels + [f"dim_{i}" for i in range(len(labels), d)]
 
     dim_counts = [0] * d
     for vec in vectors:
@@ -474,7 +481,7 @@ def _apply_high_df_idf(vectors: list[list[float]], threshold_ratio: float = 0.5)
         for vec in vectors:
             if vec[i] > 0:
                 vec[i] *= scale
-        applied[ALL_DIMS[i]] = scale
+        applied[labels[i]] = scale
     return applied
 
 
@@ -918,7 +925,7 @@ def build_feature_vectors(
         })
 
     # 5. IDF downweighting for high-frequency dimensions
-    _apply_high_df_idf(vectors, threshold_ratio=0.5)
+    _apply_high_df_idf(vectors, dim_labels=explorer_dims, threshold_ratio=0.5)
 
     # Build sparse vectors for transport (only non-zero entries)
     for i, meta in enumerate(node_meta):

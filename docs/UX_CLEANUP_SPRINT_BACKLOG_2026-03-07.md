@@ -15,6 +15,27 @@ Important rule:
 - UX work decides how the app should support browsing, review, and reporting workflows
 
 ## User Intent
+- Collections/share workflow needs its own focused sprint: collaborator entry, collection-scoped sharing, share-link UX, and collection tree defaults should be treated as one coherent workflow rather than piecemeal fixes.
+- Pre-share hardening pass: Inspirations server on port 8001 needs durable local process management, reliable restart behavior, and crash/shutdown logging before collaborator sharing is treated as stable.
+- 3DE `Subject Type` needs review as both UX and taxonomy: refine the `Subject Type` enumeration itself, clarify the meaning of each value, and evaluate whether the current values are actually useful for exploration and understanding. Turning on all subject-type attractors is hard to interpret, which suggests the current enumeration may be too coarse, overloaded, or not semantically valuable enough for exploratory use.
+## Collaborator Modal Review Notes (2026-03-11)
+
+Jim review notes for collaborator-mode modal UX. These should be treated as direct UX requirements/input, not inferred assistant interpretation.
+
+- Sidebar/tree in collaborator mode is still confusing around out-of-context items, hidden behavior, and the `Browse more from Leslie's collection` entry. `Collection` is overloaded and post-click behavior is confusing.
+- Share bar should be graphically tightened. Prefer small icons in the upper right, aligned with common UX patterns.
+- Collaborator annotations should likely be simplified to questions only. The full annotation workflow is too heavy for collaborators. If they ask a question and then email/message, that question should be included.
+- In the annotation box, `Enter` should close the box; `Shift+Enter` should insert a line break.
+- Add a visible section title for the labels/tags box in the modal UX. `Labels` is acceptable; the core issue is that the box currently has no visible name.
+- Rework print/share. Current print target is weak. Likely direction: formatted share/export using the OS/browser native share pattern, eliminate the separate share bar, and likely replace `Copy ID` with `Copy Link` near the title. This should recover modal header space.
+- Email should support a default address or otherwise defer to the OS/browser-native sharing pattern.
+- Deleting questions should require confirmation.
+- Printed/formatted share should likely include annotations/questions.
+- Questions should be numbered, even if questions stop being freeform annotations.
+- Add next/previous browse buttons in the modal with a clear exit path; current `X` close behavior is overloaded.
+- Reduce the visual budget of the tags box. One or two lines is enough after curation, since `more...` already exists.
+- The general `Notes` box could move higher in the modal and remain read-only for collaborators; collaborators should ask questions rather than edit notes.
+
 
 Jim said:
 
@@ -53,6 +74,14 @@ Jim's direction:
 - harmonize the 3D Explorer panel with the sidebar and with grid view
 - the easiest path may be to give grid view the control panel as well
 - the control panel comes after the revised classification work
+- after the tree reorganization, the deeper harmonization problem is smaller:
+  - the sidebar tree should set scope
+  - 3D Explorer should explore that scope
+  - the 3D chips are attractors, not a second copy of the tree
+- 3D Explorer should not normally be used as a review mode
+- however, there is a legitimate workflow where Jim may open 3DE from an odd item or outlier in grid view to understand nearby items/context
+- this means 3DE is still an investigative tool adjacent to review, even if it is not the main review surface
+- active scope/context in 3DE should remain clear
 
 ### 4. Current product sequence
 
@@ -79,6 +108,8 @@ Jim's direction:
 - one-by-one review and the modal should be one and the same
 - the one-by-one-specific additions should just be added onto the modal
 - there should be one review workflow, not two separate ones
+- once already in modal context, there may be little reason to make the user switch modes just to review
+- `in modal -> in review` is a plausible direction for the unified workflow
 
 ### 7. Rating / reaction consistency
 
@@ -112,6 +143,37 @@ Jim's direction:
 - if Jim goes back after making a decision, the typed `Reason (optional)` text should still be there in the UX
 - `Irrelevant` should not feel like two different actions at once
 - if there is a dedicated `Mark irrelevant` button, the dropdown should not force Jim to think about whether he also needs to choose `Irrelevant` there
+- in the non-review version of the modal, the `Copy ID` button formatting is wrong and needs UX cleanup
+- the modal has grown complicated / "exploded a bit"
+- Jim is okay with the current complexity in owner mode for now, but it remains part of the UX cleanup work
+- a non-owner/collaborator view of the modal needs explicit review during the UX sprint
+
+### 11. Collections cleanup and trust assignment
+
+Jim's direction:
+
+- make a pass at cleaning up `Collections` as a first-class UX/workflow problem
+- correct the trust assignment for collections whose names begin with `CB:`
+- `CB:` collections were not human-curated selections by Leslie or Jim
+- `CB:` collections were representative sets created from high-confidence descriptions/tagging
+- do not present `CB:` collections as the highest-intent or most-refined human choices
+- the app needs a clearer distinction between:
+  - human-created collections
+  - mirrored source collections/boards
+  - AI-derived representative collections
+- examples of affected collections include:
+  - `CB: Kitchen`
+  - `CB: Master Bath`
+  - `CB: French Colonial Style`
+  - `CB: Porches & Outdoor`
+
+Implication for the UX sprint:
+
+- collection provenance/trust needs to be visible enough that users do not mistake AI-derived collections for deliberate human curation
+- collection labeling, grouping, or metadata display should make that distinction explicit
+- raw `Cohort:` collections need a clearer distinction from cleaned working subsets and excluded provenance subsets; the architect-meeting batch should not read like three equivalent working collections
+- `Other / Non-Home-Design` should move out of normal browse mode and into a hidden/archive or clearly review-only surface for owners
+- 3DE control panel should only show relevant chips/pills based at minimum on current track, rather than exposing every attractor category in every scope.
 
 ## Assistant Suggestions
 

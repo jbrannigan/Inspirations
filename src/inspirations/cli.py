@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 
 import shutil
@@ -19,6 +18,7 @@ from .ai import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
     apply_reel_recommendations,
     download_facebook_reels,
+    get_gemini_api_key,
     run_ai_error_triage,
     run_ai_labeler,
     run_gemini_text_embedder,
@@ -35,7 +35,7 @@ from .curation import (
 )
 from .export import export_html_gallery, export_static_share_portal
 from .server import run_server
-from .source_link_enrichment import run_source_link_enrichment
+from .source_link_enrichment import default_auth_browser_profile_dir, run_source_link_enrichment
 from .source_link_qc import run_source_link_qc
 from .store import create_collection, add_items_to_collection
 from .storage import backfill_previews_from_source_ref
@@ -398,9 +398,12 @@ def cmd_ai_embed(args: argparse.Namespace) -> int:
     provider = (args.provider or "gemini").strip().lower()
     if provider != "gemini":
         raise ValueError("Unsupported provider for embeddings. Use provider=gemini.")
-    api_key = args.api_key or os.environ.get("GEMINI_API_KEY") or ""
+    api_key = get_gemini_api_key(args.api_key)
     if not api_key:
-        raise ValueError("Gemini API key required (set --api-key or GEMINI_API_KEY)")
+        raise ValueError(
+            "Gemini API key required (set --api-key, GEMINI_API_KEY, "
+            "or macOS Keychain service inspirations_gemini_api_key)"
+        )
     db_path = _p(args.db)
     with Db(db_path) as db:
         ensure_schema(db)
@@ -417,9 +420,12 @@ def cmd_ai_embed(args: argparse.Namespace) -> int:
 
 
 def cmd_ai_similar(args: argparse.Namespace) -> int:
-    api_key = args.api_key or os.environ.get("GEMINI_API_KEY") or ""
+    api_key = get_gemini_api_key(args.api_key)
     if not api_key:
-        raise ValueError("Gemini API key required (set --api-key or GEMINI_API_KEY)")
+        raise ValueError(
+            "Gemini API key required (set --api-key, GEMINI_API_KEY, "
+            "or macOS Keychain service inspirations_gemini_api_key)"
+        )
     db_path = _p(args.db)
     with Db(db_path) as db:
         ensure_schema(db)
@@ -556,7 +562,7 @@ def cmd_ai_reels(args: argparse.Namespace) -> int:
     """Download, analyze, and apply recommendations for Facebook reels."""
     db_path = _p(args.db)
     store_dir = _p(args.store)
-    api_key = args.api_key or os.environ.get("GEMINI_API_KEY") or ""
+    api_key = get_gemini_api_key(args.api_key)
     do_download = not args.analyze_only and not args.apply_only
     do_analyze = not args.download_only and not args.apply_only
     do_apply = not args.download_only and not args.analyze_only
@@ -577,7 +583,10 @@ def cmd_ai_reels(args: argparse.Namespace) -> int:
 
         if do_analyze:
             if not api_key:
-                raise ValueError("Gemini API key required for analysis (set --api-key or GEMINI_API_KEY)")
+                raise ValueError(
+                    "Gemini API key required for analysis (set --api-key, GEMINI_API_KEY, "
+                    "or macOS Keychain service inspirations_gemini_api_key)"
+                )
             print("=== Phase 2: Analyzing reels with Gemini ===")
             analyze_report = run_gemini_video_labeler(
                 db,
@@ -741,6 +750,8 @@ def cmd_curation_axis_infer_v2(args: argparse.Namespace) -> int:
 
 def cmd_curation_enrich_source_links_v2(args: argparse.Namespace) -> int:
     db_path = _p(args.db)
+    profile_dir_arg = str(getattr(args, "browser_profile_dir", "") or "").strip()
+    browser_profile_dir = Path(profile_dir_arg).expanduser() if profile_dir_arg else default_auth_browser_profile_dir()
     with Db(db_path) as db:
         ensure_schema(db)
         report = run_source_link_enrichment(
@@ -748,6 +759,7 @@ def cmd_curation_enrich_source_links_v2(args: argparse.Namespace) -> int:
             track_run_id=args.track_run_id,
             only_ambiguous=bool(args.only_ambiguous),
             source=args.source,
+            collection_id=args.collection_id,
             limit=args.limit,
             offset=int(args.offset),
             notes=args.notes,
@@ -758,7 +770,10 @@ def cmd_curation_enrich_source_links_v2(args: argparse.Namespace) -> int:
             include_platform_hosts=bool(args.include_platform_hosts),
             browser_platform_hosts=bool(args.browser_platform_hosts),
             promote_best_source_url=bool(args.promote_best_source_url),
+            store_dir=_p(args.store),
+            promote_hero_image=bool(args.promote_hero_image),
             progress_every=int(args.progress_every),
+            browser_profile_dir=browser_profile_dir,
         )
     print(json.dumps(report, indent=2))
     return 0
@@ -1297,6 +1312,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Only fetch source pages for ambiguous items from the chosen track run",
     )
     curation_enrich_source_links_v2.add_argument("--source", default="", help="Optional source filter (comma-separated)")
+    curation_enrich_source_links_v2.add_argument(
+        "--collection-id",
+        default="",
+        help="Optional collection scope; only enrich source links for assets in this collection",
+    )
     curation_enrich_source_links_v2.add_argument("--limit", type=int, default=0, help="Limit candidates (0 = no limit)")
     curation_enrich_source_links_v2.add_argument("--offset", type=int, default=0, help="Skip this many candidates before fetching")
     curation_enrich_source_links_v2.add_argument("--timeout-s", type=float, default=8.0, help="Per-request timeout in seconds")
@@ -1318,9 +1338,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="For Pinterest/Facebook wrapper URLs, use a Playwright browser session to capture page title and visible text evidence",
     )
     curation_enrich_source_links_v2.add_argument(
+        "--browser-profile-dir",
+        default="",
+        help="Optional persistent Playwright profile directory for authenticated wrapper capture (defaults to data/playwright_profiles/media_repair_auth)",
+    )
+    curation_enrich_source_links_v2.add_argument(
         "--promote-best-source-url",
         action="store_true",
         help="Promote a fetched non-wrapper canonical/final URL into assets.source_url when it is better than the current working link",
+    )
+    curation_enrich_source_links_v2.add_argument(
+        "--promote-hero-image",
+        action="store_true",
+        help="When browser wrapper enrichment finds a likely hero image near the top of the destination page, download it into store/originals, generate a thumb, and promote it into the asset media",
     )
     curation_enrich_source_links_v2.add_argument(
         "--progress-every",

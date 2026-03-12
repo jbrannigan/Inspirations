@@ -162,6 +162,43 @@ class TestDbSchema(unittest.TestCase):
             self.assertEqual(str(rows[1]["origin_ref"]), "asset_ai:ai1")
             self.assertEqual(int(rows[1]["is_current"]), 1)
 
+    def test_collection_provenance_backfills_cb_collection(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    """
+                    insert into collections (id, name, description, created_at, updated_at)
+                    values (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "cb1",
+                        "CB: Kitchen",
+                        "Kitchen layouts, cabinets, countertops, appliances.",
+                        "2026-03-10T00:00:00+00:00",
+                        "2026-03-10T00:00:00+00:00",
+                    ),
+                )
+
+                ensure_schema(db)
+                row = db.query(
+                    """
+                    select provenance_kind, provenance_note, curator, description
+                    from collections
+                    where id='cb1'
+                    """
+                )[0]
+
+            self.assertEqual(str(row["provenance_kind"]), "ai_derived_representative")
+            self.assertEqual(str(row["curator"]), "claude_code_session")
+            self.assertIn("Not a human-curated final selection", str(row["provenance_note"]))
+            self.assertTrue(
+                str(row["description"]).startswith(
+                    "AI-derived representative set from high-confidence descriptions/tagging."
+                )
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

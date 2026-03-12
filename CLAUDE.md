@@ -136,10 +136,11 @@ This project uses a layered classification system. Understanding the trust hiera
 
 **Trust hierarchy** (highest → lowest priority):
 
-1. **Collections** — Human-curated groupings. `CB:` prefix = builder collections curated specifically for the house build (e.g., "CB: Kitchen", "CB: Master Bath", "CB: French Colonial Style"). `pins:` prefix = mirrored Pinterest boards. These represent the highest intent signal.
-2. **Source boards** (`assets.board`) — Leslie's personal curation on Pinterest, Facebook, and Houzz. She saved items to specific boards intentionally. Board assignments always take precedence over AI tags when there is a conflict.
-3. **AI-assigned rooms/styles** (`asset_ai.json` → `rooms`, `styles`) — Gemini image analysis. Good for enrichment and cross-cutting dimensions, but secondary to human curation.
-4. **AI labels** (`asset_labels` table) — Flattened tags from Gemini. Useful for search, filtering, and the detail view label chips. Lowest priority for categorization decisions.
+1. **Source boards** (`assets.board`) — Leslie's personal curation on Pinterest, Facebook, and Houzz. She saved items to specific boards intentionally. Board assignments always take precedence over AI tags when there is a conflict.
+2. **Human review / triage decisions** — Jim and Leslie's decisions in the app are durable intent signals and should not be overridden casually.
+3. **Collections** — `pins:` prefix = mirrored source boards. `CB:` prefix = AI-derived representative collections created from high-confidence descriptions/tagging for creative-brief themes. They are useful starting hypotheses, but they are not human-curated highest-intent selections.
+4. **AI-assigned rooms/styles** (`asset_ai.json` → `rooms`, `styles`) — Gemini image analysis. Good for enrichment and cross-cutting dimensions, but secondary to human curation.
+5. **AI labels** (`asset_labels` table) — Flattened tags from Gemini. Useful for search, filtering, and the detail view label chips. Lowest priority for categorization decisions.
 
 **Why Leslie saved things** — two motivations:
 1. *Stylistically attractive* — caught her eye for design inspiration

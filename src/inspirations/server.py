@@ -28,9 +28,12 @@ from .store import (
     add_items_to_collection,
     bulk_set_flag,
     bulk_set_triage_status,
+    collection_provenance_badge,
+    collection_provenance_label,
     create_actor,
     create_annotation,
     create_collection,
+    decorate_collection_record,
     delete_actor,
     delete_annotation,
     delete_assets,
@@ -65,6 +68,12 @@ from .store import (
 from .title_workflow import TitleConflictError, TitleNotFoundError, apply_working_title, enrich_assets_with_title_info
 from .explorer_layout import compute_layout
 from .feature_vectors import build_feature_vectors
+from .source_link_enrichment import (
+    capture_source_link_candidate_for_asset,
+    default_auth_browser_profile_dir,
+    latest_source_link_enrichment_for_asset,
+    promote_latest_hero_image_for_asset,
+)
 from .thumbnails import generate_thumbnails
 
 
@@ -86,6 +95,12 @@ REVIEW_FOCUS_OPTIONS = (
     "",
     "landscaping",
     "inspection",
+)
+MEDIA_RELIABILITY_OPTIONS = (
+    "",
+    "trust_title_source",
+    "thumbnail_placeholder",
+    "thumbnail_mismatch",
 )
 
 # ── API key helpers ──────────────────────────────────────────────────────────────
@@ -251,6 +266,10 @@ def _is_non_home_catalog_file(rel_path: str) -> bool:
     return rel == "other" or rel.startswith("other/")
 
 
+def _collaborator_excluded_tracks_csv() -> str:
+    return "home_maintenance_diy,irrelevant"
+
+
 def _is_non_home_tree_node(node: dict) -> bool:
     if not isinstance(node, dict) or node.get("type") != "dimension":
         return False
@@ -335,10 +354,10 @@ class ApiHandler(BaseHTTPRequestHandler):
             actor = _resolve_actor(self)
             include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
             category = q.get("category", [""])[0]
-            # Collaborator default browse scope is home-design; collection scope
-            # remains unchanged because collection_id is explicit.
-            if _is_collaborator(actor) and not (q.get("collection_id", [""])[0] or "").strip():
+            exclude_tracks = ""
+            if _is_collaborator(actor):
                 category = "home_design"
+                exclude_tracks = _collaborator_excluded_tracks_csv()
             page_limit = int(q.get("limit", [str(DEFAULT_ASSETS_PAGE_SIZE)])[0])
             assets = self._with_db(
                 list_assets,
@@ -360,6 +379,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 include_hidden=include_hidden,
                 classification_axis=q.get("classification_axis", [""])[0],
                 classification_value=q.get("classification_value", [""])[0],
+                exclude_tracks=exclude_tracks,
                 limit=page_limit + 1,
                 offset=int(q.get("offset", ["0"])[0]),
             )
@@ -397,8 +417,10 @@ class ApiHandler(BaseHTTPRequestHandler):
             actor = _resolve_actor(self)
             include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
             category = q.get("category", [""])[0]
-            if _is_collaborator(actor) and not (q.get("collection_id", [""])[0] or "").strip():
+            exclude_tracks = ""
+            if _is_collaborator(actor):
                 category = "home_design"
+                exclude_tracks = _collaborator_excluded_tracks_csv()
             ids = self._with_db(
                 list_asset_ids,
                 q=q.get("q", [""])[0],
@@ -412,6 +434,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 include_hidden=include_hidden,
                 classification_axis=q.get("classification_axis", [""])[0],
                 classification_value=q.get("classification_value", [""])[0],
+                exclude_tracks=exclude_tracks,
             )
             return _send(self, 200, {"ids": ids})
 
@@ -578,7 +601,11 @@ class ApiHandler(BaseHTTPRequestHandler):
                 tree = []
             # Adjust counts to exclude hidden items
             try:
-                self._adjust_tree_counts_for_hidden(tree)
+                self._adjust_tree_counts_for_hidden(
+                    tree,
+                    home_only=_is_collaborator(actor),
+                    exclude_tracks=_collaborator_excluded_tracks_csv() if _is_collaborator(actor) else "",
+                )
             except Exception:
                 pass
             if _is_collaborator(actor):
@@ -609,12 +636,15 @@ class ApiHandler(BaseHTTPRequestHandler):
             limit = int(q.get("limit", ["500"])[0])
             offset = int(q.get("offset", ["0"])[0])
             category = q.get("category", [""])[0]
+            exclude_tracks = ""
             if _is_collaborator(actor):
                 category = "home_design"
+                exclude_tracks = _collaborator_excluded_tracks_csv()
             assets = self._with_db(
                 list_assets,
                 ids=ids_str,
                 category=category,
+                exclude_tracks=exclude_tracks,
                 include_hidden=include_hidden,
                 limit=limit + 1,
                 offset=offset,
@@ -650,12 +680,15 @@ class ApiHandler(BaseHTTPRequestHandler):
             if not short_ids:
                 return _send(self, 200, {"ids": []})
             category = q.get("category", [""])[0]
+            exclude_tracks = ""
             if _is_collaborator(actor):
                 category = "home_design"
+                exclude_tracks = _collaborator_excluded_tracks_csv()
             ids = self._with_db(
                 list_asset_ids,
                 ids=",".join(short_ids),
                 category=category,
+                exclude_tracks=exclude_tracks,
                 include_hidden=include_hidden,
             )
             return _send(self, 200, {"ids": ids})
@@ -1345,10 +1378,13 @@ class ApiHandler(BaseHTTPRequestHandler):
             track = str(body.get("track") or "").strip()
             note = str(body.get("note") or "").strip()
             review_focus = str(body.get("review_focus") or body.get("focus") or "").strip()
+            media_reliability = str(body.get("media_reliability") or body.get("media_issue") or "").strip()
             if not clear_override and track not in CLASSIFICATION_TRACK_OPTIONS:
                 return _send(self, 400, {"error": "track must be one of style_product_decor, construction_concern, home_maintenance_diy, irrelevant"})
             if review_focus not in REVIEW_FOCUS_OPTIONS:
                 return _send(self, 400, {"error": "review_focus must be one of landscaping, inspection, or blank"})
+            if media_reliability not in MEDIA_RELIABILITY_OPTIONS:
+                return _send(self, 400, {"error": "media_reliability must be one of trust_title_source, thumbnail_placeholder, thumbnail_mismatch, or blank"})
             try:
                 if clear_override:
                     updated_asset = self._with_db(
@@ -1362,14 +1398,54 @@ class ApiHandler(BaseHTTPRequestHandler):
                         track=track,
                         note=note,
                         review_focus=review_focus,
+                        media_reliability=media_reliability,
                         actor_name=str(actor.get("name") or "").strip() or "ui",
                     )
             except FileNotFoundError:
                 return _send(self, 404, {"error": "asset not found"})
             return _send(self, 200, {"ok": True, "asset": updated_asset})
 
+        m = re.match(r"^/api/assets/([^/]+)/source-link-candidate$", parsed.path)
+        if m:
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
+            asset_id = m.group(1)
+            action = str(body.get("action") or "capture").strip().lower()
+            browser = bool(body.get("browser", True))
+            notes = str(body.get("notes") or "").strip()
+            try:
+                if action == "promote":
+                    result = self._with_db(
+                        promote_latest_hero_image_for_asset,
+                        asset_id=asset_id,
+                        store_dir=Path(self.server.store_dir).resolve(),
+                        notes=notes,
+                    )
+                else:
+                    result = self._with_db(
+                        capture_source_link_candidate_for_asset,
+                        asset_id=asset_id,
+                        store_dir=Path(self.server.store_dir).resolve(),
+                        browser=browser,
+                        include_platform_hosts=True,
+                        promote_best_source_url=False,
+                        promote_hero_image=False,
+                        notes=notes,
+                        browser_profile_dir=default_auth_browser_profile_dir(),
+                    )
+                asset = self._with_db(self._get_asset_for_modal, asset_id=asset_id, include_hidden=True)
+            except FileNotFoundError:
+                return _send(self, 404, {"error": "asset not found"})
+            except ValueError as e:
+                return _send(self, 400, {"error": str(e)})
+            return _send(self, 200, {"ok": True, "result": result, "asset": asset})
+
         m = re.match(r"^/api/assets/([^/]+)$", parsed.path)
         if m:
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
             notes = body.get("notes") or ""
             self._with_db(update_asset_notes, asset_id=m.group(1), notes=notes)
             return _send(self, 200, {"ok": True})
@@ -1884,7 +1960,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 ensure_schema(db)
                 rows = db.query(
                     """
-                    select c.id, c.name,
+                    select c.id, c.name, c.description,
+                           c.provenance_kind, c.provenance_note, c.curator,
                            (
                              select count(*)
                              from collection_items ci
@@ -1913,16 +1990,22 @@ class ApiHandler(BaseHTTPRequestHandler):
                     "children": [],
                 }
                 for row in rows:
-                    cid = str(row["id"] or "")
+                    data = decorate_collection_record(dict(row))
+                    cid = str(data["id"] or "")
                     if not cid:
                         continue
                     collections_node["children"].append(
                         {
                             "id": f"collection:{cid}",
-                            "label": str(row["name"] or ""),
-                            "count": int(row["item_count"] or 0),
+                            "label": str(data["name"] or ""),
+                            "count": int(data.get("item_count") or 0),
                             "type": "collection",
                             "collection_id": cid,
+                            "description": str(data.get("description") or ""),
+                            "provenance_kind": str(data.get("provenance_kind") or ""),
+                            "provenance_label": collection_provenance_label(str(data.get("provenance_kind") or "")),
+                            "provenance_badge": collection_provenance_badge(str(data.get("provenance_kind") or "")),
+                            "provenance_note": str(data.get("provenance_note") or ""),
                         }
                     )
                 if collections_node["children"]:
@@ -2111,7 +2194,13 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         return sections
 
-    def _adjust_tree_counts_for_hidden(self, tree: list[dict]) -> None:
+    def _adjust_tree_counts_for_hidden(
+        self,
+        tree: list[dict],
+        *,
+        home_only: bool = False,
+        exclude_tracks: str = "",
+    ) -> None:
         """Adjust browse-tree counts so they reflect only visible items.
 
         CONTRACT: every tree node with count > 0 must deliver items when
@@ -2121,23 +2210,88 @@ class ApiHandler(BaseHTTPRequestHandler):
         """
         with Db(self.server.db_path) as db:
             ensure_schema(db)
+            hidden_collection_id = db.query_value("select id from collections where lower(name)='hidden' limit 1")
+            visible_clauses = ["(a.triage_status is null or a.triage_status != 'hidden')"]
+            visible_params: list[object] = []
+            join_params: list[object] = []
+            if hidden_collection_id:
+                visible_clauses.append("a.id not in (select asset_id from collection_items where collection_id = ?)")
+                visible_params.append(hidden_collection_id)
+            if home_only:
+                visible_clauses.append("coalesce(a.category, 'home_design') = 'home_design'")
+
+            exclude_track_values = [s.strip() for s in str(exclude_tracks or "").split(",") if s.strip()]
+            joins: list[str] = []
+            if exclude_track_values:
+                track_run_id = db.query_value(
+                    "select id from classification_runs where run_type='track_gate' order by created_at desc limit 1"
+                )
+                if track_run_id:
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    joins.append("left join asset_track_assessments ata on ata.asset_id = a.id and ata.run_id = ?")
+                    join_params.append(str(track_run_id))
+                    joins.append(
+                        """
+                        left join (
+                          select ao.asset_id, ao.axis_value
+                          from asset_overrides ao
+                          join (
+                            select asset_id, max(created_at) as max_created_at
+                            from asset_overrides
+                            where axis_name='track'
+                              and operation='set'
+                              and (expires_at is null or expires_at > ?)
+                            group by asset_id
+                          ) latest
+                            on latest.asset_id = ao.asset_id
+                           and latest.max_created_at = ao.created_at
+                          where ao.axis_name='track'
+                            and ao.operation='set'
+                            and (ao.expires_at is null or ao.expires_at > ?)
+                        ) ato on ato.asset_id = a.id
+                        """
+                    )
+                    join_params.extend([now_iso, now_iso])
+                    visible_clauses.append(
+                        "coalesce(ato.axis_value, ata.track, '') not in (%s)"
+                        % ",".join(["?"] * len(exclude_track_values))
+                    )
+                    visible_params.extend(exclude_track_values)
+            where_sql = " where " + " and ".join(visible_clauses)
+            join_sql = ("\n                " + "\n                ".join(joins)) if joins else ""
+            query_params = tuple([*join_params, *visible_params])
             # Visible (non-hidden) counts per source
             src_rows = db.query(
-                "select lower(source) as src, count(*) as n "
-                "from assets where triage_status is null or triage_status != 'hidden' "
-                "group by 1"
+                f"""
+                select lower(a.source) as src, count(*) as n
+                from assets a
+                {join_sql}
+                {where_sql}
+                group by 1
+                """,
+                query_params,
             )
             # Visible counts per source+board (for boards that exist in DB)
             board_rows = db.query(
-                "select lower(source) as src, lower(coalesce(board,'')) as brd, count(*) as n "
-                "from assets where triage_status is null or triage_status != 'hidden' "
-                "group by 1, 2"
+                f"""
+                select lower(a.source) as src, lower(coalesce(a.board,'')) as brd, count(*) as n
+                from assets a
+                {join_sql}
+                {where_sql}
+                group by 1, 2
+                """,
+                query_params,
             )
             # Visible counts per source+content_kind (for subtype browsing under Clip)
             kind_rows = db.query(
-                "select lower(source) as src, lower(coalesce(content_kind,'')) as kind, count(*) as n "
-                "from assets where triage_status is null or triage_status != 'hidden' "
-                "group by 1, 2"
+                f"""
+                select lower(a.source) as src, lower(coalesce(a.content_kind,'')) as kind, count(*) as n
+                from assets a
+                {join_sql}
+                {where_sql}
+                group by 1, 2
+                """,
+                query_params,
             )
         visible_by_source: dict[str, int] = {r["src"]: r["n"] for r in src_rows}
         visible_by_board: dict[tuple[str, str], int] = {
@@ -2436,6 +2590,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         asset = dict(rows[0])
         enrich_assets_with_title_info(db, [asset])
         asset["classification_review"] = self._classification_review_payload(db, asset_id=asset_id)
+        asset["source_link_candidate"] = self._source_link_candidate_payload(db, asset_id=asset_id)
         if include_hidden:
             return asset
         if str(asset.get("triage_status") or "").strip().lower() == "hidden":
@@ -2500,10 +2655,24 @@ class ApiHandler(BaseHTTPRequestHandler):
             """,
             (asset_id, now_iso),
         )
+        media_row = db.query(
+            """
+            select axis_value, actor, created_at
+            from asset_overrides
+            where asset_id=?
+              and axis_name='media_reliability'
+              and operation='set'
+              and (expires_at is null or expires_at > ?)
+            order by created_at desc, id desc
+            limit 1
+            """,
+            (asset_id, now_iso),
+        )
         current = dict(track_row[0]) if track_row else {}
         source_qc = dict(source_qc_row[0]) if source_qc_row else {}
         override = dict(override_row[0]) if override_row else {}
         focus = dict(focus_row[0]) if focus_row else {}
+        media = dict(media_row[0]) if media_row else {}
         return {
             "current_track": str(current.get("track") or "").strip(),
             "current_confidence": current.get("confidence"),
@@ -2525,6 +2694,28 @@ class ApiHandler(BaseHTTPRequestHandler):
             "active_review_focus": str(focus.get("axis_value") or "").strip(),
             "active_review_focus_actor": str(focus.get("actor") or "").strip(),
             "active_review_focus_created_at": str(focus.get("created_at") or "").strip(),
+            "active_media_reliability": str(media.get("axis_value") or "").strip(),
+            "active_media_reliability_actor": str(media.get("actor") or "").strip(),
+            "active_media_reliability_created_at": str(media.get("created_at") or "").strip(),
+        }
+
+    def _source_link_candidate_payload(self, db: Db, *, asset_id: str) -> dict[str, object]:
+        row = latest_source_link_enrichment_for_asset(db, asset_id=asset_id)
+        if not row:
+            return {}
+        return {
+            "run_id": str(row.get("run_id") or "").strip(),
+            "input_url": str(row.get("input_url") or "").strip(),
+            "final_url": str(row.get("final_url") or "").strip(),
+            "final_domain": str(row.get("final_domain") or "").strip(),
+            "page_title": str(row.get("page_title") or "").strip(),
+            "text_excerpt": str(row.get("text_excerpt") or "").strip(),
+            "hero_image_url": str(row.get("hero_image_url") or "").strip(),
+            "hero_image_alt": str(row.get("hero_image_alt") or "").strip(),
+            "hero_text_excerpt": str(row.get("hero_text_excerpt") or "").strip(),
+            "fetch_status": str(row.get("fetch_status") or "").strip(),
+            "error": str(row.get("error") or "").strip(),
+            "created_at": str(row.get("created_at") or "").strip(),
         }
 
     def _apply_modal_classification_review(
@@ -2535,6 +2726,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         track: str,
         note: str,
         review_focus: str,
+        media_reliability: str,
         actor_name: str,
     ) -> dict:
         existing = db.query_value("select 1 from assets where id=? limit 1", (asset_id,))
@@ -2564,6 +2756,17 @@ class ApiHandler(BaseHTTPRequestHandler):
             set expires_at=?
             where asset_id=?
               and axis_name='review_focus'
+              and operation='set'
+              and expires_at is null
+            """,
+            (created_at, asset_id),
+        )
+        db.exec(
+            """
+            update asset_overrides
+            set expires_at=?
+            where asset_id=?
+              and axis_name='media_reliability'
               and operation='set'
               and expires_at is null
             """,
@@ -2608,6 +2811,26 @@ class ApiHandler(BaseHTTPRequestHandler):
                     None,
                 ),
             )
+        if media_reliability:
+            db.exec(
+                """
+                insert into asset_overrides
+                  (id, asset_id, track, axis_name, axis_value, operation, actor, note, created_at, expires_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    asset_id,
+                    track,
+                    "media_reliability",
+                    media_reliability,
+                    "set",
+                    actor_name,
+                    "",
+                    created_at,
+                    None,
+                ),
+            )
         asset = self._get_asset_for_modal(db, asset_id=asset_id, include_hidden=True)
         if not asset:
             raise FileNotFoundError("asset not found")
@@ -2640,6 +2863,17 @@ class ApiHandler(BaseHTTPRequestHandler):
             set expires_at=?
             where asset_id=?
               and axis_name='review_focus'
+              and operation='set'
+              and expires_at is null
+            """,
+            (cleared_at, asset_id),
+        )
+        db.exec(
+            """
+            update asset_overrides
+            set expires_at=?
+            where asset_id=?
+              and axis_name='media_reliability'
               and operation='set'
               and expires_at is null
             """,
