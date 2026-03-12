@@ -28,6 +28,12 @@ This checkpoint captures the collaborator-facing UX cleanup, adjacent 3DE contro
 
 ## Captured But Not Yet Implemented
 
+- Collections/share product rules established:
+  - every collection has explicit intent: `shared` or `working`
+  - every shared collection names a collaborator
+  - questions are always enabled for shared collections
+  - collaborators should not see working collections
+  - construction-track collections are working collections for now, not style-side share artifacts
 - Dedicated collections/share workflow sprint.
 - Collection-scoped share UI, even though `collection_id` links already work at the URL level.
 - Collaborator modal header/share redesign.

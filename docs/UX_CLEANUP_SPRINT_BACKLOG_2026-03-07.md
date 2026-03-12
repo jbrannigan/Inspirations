@@ -16,6 +16,12 @@ Important rule:
 
 ## User Intent
 - Collections/share workflow needs its own focused sprint: collaborator entry, collection-scoped sharing, share-link UX, and collection tree defaults should be treated as one coherent workflow rather than piecemeal fixes.
+- Collections intent model: every collection should have explicit intent, either `shared` or `working`.
+- Shared collections rule: every shared collection should name a collaborator at minimum. A separate formal role field may be optional later, but a named person is required.
+- Shared collections rule: questions are always enabled. Sharing a collection implies the collaborator question workflow.
+- Collaborator visibility rule: collaborators should not see `working` collections.
+- Construction collections rule: for now, collections on the construction track are `working` collections only, used for curation, review, and improved categorization rather than the style-side sharing workflow.
+- Collections/share rule: unauthenticated neutral mode must never expose more than collaborator mode. Neutral visibility should be less than or equal to collaborator visibility, especially for hidden, irrelevant, maintenance, and non-home content.
 - Pre-share hardening pass: Inspirations server on port 8001 needs durable local process management, reliable restart behavior, and crash/shutdown logging before collaborator sharing is treated as stable.
 - 3DE `Subject Type` needs review as both UX and taxonomy: refine the `Subject Type` enumeration itself, clarify the meaning of each value, and evaluate whether the current values are actually useful for exploration and understanding. Turning on all subject-type attractors is hard to interpret, which suggests the current enumeration may be too coarse, overloaded, or not semantically valuable enough for exploratory use.
 ## Collaborator Modal Review Notes (2026-03-11)

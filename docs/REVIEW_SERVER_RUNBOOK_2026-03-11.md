@@ -2,9 +2,7 @@
 
 ## Permanent fix for review sessions
 
-Use the dedicated DevLauncher configuration:
-
-- `inspirations-review`
+Use DevLauncher's existing `Inspirations` project entry in `/Users/minime/Projects/Agent Manager/config/projects.json` for review sessions.
 
 Do not use ad hoc background shell launches for review sessions.
 
@@ -12,28 +10,34 @@ Do not use ad hoc background shell launches for review sessions.
 
 For review, stability matters more than auto-reload.
 
-The existing dev config:
+DevLauncher does not read `/Users/minime/Projects/Inspirations/.claude/launch.json`.
 
-- `inspirations-dev`
+It reads `/Users/minime/Projects/Agent Manager/config/projects.json`, and the existing `Inspirations` entry already runs without `--reload`:
 
-runs with `--reload`, which is useful while coding but introduces extra process churn. That makes it a poor default for collaborator review and UX review.
+- command: `python3 -m inspirations --db data/inspirations.sqlite --store store serve --host 0.0.0.0 --port 8001`
+- cwd: `/Users/minime/Projects/Inspirations`
+- health check: TCP port `8001`
 
-The new review config:
+That is the correct review/start path.
 
-- binds to `127.0.0.1`
-- uses port `8001`
-- runs without `--reload`
+## DevLauncher mechanism
 
-That is the correct mode for review.
+DevLauncher is the menu bar app in `/Users/minime/Projects/Agent Manager`.
 
-## Launch configs
+It works like this:
 
-In `/Users/minime/Projects/Inspirations/.claude/launch.json`:
+1. Reads project definitions from `/Users/minime/Projects/Agent Manager/config/projects.json`.
+2. Shows each project in the menu bar.
+3. Uses TCP port checks every 5 seconds to decide green/red status.
+4. Starts projects with `subprocess.Popen(..., shell=True, cwd=<project.path>, preexec_fn=os.setsid)`.
+5. Stops only processes it started itself.
+6. Writes logs to `/tmp/devlauncher/<project-name>.log`.
 
-- `inspirations-review`
-  - stable review server
-- `inspirations-dev`
-  - coding/dev with reload
+Relevant code:
+
+- `/Users/minime/Projects/Agent Manager/src/devlauncher/config.py`
+- `/Users/minime/Projects/Agent Manager/src/devlauncher/process_manager.py`
+- `/Users/minime/Projects/Agent Manager/src/devlauncher/app.py`
 
 ## What “server is up” means
 
@@ -60,6 +64,6 @@ That reports:
 
 ## Operational rule
 
-- Use `inspirations-review` for review sessions.
-- Use `inspirations-dev` only when actively editing and wanting reload behavior.
-- If review uptime becomes unstable even under `inspirations-review`, treat that as an application/runtime bug rather than a launch-method issue.
+- Use DevLauncher's `Inspirations` entry for review sessions.
+- If you want reload while coding, that is a separate tool/workflow from DevLauncher, not the menu bar launcher.
+- If review uptime becomes unstable even when started from DevLauncher, treat that as an application/runtime bug rather than a launch-method issue.
