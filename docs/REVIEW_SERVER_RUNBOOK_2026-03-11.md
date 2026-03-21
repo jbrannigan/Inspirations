@@ -6,15 +6,19 @@ Use DevLauncher's existing `Inspirations` project entry in `/Users/minime/Projec
 
 Do not use ad hoc background shell launches for review sessions.
 
+That DevLauncher entry should launch the dedicated wrapper script:
+
+- `/Users/minime/Projects/Inspirations/tools/run_review_server.sh`
+
 ## Why
 
 For review, stability matters more than auto-reload.
 
 DevLauncher does not read `/Users/minime/Projects/Inspirations/.claude/launch.json`.
 
-It reads `/Users/minime/Projects/Agent Manager/config/projects.json`, and the existing `Inspirations` entry already runs without `--reload`:
+It reads `/Users/minime/Projects/Agent Manager/config/projects.json`, and the `Inspirations` entry should run without `--reload` through the wrapper script:
 
-- command: `python3 -m inspirations --db data/inspirations.sqlite --store store serve --host 0.0.0.0 --port 8001`
+- command: `exec ./tools/run_review_server.sh`
 - cwd: `/Users/minime/Projects/Inspirations`
 - health check: TCP port `8001`
 
@@ -33,6 +37,13 @@ It works like this:
 5. Stops only processes it started itself.
 6. Writes logs to `/tmp/devlauncher/<project-name>.log`.
 
+The review wrapper script improves observability by:
+
+- loading API keys from env or macOS Keychain
+- forcing unbuffered Python output
+- logging host/port/db/store at startup
+- ensuring the review server binds to `127.0.0.1:8001`
+
 Relevant code:
 
 - `/Users/minime/Projects/Agent Manager/src/devlauncher/config.py`
@@ -45,9 +56,10 @@ Do not treat a one-shot local curl as sufficient.
 
 For review, the server is only considered up if all of these are true:
 
-1. DevLauncher shows the `inspirations-review` process as running.
+1. DevLauncher shows the `Inspirations` entry as running.
 2. The browser can load `http://127.0.0.1:8001/`.
 3. `http://127.0.0.1:8001/api/me` returns `200`.
+4. The server stays healthy across a short dwell period, not just a one-shot curl.
 
 ## Verification helper
 
@@ -60,10 +72,13 @@ Use:
 That reports:
 
 - whether anything is listening on `8001`
+- the HTTP status for `/`
 - the HTTP status/body from `/api/me`
+- multiple attempts across a short dwell period
 
 ## Operational rule
 
 - Use DevLauncher's `Inspirations` entry for review sessions.
 - If you want reload while coding, that is a separate tool/workflow from DevLauncher, not the menu bar launcher.
 - If review uptime becomes unstable even when started from DevLauncher, treat that as an application/runtime bug rather than a launch-method issue.
+- Review logs should be read from `/tmp/devlauncher/inspirations.log`.

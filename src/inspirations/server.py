@@ -6,10 +6,12 @@ import mimetypes
 import os
 import re
 import secrets
+import signal
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -3187,6 +3189,11 @@ class InspirationsHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
+def _server_log(message: str) -> None:
+    stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    print(f"[review-server {stamp}] {message}", flush=True)
+
+
 def run_server(*, host: str, port: int, db_path: Path, app_dir: Path, store_dir: Path) -> None:
     server = InspirationsHTTPServer((host, port), ApiHandler)
     server.db_path = db_path
@@ -3209,13 +3216,50 @@ def run_server(*, host: str, port: int, db_path: Path, app_dir: Path, store_dir:
         newest_catalog_mtime = max(float(index_path.stat().st_mtime), float(manifest_path.stat().st_mtime))
         if newest_catalog_mtime >= db_mtime:
             server.catalog_last_built_db_mtime = db_mtime
-        print(f"Catalog ready at {catalog_dir} (auto-refresh enabled)")
+        _server_log(f"Catalog ready at {catalog_dir} (auto-refresh enabled)")
     else:
-        print("No catalog found yet — chat will build one on first use")
+        _server_log("No catalog found yet — chat will build one on first use")
 
     # Seed default actors (Jim + Leslie) and print magic link URLs
-    print("\nMagic link URLs:")
+    print("\nMagic link URLs:", flush=True)
     _seed_default_actors(db_path, host, port)
 
-    print(f"\nServing on http://{host}:{port}")
-    server.serve_forever()
+    stopping = {"requested": False}
+    previous_handlers: dict[int, object] = {}
+
+    def _handle_terminate(signum: int, _frame: object) -> None:
+        if stopping["requested"]:
+            return
+        stopping["requested"] = True
+        try:
+            signal_name = signal.Signals(signum).name
+        except Exception:
+            signal_name = str(signum)
+        _server_log(f"Received {signal_name}; shutting down")
+        threading.Thread(target=server.shutdown, daemon=True, name="review-server-shutdown").start()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            previous_handlers[sig] = signal.getsignal(sig)
+            signal.signal(sig, _handle_terminate)
+        except Exception:
+            continue
+
+    _server_log(f"Serving on http://{host}:{port}")
+    try:
+        server.serve_forever(poll_interval=0.5)
+    except KeyboardInterrupt:
+        _server_log("KeyboardInterrupt; shutting down")
+    except BaseException as exc:
+        _server_log(f"Fatal server exception: {exc!r}")
+        raise
+    finally:
+        for sig, handler in previous_handlers.items():
+            try:
+                signal.signal(sig, handler)
+            except Exception:
+                continue
+        try:
+            server.server_close()
+        finally:
+            _server_log("Stopped")
