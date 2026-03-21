@@ -25,17 +25,30 @@ This checkpoint captures the collaborator-facing UX cleanup, adjacent 3DE contro
 - Review mode and 3DE are treated as separate workflows.
 - Sidebar/source/classification/collections structure was partially reorganized to reduce conceptual mixing.
 - `CB:` collections are explicitly treated as AI-derived representative sets, not human-curated sets.
+- Collections now have explicit sharing intent in the working model:
+  - `working`
+  - `shared`
+- Shared collection support is implemented end to end:
+  - owner-side `Share Collections` workflow exists
+  - collections can be shared to multiple named collaborators
+  - share links are generated from saved state only
+  - shared collection access is enforced server-side
+  - shared-link sessions show explicit `Viewing as ...` identity
+- Collaborator shared-link landing is now focused:
+  - the linked collection is placed in scope immediately
+  - generic browse is suppressed during the focused shared-collection session
+  - collaborators can still choose to reveal other shared collections
 
 ## Captured But Not Yet Implemented
 
 - Collections/share product rules established:
   - every collection has explicit intent: `shared` or `working`
-  - every shared collection names a collaborator
+  - every shared collection names one or more collaborators
   - questions are always enabled for shared collections
   - collaborators should not see working collections
   - construction-track collections are working collections for now, not style-side share artifacts
-- Dedicated collections/share workflow sprint.
-- Collection-scoped share UI, even though `collection_id` links already work at the URL level.
+- Focused shared-collection mode should use a compact shared-session sidebar instead of the full mostly-empty browse sidebar.
+- Owner share workflow still needs visual polish and clearer summaries of who a collection is shared with.
 - Collaborator modal header/share redesign.
 - Modal next/previous navigation.
 - Question flow polish:
@@ -68,6 +81,6 @@ This needs a pre-share hardening pass covering:
 ## Recommended Next Start Point
 
 1. Pre-share hardening for the 8001 server.
-2. Dedicated collections/share workflow sprint.
+2. Share-workflow polish for owners and focused collaborator sessions.
 3. Collaborator modal/header/share simplification.
 4. `Subject Type` refinement pass for 3DE and taxonomy.

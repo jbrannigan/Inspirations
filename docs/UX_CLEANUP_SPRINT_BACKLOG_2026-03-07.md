@@ -21,6 +21,7 @@ Important rule:
 - Shared collections rule: questions are always enabled. Sharing a collection implies the collaborator question workflow.
 - Shared collection links must be generated from persisted saved state only; draft collaborator selections should not produce live share links.
 - Shared collection links need explicit access enforcement and clearer identity context (`Viewing as …`) so collection scope and actor scope cannot drift apart.
+- Focused shared-collection sessions should use a compact shared-session sidebar instead of the full mostly-empty browse sidebar; the current behavior works but uses too much chrome for too little information.
 - Collaborator visibility rule: collaborators should not see `working` collections.
 - Construction collections rule: for now, collections on the construction track are `working` collections only, used for curation, review, and improved categorization rather than the style-side sharing workflow.
 - Collections/share rule: unauthenticated neutral mode must never expose more than collaborator mode. Neutral visibility should be less than or equal to collaborator visibility, especially for hidden, irrelevant, maintenance, and non-home content.
