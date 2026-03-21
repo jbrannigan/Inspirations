@@ -817,6 +817,32 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   flex-shrink: 0;
 }
 .tree-leaf.active .tree-count { color: var(--accent); }
+.collection-shared-focus-note {
+  margin: 2px 0 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(184, 134, 11, 0.22);
+  background: rgba(184, 134, 11, 0.08);
+  color: #6a5242;
+  font-size: 12px;
+  display: grid;
+  gap: 8px;
+}
+.collection-shared-focus-action {
+  justify-self: start;
+  border: 1px solid rgba(44, 40, 37, 0.14);
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--text-secondary);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.collection-shared-focus-action:hover {
+  border-color: rgba(44, 40, 37, 0.24);
+  color: var(--text);
+}
 
 /* ── Tree hide toggle (bulk triage) ──────────────────────────────────────── */
 .tree-hide-toggle {
@@ -1192,6 +1218,32 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: var(--fs-sm);
 }
 .stats-count { color: var(--text-secondary); font-weight: 500; }
+.actor-context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(184, 134, 11, 0.28);
+  background: rgba(184, 134, 11, 0.12);
+  color: #5f4b11;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.actor-context-chip[hidden] { display: none; }
+.actor-context-chip.role-owner {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.24);
+  color: #1e40af;
+}
+.actor-context-chip.role-neutral {
+  background: rgba(120, 113, 108, 0.10);
+  border-color: rgba(120, 113, 108, 0.22);
+  color: #57534e;
+}
 .stats-narrative { color: var(--muted); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .stats-filter {
   display: inline-flex;
@@ -1602,6 +1654,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   padding: 4px 10px;
   white-space: nowrap;
   flex-shrink: 0;
+}
+.modal-actor-chip {
+  margin-top: 8px;
 }
 .review-progress-track {
   flex: 1;
@@ -2367,10 +2422,55 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .collectionBulkContent {
   width: min(860px, 94vw);
 }
+.collectionShareContent {
+  width: min(980px, 96vw);
+}
+.collectionShareBody {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: minmax(280px, 340px) 1fr;
+  gap: 12px;
+}
+.collectionShareListSection {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  padding: 10px;
+  min-height: 320px;
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 10px;
+}
+.collectionShareFilters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.collectionShareFilter {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.collectionShareFilter.is-active {
+  color: #7a5a12;
+  border-color: rgba(184, 134, 11, 0.38);
+  background: rgba(184, 134, 11, 0.12);
+}
 .collectionBulkBody {
   margin-top: 12px;
   display: grid;
   grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.collectionBulkDetailSection {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  padding: 12px;
+  display: grid;
   gap: 12px;
 }
 .collectionBulkSection {
@@ -2411,10 +2511,18 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--panel);
+  width: 100%;
+  text-align: left;
+  color: inherit;
+  font: inherit;
 }
 .collectionBulkRow:hover {
   border-color: var(--border-hover);
   background: var(--panel-hover);
+}
+.collectionBulkRow.is-selected {
+  border-color: rgba(184, 134, 11, 0.45);
+  background: rgba(184, 134, 11, 0.08);
 }
 .collectionBulkName {
   min-width: 0;
@@ -2464,6 +2572,96 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   margin-top: 12px;
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.collectionDetailForm {
+  display: grid;
+  gap: 12px;
+}
+.collectionDetailField {
+  display: grid;
+  gap: 6px;
+}
+.collectionDetailField > span {
+  font-size: var(--fs-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.collectionDetailField input[type="text"],
+.collectionDetailField textarea,
+.collectionDetailField select {
+  width: 100%;
+}
+.collectionDetailCollaborators {
+  display: grid;
+  gap: 8px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.collectionDetailCollaboratorRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.collectionDetailCollaboratorRow input[type="checkbox"] {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+.collectionDetailCollaboratorText {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 2px;
+}
+.collectionDetailCollaboratorName {
+  min-width: 0;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.collectionDetailCollaboratorMeta {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.collectionDetailLinks {
+  display: grid;
+  gap: 8px;
+}
+.collectionDetailLinkRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.collectionDetailLinkMeta {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.collectionDetailLinkUrl {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.collectionDetailActions {
+  display: flex;
   justify-content: flex-end;
   gap: 8px;
 }
@@ -2681,6 +2879,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .content { padding: 12px; }
   .review-card { grid-template-columns: 1fr; }
   .modalBody { grid-template-columns: 1fr; }
+  .collectionShareBody,
   .collectionBulkBody { grid-template-columns: 1fr; }
 }
 

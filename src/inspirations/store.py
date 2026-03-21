@@ -82,6 +82,7 @@ _COLLECTION_PROVENANCE_BADGES = {
     "workflow_cohort": "Workflow",
     "system_hidden": "System",
 }
+_COLLECTION_INTENTS = {"working", "shared"}
 
 
 def _now_iso() -> str:
@@ -137,7 +138,80 @@ def decorate_collection_record(record: dict[str, Any]) -> dict[str, Any]:
     if note:
         record["provenance_note"] = note
     record["curator"] = str(record.get("curator") or "").strip()
+    intent = str(record.get("intent") or "").strip().lower()
+    if intent not in _COLLECTION_INTENTS:
+        intent = "working"
+    record["intent"] = intent
+    record["shared_actor_id"] = str(record.get("shared_actor_id") or "").strip()
+    record["shared_actor_name"] = str(record.get("shared_actor_name") or "").strip()
+    shared_actor_ids = record.get("shared_actor_ids") or []
+    if not isinstance(shared_actor_ids, list):
+        shared_actor_ids = []
+    shared_actor_names = record.get("shared_actor_names") or []
+    if not isinstance(shared_actor_names, list):
+        shared_actor_names = []
+    record["shared_actor_ids"] = [str(v).strip() for v in shared_actor_ids if str(v).strip()]
+    record["shared_actor_names"] = [str(v).strip() for v in shared_actor_names if str(v).strip()]
     return record
+
+
+def _normalize_collection_intent(intent: str) -> str:
+    text = str(intent or "").strip().lower()
+    return text if text in _COLLECTION_INTENTS else "working"
+
+
+def _normalize_shared_actor_ids(shared_actor_id: str = "", shared_actor_ids: list[str] | tuple[str, ...] | None = None) -> list[str]:
+    values: list[str] = []
+    first = str(shared_actor_id or "").strip()
+    if first:
+        values.append(first)
+    for raw in list(shared_actor_ids or []):
+        text = str(raw or "").strip()
+        if text:
+            values.append(text)
+    out: list[str] = []
+    seen: set[str] = set()
+    for actor_id in values:
+        if actor_id in seen:
+            continue
+        seen.add(actor_id)
+        out.append(actor_id)
+    return out
+
+
+def _validate_shared_collection_actor_ids(db: Db, actor_ids: list[str]) -> list[dict[str, Any]]:
+    ids = [str(v).strip() for v in actor_ids if str(v).strip()]
+    if not ids:
+        return []
+    placeholders = ",".join(["?"] * len(ids))
+    rows = db.query(
+        f"select id, name, role from actors where id in ({placeholders})",
+        tuple(ids),
+    )
+    by_id = {str(r["id"]): dict(r) for r in rows}
+    missing = [actor_id for actor_id in ids if actor_id not in by_id]
+    if missing:
+        raise ValueError("shared collaborator not found")
+    ordered = [by_id[actor_id] for actor_id in ids]
+    if any(str(row.get("role") or "").strip().lower() == "owner" for row in ordered):
+        raise ValueError("shared collaborator must not be an owner")
+    return ordered
+
+
+def _replace_collection_shares(db: Db, *, collection_id: str, actor_ids: list[str]) -> None:
+    db.exec("delete from collection_shares where collection_id=?", (collection_id,))
+    rows = [
+        (str(uuid.uuid4()), collection_id, actor_id, _now_iso())
+        for actor_id in actor_ids
+    ]
+    if rows:
+        db.executemany(
+            """
+            insert into collection_shares (id, collection_id, actor_id, created_at)
+            values (?, ?, ?, ?)
+            """,
+            rows,
+        )
 
 
 def _csv_values(raw: str) -> list[str]:
@@ -401,6 +475,8 @@ def _build_asset_filter(
     classification_axis: str = "",
     classification_value: str = "",
     exclude_tracks: str = "",
+    viewer_role: str = "",
+    viewer_actor_id: str = "",
 ) -> tuple[str, str, list]:
     """Build WHERE and JOIN clauses for asset queries. Returns (join_sql, where, params)."""
     clauses: list[str] = []
@@ -511,6 +587,21 @@ def _build_asset_filter(
         joins.append("join collection_items ci on ci.asset_id = a.id")
         clauses.append("ci.collection_id in (%s)" % ",".join(["?"] * len(collection_ids)))
         params.extend(collection_ids)
+        role = str(viewer_role or "").strip().lower()
+        actor_id = str(viewer_actor_id or "").strip()
+        if role != "owner":
+            joins.append("join collections cfilter on cfilter.id = ci.collection_id")
+            clauses.append("coalesce(cfilter.intent, 'working') = 'shared'")
+            if actor_id:
+                clauses.append(
+                    "("
+                    "coalesce(cfilter.shared_actor_id, '') = ? "
+                    "or exists (select 1 from collection_shares csv where csv.collection_id = cfilter.id and csv.actor_id = ?)"
+                    ")"
+                )
+                params.extend([actor_id, actor_id])
+            else:
+                clauses.append("1 = 0")
     axis_name = str(classification_axis or "").strip().lower()
     axis_values = [s.strip() for s in str(classification_value or "").split(",") if s.strip()]
     exclude_track_values = [s.strip() for s in str(exclude_tracks or "").split(",") if s.strip()]
@@ -656,6 +747,8 @@ def list_assets(
     classification_axis: str = "",
     classification_value: str = "",
     exclude_tracks: str = "",
+    viewer_role: str = "",
+    viewer_actor_id: str = "",
     limit: int = 200,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
@@ -666,7 +759,7 @@ def list_assets(
         category=category, needs_annotation=needs_annotation, flagged_only=flagged_only,
         tagged_only=tagged_only, include_hidden=include_hidden,
         classification_axis=classification_axis, classification_value=classification_value,
-        exclude_tracks=exclude_tracks,
+        exclude_tracks=exclude_tracks, viewer_role=viewer_role, viewer_actor_id=viewer_actor_id,
     )
 
     # Total count (same filters, no limit/offset)
@@ -1070,14 +1163,34 @@ def triage_stats(db: Db) -> dict[str, Any]:
     return {"overall": overall, "boards": boards}
 
 
-def list_collections(db: Db, *, include_hidden: bool = False) -> list[dict[str, Any]]:
+def list_collections(
+    db: Db,
+    *,
+    include_hidden: bool = False,
+    viewer_role: str = "",
+    viewer_actor_id: str = "",
+) -> list[dict[str, Any]]:
     hidden_collection_id = str(
         db.query_value("select id from collections where lower(name)='hidden' limit 1") or ""
     )
     params: list[Any] = [hidden_collection_id]
     where: list[str] = []
+    role = str(viewer_role or "").strip().lower()
+    actor_id = str(viewer_actor_id or "").strip()
     if not include_hidden:
         where.append("coalesce(hidden, 0) = 0")
+    if role != "owner":
+        where.append("coalesce(c.intent, 'working') = 'shared'")
+        if actor_id:
+            where.append(
+                "("
+                "coalesce(c.shared_actor_id, '') = ? "
+                "or exists (select 1 from collection_shares csv where csv.collection_id = c.id and csv.actor_id = ?)"
+                ")"
+            )
+            params.extend([actor_id, actor_id])
+        else:
+            where.append("1 = 0")
     sql = """
         select
             c.id,
@@ -1088,6 +1201,8 @@ def list_collections(db: Db, *, include_hidden: bool = False) -> list[dict[str, 
             c.provenance_kind,
             c.provenance_note,
             c.curator,
+            coalesce(c.intent, 'working') as intent,
+            c.shared_actor_id,
             coalesce(c.hidden, 0) as hidden,
             c.hidden_at,
             (
@@ -1111,11 +1226,39 @@ def list_collections(db: Db, *, include_hidden: bool = False) -> list[dict[str, 
     """
     if where:
         sql += " where " + " and ".join(where)
-    sql += " order by c.updated_at desc"
+    sql += " order by c.name collate nocase asc, c.updated_at desc"
     rows = db.query(sql, tuple(params))
+    collection_ids = [str(r["id"] or "").strip() for r in rows if str(r["id"] or "").strip()]
+    shares_by_collection: dict[str, list[tuple[str, str]]] = {}
+    if collection_ids:
+        share_rows = db.query(
+            f"""
+            select cs.collection_id, cs.actor_id, a.name
+            from collection_shares cs
+            join actors a on a.id = cs.actor_id
+            where cs.collection_id in ({",".join(["?"] * len(collection_ids))})
+            order by a.name collate nocase asc, cs.actor_id asc
+            """,
+            tuple(collection_ids),
+        )
+        for row in share_rows:
+            cid = str(row["collection_id"] or "").strip()
+            if not cid:
+                continue
+            shares_by_collection.setdefault(cid, []).append(
+                (str(row["actor_id"] or "").strip(), str(row["name"] or "").strip())
+            )
     out = []
     for r in rows:
         d = decorate_collection_record(dict(r))
+        shares = shares_by_collection.get(str(d.get("id") or ""), [])
+        if shares:
+            d["shared_actor_ids"] = [actor_id for actor_id, _ in shares if actor_id]
+            d["shared_actor_names"] = [name for _, name in shares if name]
+            if not d.get("shared_actor_id"):
+                d["shared_actor_id"] = d["shared_actor_ids"][0] if d["shared_actor_ids"] else ""
+            if not d.get("shared_actor_name"):
+                d["shared_actor_name"] = d["shared_actor_names"][0] if d["shared_actor_names"] else ""
         d["count_total"] = int(d.get("count_total") or 0)
         d["count_visible"] = int(d.get("count_visible") or 0)
         d["count"] = d["count_visible"]
@@ -1124,15 +1267,41 @@ def list_collections(db: Db, *, include_hidden: bool = False) -> list[dict[str, 
     return out
 
 
-def create_collection(db: Db, *, name: str, description: str = "") -> dict[str, Any]:
+def create_collection(
+    db: Db,
+    *,
+    name: str,
+    description: str = "",
+    intent: str = "working",
+    shared_actor_id: str = "",
+    shared_actor_ids: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
     cid = str(uuid.uuid4())
     now = _now_iso()
     provenance_kind, curator, provenance_note = infer_collection_provenance(name)
+    normalized_intent = _normalize_collection_intent(intent)
+    normalized_shared_actor_ids = _normalize_shared_actor_ids(shared_actor_id, shared_actor_ids)
+    shared_id = ""
+    shared_actor_name = ""
+    shared_actor_names: list[str] = []
+    if normalized_intent == "shared":
+        if not normalized_shared_actor_ids:
+            raise ValueError("shared collections require shared_actor_id")
+        shared_rows = _validate_shared_collection_actor_ids(db, normalized_shared_actor_ids)
+        shared_id = str(shared_rows[0].get("id") or "").strip()
+        shared_actor_name = str(shared_rows[0].get("name") or "").strip()
+        shared_actor_names = [str(row.get("name") or "").strip() for row in shared_rows if str(row.get("name") or "").strip()]
+    else:
+        normalized_shared_actor_ids = []
     db.exec(
         """
         insert into collections
-          (id, name, description, created_at, updated_at, provenance_kind, provenance_note, curator)
-        values (?, ?, ?, ?, ?, ?, ?, ?)
+          (
+            id, name, description, created_at, updated_at,
+            provenance_kind, provenance_note, curator,
+            intent, shared_actor_id
+          )
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             cid,
@@ -1143,8 +1312,12 @@ def create_collection(db: Db, *, name: str, description: str = "") -> dict[str, 
             provenance_kind,
             provenance_note,
             curator,
+            normalized_intent,
+            shared_id or None,
         ),
     )
+    if normalized_shared_actor_ids:
+        _replace_collection_shares(db, collection_id=cid, actor_ids=normalized_shared_actor_ids)
     return decorate_collection_record(
         {
             "id": cid,
@@ -1160,8 +1333,74 @@ def create_collection(db: Db, *, name: str, description: str = "") -> dict[str, 
             "provenance_kind": provenance_kind,
             "provenance_note": provenance_note,
             "curator": curator,
+            "intent": normalized_intent,
+            "shared_actor_id": shared_id,
+            "shared_actor_name": shared_actor_name,
+            "shared_actor_ids": normalized_shared_actor_ids,
+            "shared_actor_names": shared_actor_names,
         }
     )
+
+
+def update_collection(
+    db: Db,
+    *,
+    collection_id: str,
+    name: str | None = None,
+    description: str | None = None,
+    intent: str | None = None,
+    shared_actor_id: str = "",
+    shared_actor_ids: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    rows = db.query("select * from collections where id=?", (collection_id,))
+    if not rows:
+        raise FileNotFoundError("collection not found")
+    current = dict(rows[0])
+    next_name = str(name if name is not None else current.get("name") or "").strip()
+    if not next_name:
+        raise ValueError("name required")
+    next_description = str(description if description is not None else current.get("description") or "").strip()
+    next_intent = _normalize_collection_intent(intent if intent is not None else str(current.get("intent") or "working"))
+    normalized_shared_actor_ids = _normalize_shared_actor_ids(shared_actor_id, shared_actor_ids)
+    shared_id = ""
+    shared_actor_name = ""
+    shared_actor_names: list[str] = []
+    if next_intent == "shared":
+        if not normalized_shared_actor_ids:
+            raise ValueError("shared collections require shared_actor_id")
+        shared_rows = _validate_shared_collection_actor_ids(db, normalized_shared_actor_ids)
+        shared_id = str(shared_rows[0].get("id") or "").strip()
+        shared_actor_name = str(shared_rows[0].get("name") or "").strip()
+        shared_actor_names = [str(row.get("name") or "").strip() for row in shared_rows if str(row.get("name") or "").strip()]
+    else:
+        normalized_shared_actor_ids = []
+
+    now = _now_iso()
+    db.exec(
+        """
+        update collections
+        set name=?, description=?, intent=?, shared_actor_id=?, updated_at=?
+        where id=?
+        """,
+        (
+            next_name,
+            next_description or None,
+            next_intent,
+            shared_id or None,
+            now,
+            collection_id,
+        ),
+    )
+    _replace_collection_shares(db, collection_id=collection_id, actor_ids=normalized_shared_actor_ids)
+    updated = dict(db.query("select * from collections where id=?", (collection_id,))[0])
+    updated["count_total"] = int(current.get("count_total") or 0)
+    updated["count_visible"] = int(current.get("count_visible") or current.get("count") or 0)
+    updated["count"] = updated["count_visible"]
+    updated["shared_actor_id"] = shared_id
+    updated["shared_actor_name"] = shared_actor_name
+    updated["shared_actor_ids"] = normalized_shared_actor_ids
+    updated["shared_actor_names"] = shared_actor_names
+    return decorate_collection_record(updated)
 
 
 def add_items_to_collection(db: Db, *, collection_id: str, asset_ids: list[str]) -> int:
@@ -1350,8 +1589,23 @@ def clear_tray(db: Db) -> None:
     db.exec("delete from tray_items")
 
 
-def create_collection_from_tray(db: Db, *, name: str, description: str = "") -> dict[str, Any]:
-    col = create_collection(db, name=name, description=description)
+def create_collection_from_tray(
+    db: Db,
+    *,
+    name: str,
+    description: str = "",
+    intent: str = "working",
+    shared_actor_id: str = "",
+    shared_actor_ids: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    col = create_collection(
+        db,
+        name=name,
+        description=description,
+        intent=intent,
+        shared_actor_id=shared_actor_id,
+        shared_actor_ids=shared_actor_ids,
+    )
     items = db.query("select asset_id from tray_items order by added_at asc")
     asset_ids = [r["asset_id"] for r in items]
     add_items_to_collection(db, collection_id=col["id"], asset_ids=asset_ids)

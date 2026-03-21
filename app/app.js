@@ -45,6 +45,9 @@ const state = {
   // Collections + facets + catalog
   collections: [],
   hiddenCollections: [],
+  collectionActors: [],
+  collectionManagerSelectedId: null,
+  collectionShareFilter: "all",
   facets: { sources: [], boards: [] },
   catalogTree: [],
 
@@ -78,6 +81,7 @@ const state = {
   allItemsTreeCollapsed: null,  // collaborator default: collapse browse tree under "All Items"
   collaboratorTreeUnlocked: false, // collaborator default: hide broader tree until explicit browse
   collaboratorDefaultScopeApplied: false, // avoid re-applying collaborator default collection scope
+  sharedCollectionLandingId: "", // collaborator shared-link landing collection
   lastCollaboratorBrowseUnlockAt: 0, // guards accidental follow-up taps right after browse unlock
   openQuestions: [],             // open question annotations (owners only)
   questionPollTimer: null,
@@ -445,10 +449,20 @@ function _contextLinkPayloadFromUrl() {
   return { collectionId, itemId, shouldAutoOpen };
 }
 
+function _collectionScopeIdFromUrl() {
+  try {
+    const params = new URLSearchParams(window.location.search || "");
+    return String(params.get("collection_id") || "").trim();
+  } catch {
+    return "";
+  }
+}
+
 function _contextLinkMessageForReason(reason) {
   const key = String(reason || "").trim();
   if (key === "item_not_in_collection") return "This item is no longer in this collection.";
   if (key === "collection_not_found") return "This shared collection no longer exists.";
+  if (key === "collection_not_shared_with_actor") return "This shared collection is not available for your current sign-in.";
   if (key === "item_hidden_for_role") return "This shared item is hidden for your role.";
   if (key === "item_missing") return "This shared item is no longer available.";
   return "This shared context could not be resolved.";
@@ -576,12 +590,13 @@ async function restoreContextLinkFromUrl() {
     report?.collection_name
     || (state.collections.find((c) => c.id === payload.collectionId)?.name || "")
   );
-  if (String(report?.reason || "") !== "collection_not_found") {
+  if (!["collection_not_found", "collection_not_shared_with_actor"].includes(String(report?.reason || ""))) {
     state.currentSource = null;
     state.currentBoard = null;
     state.currentContentKind = null;
     clearCatalogFilter();
     setCollectionFilterIds([payload.collectionId], { label: collectionName, nodeId: null });
+    if (isCollaboratorActor()) state.sharedCollectionLandingId = payload.collectionId;
     state.offset = 0;
     renderCatalogTree();
     await loadAssets();
@@ -601,6 +616,29 @@ async function restoreContextLinkFromUrl() {
     return;
   }
   await openModal(asset);
+}
+
+function applyCollectionScopeFromUrl() {
+  const collectionId = _collectionScopeIdFromUrl();
+  if (!collectionId) return;
+  if (!state.actor) {
+    setContextLinkBanner("Please sign in to open this shared collection link.", { error: true });
+    return;
+  }
+  const col = state.collections.find((c) => String(c.id || "") === collectionId);
+  if (!col) {
+    setContextLinkBanner("This shared collection is not available for your current sign-in.", { error: true });
+    return;
+  }
+  state.currentSource = null;
+  state.currentBoard = null;
+  state.currentContentKind = null;
+  clearCatalogFilter();
+  setCollectionFilterIds([collectionId], { label: col ? col.name : "", nodeId: null });
+  if (isCollaboratorActor()) state.sharedCollectionLandingId = collectionId;
+  if (Array.isArray(state.catalogTree) && state.catalogTree.length) renderCatalogTree();
+  else updateSidebarModeVisibility();
+  if (!_contextLinkPayloadFromUrl()) clearContextLinkBanner();
 }
 
 function sourceKeyFromNode(node) {
@@ -937,6 +975,41 @@ function _reviewActorLabel() {
   return role ? `Reviewer: ${name} (${role})` : `Reviewer: ${name}`;
 }
 
+function _actorRoleLabel(role) {
+  const clean = String(role || "").trim().toLowerCase();
+  if (!clean) return "";
+  return clean
+    .split(/[_\-\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function _actorContextLabel() {
+  const actor = state.actor || null;
+  if (!actor) return "Viewing as visitor";
+  const name = String(actor.name || "Unknown").trim() || "Unknown";
+  const roleLabel = _actorRoleLabel(actor.role);
+  if (!roleLabel) return `Viewing as ${name}`;
+  const lowerName = name.toLowerCase();
+  const lowerRole = roleLabel.toLowerCase();
+  if (lowerName.endsWith(`(${lowerRole})`)) return `Viewing as ${name}`;
+  return `Viewing as ${name} (${roleLabel})`;
+}
+
+function updateActorContextChips() {
+  const role = String(state.actor?.role || "").trim().toLowerCase();
+  const roleClass = role === "owner" ? "role-owner" : (role ? "role-collaborator" : "role-neutral");
+  for (const id of ["actorContextChip", "modalActorChip"]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.hidden = false;
+    el.textContent = _actorContextLabel();
+    el.classList.remove("role-owner", "role-collaborator", "role-neutral");
+    el.classList.add(roleClass);
+  }
+}
+
 function updateReviewScopeChips() {
   const scope = getReviewScopeInfo();
   const chipText = `Scope: ${scope.label}`;
@@ -1014,6 +1087,17 @@ function isCollaboratorActor() {
   return !!(state.actor && state.actor.role !== "owner");
 }
 
+function _activeSharedCollectionLandingId() {
+  const landingId = String(state.sharedCollectionLandingId || "").trim();
+  if (!landingId || !isCollaboratorActor()) return "";
+  const selected = getCollectionFilterIds();
+  return selected.length === 1 && selected[0] === landingId ? landingId : "";
+}
+
+function _isFocusedSharedCollectionSession() {
+  return !!_activeSharedCollectionLandingId();
+}
+
 function shouldIgnorePostBrowseUnlockTreeClick() {
   if (!isCollaboratorActor()) return false;
   if (!state.lastCollaboratorBrowseUnlockAt) return false;
@@ -1030,6 +1114,7 @@ function _findCollectionsGroupNode() {
 
 function _setCollaboratorSharedCollectionsScope() {
   if (!isCollaboratorActor()) return false;
+  state.sharedCollectionLandingId = "";
   const collectionsNode = _findCollectionsGroupNode();
   if (!collectionsNode) return false;
   const collectionIds = collectDescendantCollectionIds(collectionsNode);
@@ -2229,16 +2314,24 @@ function buildCollectionsGroupNode(node) {
   const nodeKey = "collections";
   const selectedCollectionIds = getCollectionFilterIds();
   const selectedCollectionSet = new Set(selectedCollectionIds);
+  const focusedLandingId = _activeSharedCollectionLandingId();
+  const visibleChildren = focusedLandingId
+    ? (node.children || []).filter((child) => String(child.collection_id || "") === focusedLandingId)
+    : (node.children || []);
   const isActiveHeader = state.currentTreeNodeId === node.id;
   const toggle = document.createElement("button");
+  const groupLabel = focusedLandingId ? "Shared Collection" : "Collections";
+  const groupCount = focusedLandingId
+    ? visibleChildren.reduce((sum, child) => sum + Number(child.count || 0), 0)
+    : Number(node.count || 0);
   toggle.className = `tree-toggle${isActiveHeader ? " active" : ""}`;
-  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label">Collections</span><span class="tree-count">${node.count}</span>`;
-  toggle.title = "Collections";
+  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label">${escapeHtml(groupLabel)}</span><span class="tree-count">${groupCount}</span>`;
+  toggle.title = groupLabel;
 
   const children = document.createElement("div");
   children.className = "tree-children";
 
-  const hasActiveChild = (node.children || []).some((c) => selectedCollectionSet.has(c.collection_id));
+  const hasActiveChild = visibleChildren.some((c) => selectedCollectionSet.has(c.collection_id));
   const collaboratorDefaultExpanded = isCollaboratorActor();
   if (hasActiveChild || isActiveHeader || collaboratorDefaultExpanded) state.expandedTreeNodes.add(nodeKey);
   _setTreeNodeExpanded(nodeKey, toggle, children, state.expandedTreeNodes.has(nodeKey));
@@ -2252,13 +2345,32 @@ function buildCollectionsGroupNode(node) {
     state.currentContentKind = null;
     clearCatalogFilter();
     clearClassificationFilter();
-    setCollectionFilterIds(collectDescendantCollectionIds(node), { label: "All Collections", nodeId: node.id });
+    setCollectionFilterIds(
+      focusedLandingId ? [focusedLandingId] : collectDescendantCollectionIds(node),
+      { label: focusedLandingId ? (visibleChildren[0]?.label || "Shared Collection") : "All Collections", nodeId: node.id },
+    );
     state.offset = 0;
     renderCatalogTree();
     loadAssets();
   };
 
-  for (const child of (node.children || [])) {
+  let helper = null;
+  if (focusedLandingId) {
+    helper = document.createElement("div");
+    helper.className = "collection-shared-focus-note";
+    helper.innerHTML = `<span>Opened from a shared collection link.</span>`;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "collection-shared-focus-action";
+    btn.textContent = "Show other shared collections";
+    btn.onclick = () => {
+      state.sharedCollectionLandingId = "";
+      renderCatalogTree();
+    };
+    helper.appendChild(btn);
+  }
+
+  for (const child of visibleChildren) {
     const leaf = document.createElement("button");
     const isActive = selectedCollectionIds.length === 1 && selectedCollectionIds[0] === child.collection_id;
     const badge = child.provenance_badge
@@ -2289,6 +2401,7 @@ function buildCollectionsGroupNode(node) {
   }
 
   el.appendChild(toggle);
+  if (helper) el.appendChild(helper);
   el.appendChild(children);
   return el;
 }
@@ -2579,10 +2692,82 @@ async function loadCollectionsForManager() {
   }
 }
 
+async function loadCollectionActors() {
+  if (!isOwner()) {
+    state.collectionActors = [];
+    return;
+  }
+  try {
+    const data = await api("/api/actors");
+    const rows = Array.isArray(data.actors) ? data.actors : [];
+    state.collectionActors = rows.filter((actor) => String(actor?.role || "").trim().toLowerCase() !== "owner");
+  } catch (e) {
+    console.error("Failed to load actors:", e);
+    state.collectionActors = [];
+  }
+}
+
+function _allManagerCollections() {
+  return [...(state.collections || []), ...(state.hiddenCollections || [])];
+}
+
+function _selectedCollectionForManager() {
+  const selectedId = String(state.collectionManagerSelectedId || "");
+  if (!selectedId) return null;
+  return (state.collections || []).find((collection) => String(collection?.id || "") === selectedId) || null;
+}
+
+function _ensureCollectionManagerSelection() {
+  const available = state.collections || [];
+  if (!available.length) {
+    state.collectionManagerSelectedId = null;
+    return;
+  }
+  const selected = _selectedCollectionForManager();
+  if (selected) return;
+  state.collectionManagerSelectedId = String((state.collections[0] || {}).id || "");
+}
+
+function _currentCollectionDetailFormState() {
+  return {
+    name: String($("#collectionDetailName")?.value || "").trim(),
+    description: String($("#collectionDetailDescription")?.value || "").trim(),
+    intent: String($("#collectionDetailIntent")?.value || "working").trim().toLowerCase(),
+    shared_actor_ids: $$("#collectionDetailCollaborators input[type='checkbox'][data-actor-id]:checked")
+      .map((input) => String(input.getAttribute("data-actor-id") || "").trim())
+      .filter(Boolean),
+  };
+}
+
+function _sameStringList(a, b) {
+  const left = Array.isArray(a) ? a.map((v) => String(v || "").trim()).filter(Boolean) : [];
+  const right = Array.isArray(b) ? b.map((v) => String(v || "").trim()).filter(Boolean) : [];
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] !== right[i]) return false;
+  }
+  return true;
+}
+
+function _buildSharedCollectionLink(collection, actor) {
+  const url = new URL(window.location.origin + window.location.pathname);
+  url.searchParams.set("actor", String(actor?.token || ""));
+  url.searchParams.set("collection_id", String(collection?.id || ""));
+  return url.toString();
+}
+
 const collectionBulkSelection = {
   active: new Set(),
   hidden: new Set(),
 };
+
+function _filteredShareCollections() {
+  const rows = state.collections || [];
+  const filter = String(state.collectionShareFilter || "all");
+  if (filter === "working") return rows.filter((c) => String(c.intent || "working") !== "shared");
+  if (filter === "shared") return rows.filter((c) => String(c.intent || "working") === "shared");
+  return rows;
+}
 
 function _pruneCollectionBulkSelection() {
   const activeIds = new Set((state.collections || []).map((c) => String(c.id || "")));
@@ -2617,14 +2802,20 @@ function _renderCollectionBulkList(kind) {
     const provenanceBadge = escapeHtml(String(c.provenance_badge || ""));
     const provenanceLabel = escapeHtml(String(c.provenance_label || ""));
     const provenanceNote = escapeHtml(String(c.provenance_note || ""));
+    const intent = String(c.intent || "working").trim().toLowerCase();
+    const sharedNames = Array.isArray(c.shared_actor_names) ? c.shared_actor_names.filter(Boolean) : [];
+    const intentLabel = intent === "shared" ? "Shared" : "Working";
+    const intentMeta = intent === "shared" && sharedNames.length ? `${intentLabel} · ${sharedNames.join(", ")}` : intentLabel;
     const badgeHtml = provenanceBadge
       ? `<span class="collectionProvenanceBadge" title="${provenanceLabel}">${provenanceBadge}</span>`
       : "";
-    const metaHtml = provenanceBadge || provenanceNote
-      ? `<span class="collectionBulkMeta">${provenanceLabel}${provenanceNote ? ` · ${provenanceNote}` : ""}</span>`
-      : "";
+    const metaBits = [intentMeta];
+    if (provenanceLabel) metaBits.push(provenanceLabel);
+    if (provenanceNote) metaBits.push(provenanceNote);
+    const metaHtml = `<span class="collectionBulkMeta">${escapeHtml(metaBits.filter(Boolean).join(" · "))}</span>`;
+    const rowClass = "collectionBulkRow";
     return (
-      `<label class="collectionBulkRow">`
+      `<label class="${rowClass}" data-row-id="${escapeHtml(id)}">`
       + `<input type="checkbox" data-kind="${isHidden ? "hidden" : "active"}" data-id="${escapeHtml(id)}" ${checked} />`
       + `<span class="collectionBulkNameWrap"><span class="collectionBulkNameLine"><span class="collectionBulkName">${name}</span>${badgeHtml}</span>${metaHtml}</span>`
       + `<span class="collectionBulkCount">${count}</span>`
@@ -2640,6 +2831,159 @@ function _renderCollectionBulkList(kind) {
       refreshCollectionBulkActions();
     });
   });
+}
+
+function renderCollectionShareList() {
+  const listEl = $("#collectionShareList");
+  const countEl = $("#collectionShareCount");
+  if (!listEl) return;
+  const rows = _filteredShareCollections();
+  if (countEl) {
+    countEl.textContent = `${rows.length} collection${rows.length === 1 ? "" : "s"}`;
+  }
+  const selectedId = String(state.collectionManagerSelectedId || "");
+  if (!rows.length) {
+    listEl.innerHTML = `<div class="muted">No collections match this filter.</div>`;
+    return;
+  }
+  listEl.innerHTML = rows.map((c) => {
+    const id = String(c.id || "");
+    const name = escapeHtml(String(c.name || "Untitled collection"));
+    const count = Number(c.count || 0);
+    const provenanceBadge = escapeHtml(String(c.provenance_badge || ""));
+    const provenanceLabel = escapeHtml(String(c.provenance_label || ""));
+    const provenanceNote = escapeHtml(String(c.provenance_note || ""));
+    const intent = String(c.intent || "working").trim().toLowerCase();
+    const sharedNames = Array.isArray(c.shared_actor_names) ? c.shared_actor_names.filter(Boolean) : [];
+    const intentLabel = intent === "shared" ? "Shared" : "Working";
+    const intentMeta = intent === "shared" && sharedNames.length ? `${intentLabel} · ${sharedNames.join(", ")}` : intentLabel;
+    const badgeHtml = provenanceBadge
+      ? `<span class="collectionProvenanceBadge" title="${provenanceLabel}">${provenanceBadge}</span>`
+      : "";
+    const metaBits = [intentMeta];
+    if (provenanceLabel) metaBits.push(provenanceLabel);
+    if (provenanceNote) metaBits.push(provenanceNote);
+    const rowClass = [
+      "collectionBulkRow",
+      selectedId === id ? "is-selected" : "",
+    ].filter(Boolean).join(" ");
+    return (
+      `<button type="button" class="${rowClass}" data-share-row-id="${escapeHtml(id)}" title="${name}">`
+      + `<span class="collectionBulkNameWrap"><span class="collectionBulkNameLine"><span class="collectionBulkName">${name}</span>${badgeHtml}</span><span class="collectionBulkMeta">${escapeHtml(metaBits.filter(Boolean).join(" · "))}</span></span>`
+      + `<span class="collectionBulkCount">${count}</span>`
+      + `</button>`
+    );
+  }).join("");
+  listEl.querySelectorAll("[data-share-row-id]").forEach((row) => {
+    row.addEventListener("click", () => {
+      const id = String(row.getAttribute("data-share-row-id") || "");
+      if (!id) return;
+      state.collectionManagerSelectedId = id;
+      renderCollectionShareModal();
+    });
+  });
+}
+
+function renderCollectionDetailEditor() {
+  const emptyEl = $("#collectionShareDetailEmpty");
+  const formEl = $("#collectionShareDetailForm");
+  const statusEl = $("#collectionShareDetailStatus");
+  const selected = _selectedCollectionForManager();
+  if (!selected) {
+    if (emptyEl) emptyEl.hidden = false;
+    if (formEl) formEl.hidden = true;
+    if (statusEl) statusEl.textContent = "Select a collection to edit sharing.";
+    return;
+  }
+
+  if (emptyEl) emptyEl.hidden = true;
+  if (formEl) formEl.hidden = false;
+  if (statusEl) {
+    const intentLabel = String(selected.intent || "working") === "shared" ? "Shared collection" : "Working collection";
+    statusEl.textContent = `${intentLabel} · ${selected.name || "Untitled collection"}`;
+  }
+
+  const currentForm = _currentCollectionDetailFormState();
+  const nameEl = $("#collectionDetailName");
+  const descEl = $("#collectionDetailDescription");
+  const intentEl = $("#collectionDetailIntent");
+  const currentEditingId = String(formEl?.getAttribute("data-collection-id") || "");
+  const preserveDraft = currentEditingId === String(selected.id || "");
+  if (nameEl) nameEl.value = preserveDraft && currentForm.name ? currentForm.name : String(selected.name || "");
+  if (descEl) descEl.value = preserveDraft ? currentForm.description : String(selected.description || "");
+  if (intentEl) intentEl.value = preserveDraft && currentForm.intent ? currentForm.intent : String(selected.intent || "working");
+  if (formEl) formEl.setAttribute("data-collection-id", String(selected.id || ""));
+
+  const refreshedForm = _currentCollectionDetailFormState();
+  const effectiveIntent = refreshedForm.intent || String(selected.intent || "working");
+  const effectiveActorIds = refreshedForm.shared_actor_ids.length
+    ? refreshedForm.shared_actor_ids
+    : (Array.isArray(selected.shared_actor_ids) ? selected.shared_actor_ids : []);
+  const persistedIntent = String(selected.intent || "working");
+  const persistedActorIds = Array.isArray(selected.shared_actor_ids) ? selected.shared_actor_ids : [];
+  const shareDraftDirty =
+    String(refreshedForm.name || "") !== String(selected.name || "")
+    || String(refreshedForm.description || "") !== String(selected.description || "")
+    || effectiveIntent !== persistedIntent
+    || !_sameStringList(effectiveActorIds, persistedActorIds);
+
+  const collaboratorsWrap = $("#collectionDetailCollaboratorsWrap");
+  const collaboratorsEl = $("#collectionDetailCollaborators");
+  if (collaboratorsWrap) collaboratorsWrap.hidden = effectiveIntent !== "shared";
+  if (collaboratorsEl) {
+    if (!state.collectionActors.length) {
+      collaboratorsEl.innerHTML = `<div class="muted">No collaborators available yet.</div>`;
+    } else {
+      collaboratorsEl.innerHTML = state.collectionActors.map((actor) => {
+        const actorId = String(actor.id || "");
+        const checked = effectiveActorIds.includes(actorId) ? "checked" : "";
+        return (
+          `<label class="collectionDetailCollaboratorRow">`
+          + `<input type="checkbox" data-actor-id="${escapeHtml(actorId)}" ${checked} />`
+          + `<span class="collectionDetailCollaboratorText">`
+          + `<span class="collectionDetailCollaboratorName">${escapeHtml(String(actor.name || "Unnamed collaborator"))}</span>`
+          + `<span class="collectionDetailCollaboratorMeta">${escapeHtml(String(actor.role || "collaborator"))} · receives a collection link</span>`
+          + `</span>`
+          + `</label>`
+        );
+      }).join("");
+    }
+  }
+
+  const linksWrap = $("#collectionDetailLinksWrap");
+  const linksEl = $("#collectionDetailLinks");
+  const linkedActors = state.collectionActors.filter((actor) => persistedActorIds.includes(String(actor.id || "")));
+  if (linksWrap) linksWrap.hidden = false;
+  if (linksEl) {
+    if (shareDraftDirty) {
+      linksEl.innerHTML = `<div class="muted">Save this collection to generate updated collaborator links.</div>`;
+    } else if (persistedIntent !== "shared") {
+      linksEl.innerHTML = `<div class="muted">Set intent to Shared to generate collaborator links.</div>`;
+    } else if (!linkedActors.length) {
+      linksEl.innerHTML = `<div class="muted">Select one or more collaborators above to generate collection links.</div>`;
+    } else {
+      linksEl.innerHTML = linkedActors.map((actor) => {
+        const link = _buildSharedCollectionLink(selected, actor);
+        return (
+          `<div class="collectionDetailLinkRow">`
+          + `<div class="collectionDetailLinkMeta">`
+          + `<strong>${escapeHtml(String(actor.name || "Unnamed collaborator"))}</strong>`
+          + `<span class="collectionDetailLinkUrl">${escapeHtml(link)}</span>`
+          + `</div>`
+          + `<button type="button" class="header-btn modal-utility-btn" data-copy-share-link="${escapeHtml(link)}">Copy link</button>`
+          + `</div>`
+        );
+      }).join("");
+      linksEl.querySelectorAll("button[data-copy-share-link]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const link = String(btn.getAttribute("data-copy-share-link") || "");
+          if (!link) return;
+          await _copyText(link);
+          Shared.showToast("Collection link copied", { type: "success", duration: 1800 });
+        });
+      });
+    }
+  }
 }
 
 function refreshCollectionBulkActions() {
@@ -2658,6 +3002,34 @@ function renderCollectionBulkModal() {
   _renderCollectionBulkList("active");
   _renderCollectionBulkList("hidden");
   refreshCollectionBulkActions();
+}
+
+function renderCollectionShareFilterButtons() {
+  const current = String(state.collectionShareFilter || "all");
+  const map = {
+    all: $("#collectionShareFilterAll"),
+    working: $("#collectionShareFilterWorking"),
+    shared: $("#collectionShareFilterShared"),
+  };
+  Object.entries(map).forEach(([key, el]) => {
+    if (!el) return;
+    el.classList.toggle("is-active", key === current);
+  });
+}
+
+function renderCollectionShareModal() {
+  _ensureCollectionManagerSelection();
+  const visibleRows = _filteredShareCollections();
+  const selectedId = String(state.collectionManagerSelectedId || "");
+  if (visibleRows.length && !visibleRows.some((row) => String(row?.id || "") === selectedId)) {
+    state.collectionManagerSelectedId = String(visibleRows[0]?.id || "");
+  }
+  if (!visibleRows.length) {
+    state.collectionManagerSelectedId = null;
+  }
+  renderCollectionShareFilterButtons();
+  renderCollectionShareList();
+  renderCollectionDetailEditor();
 }
 
 async function _refreshCollectionViewsAfterBulkChange() {
@@ -2743,8 +3115,58 @@ async function openCollectionBulkModal() {
 function closeCollectionBulkModal() {
   collectionBulkSelection.active.clear();
   collectionBulkSelection.hidden.clear();
+  state.collectionManagerSelectedId = null;
   renderCollectionBulkModal();
   $("#collectionBulkModal")?.classList.add("hidden");
+}
+
+async function openCollectionShareModal() {
+  if (!isOwner()) {
+    Shared.showToast("Owner access required.", { type: "error" });
+    return;
+  }
+  await Promise.all([loadCollectionsForManager(), loadCollectionActors()]);
+  renderCollectionShareModal();
+  $("#collectionShareModal")?.classList.remove("hidden");
+}
+
+function closeCollectionShareModal() {
+  state.collectionManagerSelectedId = null;
+  state.collectionShareFilter = "all";
+  renderCollectionShareModal();
+  $("#collectionShareModal")?.classList.add("hidden");
+}
+
+async function saveCollectionDetails() {
+  if (!isOwner()) {
+    Shared.showToast("Owner access required.", { type: "error" });
+    return;
+  }
+  const selected = _selectedCollectionForManager();
+  if (!selected) {
+    Shared.showToast("Select a collection first.", { type: "info" });
+    return;
+  }
+  const payload = _currentCollectionDetailFormState();
+  if (!payload.name) {
+    Shared.showToast("Collection name is required.", { type: "error" });
+    return;
+  }
+  try {
+    const data = await api(`/api/collections/${encodeURIComponent(selected.id)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+    const updated = data?.collection || {};
+    state.collectionManagerSelectedId = String(updated.id || selected.id);
+    await loadCollectionsForManager();
+    await Promise.all([loadCollections(), loadCatalogTree()]);
+    renderCollectionShareModal();
+    renderCatalogTree();
+    Shared.showToast(`Saved collection "${payload.name}".`, { type: "success" });
+  } catch (e) {
+    Shared.showToast(`Save failed: ${formatApiError(e)}`, { type: "error" });
+  }
 }
 
 function setCollectionFilter(collectionId) {
@@ -2778,12 +3200,22 @@ $("#newCollection").addEventListener("click", async () => {
   }
 });
 
-const manageCollectionsBtn = $("#manageCollections");
-if (manageCollectionsBtn) {
-  manageCollectionsBtn.addEventListener("click", async () => {
+const shareCollectionsBtn = $("#shareCollections");
+if (shareCollectionsBtn) {
+  shareCollectionsBtn.addEventListener("click", async () => {
+    await openCollectionShareModal();
+  });
+}
+const manageCollectionVisibilityBtn = $("#manageCollectionVisibility");
+if (manageCollectionVisibilityBtn) {
+  manageCollectionVisibilityBtn.addEventListener("click", async () => {
     await openCollectionBulkModal();
   });
 }
+const closeCollectionShareBtn = $("#closeCollectionShare");
+if (closeCollectionShareBtn) closeCollectionShareBtn.addEventListener("click", closeCollectionShareModal);
+const cancelCollectionShareBtn = $("#cancelCollectionShare");
+if (cancelCollectionShareBtn) cancelCollectionShareBtn.addEventListener("click", closeCollectionShareModal);
 const closeCollectionBulkBtn = $("#closeCollectionBulk");
 if (closeCollectionBulkBtn) closeCollectionBulkBtn.addEventListener("click", closeCollectionBulkModal);
 const cancelCollectionBulkBtn = $("#cancelCollectionBulk");
@@ -2794,6 +3226,46 @@ const collectionBulkRestoreBtn = $("#collectionBulkRestoreBtn");
 if (collectionBulkRestoreBtn) collectionBulkRestoreBtn.addEventListener("click", bulkRestoreCollections);
 const collectionBulkDeleteBtn = $("#collectionBulkDeleteBtn");
 if (collectionBulkDeleteBtn) collectionBulkDeleteBtn.addEventListener("click", bulkDeleteHiddenCollections);
+const collectionDetailSaveBtn = $("#collectionDetailSaveBtn");
+if (collectionDetailSaveBtn) collectionDetailSaveBtn.addEventListener("click", saveCollectionDetails);
+const collectionDetailIntent = $("#collectionDetailIntent");
+if (collectionDetailIntent) collectionDetailIntent.addEventListener("change", () => renderCollectionDetailEditor());
+const collectionShareFilterAllBtn = $("#collectionShareFilterAll");
+if (collectionShareFilterAllBtn) {
+  collectionShareFilterAllBtn.addEventListener("click", () => {
+    state.collectionShareFilter = "all";
+    renderCollectionShareModal();
+  });
+}
+const collectionShareFilterWorkingBtn = $("#collectionShareFilterWorking");
+if (collectionShareFilterWorkingBtn) {
+  collectionShareFilterWorkingBtn.addEventListener("click", () => {
+    state.collectionShareFilter = "working";
+    renderCollectionShareModal();
+  });
+}
+const collectionShareFilterSharedBtn = $("#collectionShareFilterShared");
+if (collectionShareFilterSharedBtn) {
+  collectionShareFilterSharedBtn.addEventListener("click", () => {
+    state.collectionShareFilter = "shared";
+    renderCollectionShareModal();
+  });
+}
+const collectionDetailCollaborators = $("#collectionDetailCollaborators");
+if (collectionDetailCollaborators) {
+  collectionDetailCollaborators.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (!target.matches("input[type='checkbox'][data-actor-id]")) return;
+    renderCollectionDetailEditor();
+  });
+}
+const collectionShareModalEl = $("#collectionShareModal");
+if (collectionShareModalEl) {
+  collectionShareModalEl.addEventListener("click", (e) => {
+    if (e.target === collectionShareModalEl) closeCollectionShareModal();
+  });
+}
 const collectionBulkModalEl = $("#collectionBulkModal");
 if (collectionBulkModalEl) {
   collectionBulkModalEl.addEventListener("click", (e) => {
@@ -3317,6 +3789,7 @@ async function openModal(asset, options = {}) {
     }
   }
   $("#modalMeta").textContent = metaParts.filter(Boolean).join(" · ");
+  updateActorContextChips();
   const copyAssetIdBtn = $("#copyAssetIdBtn");
   if (copyAssetIdBtn) {
     copyAssetIdBtn.onclick = async () => {
@@ -5019,6 +5492,7 @@ window.addEventListener("keydown", (e) => {
   // Close modal with Escape
   if (e.key === "Escape") {
     if (!$("#modal").classList.contains("hidden")) { closeModal(); return; }
+    if (!$("#collectionShareModal").classList.contains("hidden")) { closeCollectionShareModal(); return; }
     if (!$("#collectionBulkModal").classList.contains("hidden")) { closeCollectionBulkModal(); return; }
     if (!$("#mediaImportModal").classList.contains("hidden") && !isAnyImportBusy()) { closeMediaImportModal(); return; }
     if (!$("#scanImportModal").classList.contains("hidden") && !state.scanImportBusy) { closeScanImportModal(); return; }
@@ -6647,7 +7121,7 @@ function updateSidebarModeVisibility() {
   const collectionActionsSection = $("#newCollection")?.closest(".sidebar-section");
 
   if (statusSection) statusSection.hidden = !inReview;
-  if (treeSection) treeSection.hidden = inReview;
+  if (treeSection) treeSection.hidden = inReview || _isFocusedSharedCollectionSession();
   if (collectionsSection) collectionsSection.hidden = inReview;
   if (collectionActionsSection) collectionActionsSection.hidden = inReview;
 
@@ -6676,8 +7150,10 @@ function applyRoleVisibility() {
   if (addMediaEl) addMediaEl.hidden = !owner;
   const adminEl = $(".adminLink");
   if (adminEl) adminEl.hidden = !owner;
-  const manageCollectionsEl = $("#manageCollections");
-  if (manageCollectionsEl) manageCollectionsEl.hidden = !owner;
+  const shareCollectionsEl = $("#shareCollections");
+  if (shareCollectionsEl) shareCollectionsEl.hidden = !owner;
+  const manageCollectionVisibilityEl = $("#manageCollectionVisibility");
+  if (manageCollectionVisibilityEl) manageCollectionVisibilityEl.hidden = !owner;
 
   // Share context actions — available to authenticated actors only
   for (const id of ["modalShareLinkBtn", "modalShareEmailBtn", "modalShareMessageBtn"]) {
@@ -6704,6 +7180,7 @@ function applyRoleVisibility() {
   // New collection button — owner-only
   const newCollBtn = $("#newCollection");
   if (newCollBtn) newCollBtn.hidden = !owner;
+  updateActorContextChips();
   updateReviewScopeChips();
   updateSidebarModeVisibility();
 }
@@ -6732,6 +7209,7 @@ async function checkFlaggedCount() {
     const facetsPromise = loadFacets();
     const catalogTreePromise = loadCatalogTree();
     await collectionsPromise;
+    applyCollectionScopeFromUrl();
     _applyCollaboratorCollectionsDefaultScope();
     await loadAssets();
     await Promise.all([facetsPromise, catalogTreePromise]);

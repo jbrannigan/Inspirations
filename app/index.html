@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inspirations!</title>
-    <link rel="stylesheet" href="/app/styles.css?v=27" />
+    <link rel="stylesheet" href="/app/styles.css?v=33" />
     <script type="importmap">
       {
         "imports": {
@@ -166,7 +166,8 @@
         </div>
         <div class="sidebar-section">
           <button id="newCollection" class="new-item-btn" type="button">+ New Collection</button>
-          <button id="manageCollections" class="new-item-btn new-item-btn-secondary" type="button">Manage Collections</button>
+          <button id="shareCollections" class="new-item-btn new-item-btn-secondary" type="button">Share Collections</button>
+          <button id="manageCollectionVisibility" class="new-item-btn new-item-btn-secondary" type="button">Manage Visibility</button>
         </div>
       </aside>
       <div id="sidebarResizeHandle" class="sidebar-resize-handle" title="Resize sidebar" aria-hidden="true"></div>
@@ -175,6 +176,7 @@
       <main class="content">
         <div class="stats-bar">
           <span id="stats" class="stats-count">Loading…</span>
+          <span id="actorContextChip" class="actor-context-chip" hidden></span>
           <span id="canvasNarrative" class="stats-narrative"></span>
           <span id="filterSummary" class="stats-filter" hidden>
             <span id="filterSummaryText"></span>
@@ -325,6 +327,7 @@
               <div id="modalTitle" class="modalTitle"></div>
               <span id="modalTitleQuality" class="title-quality-badge modal-title-quality" hidden></span>
               <div id="modalMeta" class="muted"></div>
+              <div id="modalActorChip" class="actor-context-chip modal-actor-chip" hidden></div>
               <div id="modalAssetIdRow" class="modal-asset-id-row">
                 <button id="copyAssetIdBtn" class="iconBtn" type="button" title="Copy item ID">Copy ID</button>
               </div>
@@ -499,12 +502,79 @@
       </div>
     </div>
 
-    <!-- Collection bulk manager modal -->
+    <!-- Collection share modal -->
+    <div id="collectionShareModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="collectionShareTitle">
+      <div class="modalContent collectionShareContent">
+        <div class="modalHeader">
+          <div>
+            <div id="collectionShareTitle" class="modalTitle">Share Collections</div>
+            <div class="muted">Choose a collection, set intent, assign collaborators, and generate collaborator-specific links.</div>
+          </div>
+          <button id="closeCollectionShare" type="button">Close</button>
+        </div>
+        <div class="collectionShareBody">
+          <section class="collectionShareListSection">
+            <div class="collectionBulkSectionHeader">
+              <h3>Collections</h3>
+              <span id="collectionShareCount" class="muted">0 collections</span>
+            </div>
+            <div class="collectionShareFilters" id="collectionShareFilters">
+              <button id="collectionShareFilterAll" class="collectionShareFilter is-active" type="button">All</button>
+              <button id="collectionShareFilterWorking" class="collectionShareFilter" type="button">Working</button>
+              <button id="collectionShareFilterShared" class="collectionShareFilter" type="button">Shared</button>
+            </div>
+            <div id="collectionShareList" class="collectionBulkList"></div>
+          </section>
+          <section class="collectionBulkDetailSection">
+            <div class="collectionBulkSectionHeader">
+              <h3>Collection Details</h3>
+              <span id="collectionShareDetailStatus" class="muted">Select a collection to edit sharing.</span>
+            </div>
+            <div id="collectionShareDetailEmpty" class="muted">Choose an active collection to edit its intent and sharing.</div>
+            <div id="collectionShareDetailForm" class="collectionDetailForm" hidden>
+              <label class="collectionDetailField">
+                <span>Name</span>
+                <input id="collectionDetailName" type="text" maxlength="160" />
+              </label>
+              <label class="collectionDetailField">
+                <span>Description</span>
+                <textarea id="collectionDetailDescription" rows="2" maxlength="500"></textarea>
+              </label>
+              <label class="collectionDetailField">
+                <span>Intent</span>
+                <select id="collectionDetailIntent">
+                  <option value="working">Working</option>
+                  <option value="shared">Shared</option>
+                </select>
+              </label>
+              <div id="collectionDetailCollaboratorsWrap" class="collectionDetailField" hidden>
+                <span>Share with</span>
+                <div class="muted">Select one or more named people who should receive this collection.</div>
+                <div id="collectionDetailCollaborators" class="collectionDetailCollaborators"></div>
+                <div class="muted">Shared collections require at least one named collaborator. Questions are always enabled.</div>
+              </div>
+              <div id="collectionDetailLinksWrap" class="collectionDetailField">
+                <span>Share links</span>
+                <div id="collectionDetailLinks" class="collectionDetailLinks"></div>
+              </div>
+              <div class="collectionDetailActions">
+                <button id="collectionDetailSaveBtn" type="button">Save</button>
+              </div>
+            </div>
+          </section>
+        </div>
+        <div class="collectionBulkActions">
+          <button id="cancelCollectionShare" type="button">Done</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Collection visibility modal -->
     <div id="collectionBulkModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="collectionBulkTitle">
       <div class="modalContent collectionBulkContent">
         <div class="modalHeader">
           <div>
-            <div id="collectionBulkTitle" class="modalTitle">Manage Collections</div>
+            <div id="collectionBulkTitle" class="modalTitle">Manage Visibility</div>
             <div class="muted">Hide active collections, restore hidden ones, or permanently delete hidden collections.</div>
           </div>
           <button id="closeCollectionBulk" type="button">Close</button>
@@ -673,6 +743,6 @@
     <script src="/app/shared.js?v=3"></script>
     <script src="/app/explorer.js?v=1"></script>
     <script src="/app/attractor-explorer.js?v=2"></script>
-    <script src="/app/app.js?v=58"></script>
+    <script src="/app/app.js?v=68"></script>
   </body>
 </html>

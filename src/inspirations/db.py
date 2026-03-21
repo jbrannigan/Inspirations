@@ -465,10 +465,15 @@ def ensure_schema(db: Db) -> None:
             "provenance_kind": "text",
             "provenance_note": "text",
             "curator": "text",
+            "intent": "text default 'working'",
+            "shared_actor_id": "text",
         },
     )
+    db.exec("update collections set intent='working' where intent is null or trim(intent)=''")
     db.exec("create index if not exists ix_collections_hidden on collections(hidden);")
     db.exec("create index if not exists ix_collections_provenance_kind on collections(provenance_kind);")
+    db.exec("create index if not exists ix_collections_intent on collections(intent);")
+    db.exec("create index if not exists ix_collections_shared_actor_id on collections(shared_actor_id);")
     db.exec(
         """
         create table if not exists collection_items (
@@ -624,6 +629,41 @@ def ensure_schema(db: Db) -> None:
         """
     )
     db.exec("create unique index if not exists ux_actors_token on actors(token);")
+
+    db.exec(
+        """
+        create table if not exists collection_shares (
+          id text primary key,
+          collection_id text not null,
+          actor_id text not null,
+          created_at text not null,
+          foreign key(collection_id) references collections(id) on delete cascade,
+          foreign key(actor_id) references actors(id) on delete cascade
+        );
+        """
+    )
+    db.exec(
+        """
+        create unique index if not exists ux_collection_shares_collection_actor
+        on collection_shares(collection_id, actor_id);
+        """
+    )
+    db.exec("create index if not exists ix_collection_shares_collection on collection_shares(collection_id);")
+    db.exec("create index if not exists ix_collection_shares_actor on collection_shares(actor_id);")
+    db.exec(
+        """
+        insert into collection_shares (id, collection_id, actor_id, created_at)
+        select lower(hex(randomblob(16))), c.id, c.shared_actor_id, c.updated_at
+        from collections c
+        where coalesce(c.shared_actor_id, '') != ''
+          and exists (select 1 from actors a where a.id = c.shared_actor_id)
+          and not exists (
+            select 1 from collection_shares cs
+            where cs.collection_id = c.id
+              and cs.actor_id = c.shared_actor_id
+          )
+        """
+    )
 
     # Add attribution + question columns to annotations
     _ensure_columns(

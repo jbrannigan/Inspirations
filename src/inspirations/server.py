@@ -62,6 +62,7 @@ from .store import (
     set_collection_order,
     set_triage_status,
     triage_stats,
+    update_collection,
     update_annotation,
     update_asset_notes,
 )
@@ -353,6 +354,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
             actor = _resolve_actor(self)
             include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
+            actor_role = str(actor.get("role") or "") if actor else ""
+            actor_id = str(actor.get("id") or "") if actor else ""
             category = q.get("category", [""])[0]
             exclude_tracks = ""
             if _is_collaborator(actor):
@@ -380,6 +383,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 classification_axis=q.get("classification_axis", [""])[0],
                 classification_value=q.get("classification_value", [""])[0],
                 exclude_tracks=exclude_tracks,
+                viewer_role=actor_role,
+                viewer_actor_id=actor_id,
                 limit=page_limit + 1,
                 offset=int(q.get("offset", ["0"])[0]),
             )
@@ -416,6 +421,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
             actor = _resolve_actor(self)
             include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
+            actor_role = str(actor.get("role") or "") if actor else ""
+            actor_id = str(actor.get("id") or "") if actor else ""
             category = q.get("category", [""])[0]
             exclude_tracks = ""
             if _is_collaborator(actor):
@@ -435,6 +442,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 classification_axis=q.get("classification_axis", [""])[0],
                 classification_value=q.get("classification_value", [""])[0],
                 exclude_tracks=exclude_tracks,
+                viewer_role=actor_role,
+                viewer_actor_id=actor_id,
             )
             return _send(self, 200, {"ids": ids})
 
@@ -492,7 +501,12 @@ class ApiHandler(BaseHTTPRequestHandler):
             include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
             actor = _resolve_actor(self)
             include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
-            cols = self._with_db(list_collections, include_hidden=include_hidden)
+            cols = self._with_db(
+                list_collections,
+                include_hidden=include_hidden,
+                viewer_role=str((actor or {}).get("role") or ""),
+                viewer_actor_id=str((actor or {}).get("id") or ""),
+            )
             return _send(self, 200, {"collections": cols})
 
         if parsed.path == "/api/facets":
@@ -596,7 +610,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return _send(self, 200, {"tree": []})
             actor = _resolve_actor(self)
             try:
-                tree = self._build_catalog_tree(Path(catalog_dir))
+                tree = self._build_catalog_tree(Path(catalog_dir), actor=actor)
             except Exception:
                 tree = []
             # Adjust counts to exclude hidden items
@@ -723,6 +737,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 collection_id=collection_id,
                 item_id=item_id,
                 actor_role=str(actor.get("role") or ""),
+                actor_id=str(actor.get("id") or ""),
             )
             return _send(self, 200, report)
 
@@ -768,11 +783,29 @@ class ApiHandler(BaseHTTPRequestHandler):
             return _send(self, 400, {"error": str(e)})
 
         if parsed.path == "/api/collections":
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
             name = (body.get("name") or "").strip()
             if not name:
                 return _send(self, 400, {"error": "name required"})
             desc = (body.get("description") or "").strip()
-            col = self._with_db(create_collection, name=name, description=desc)
+            intent = (body.get("intent") or "working").strip().lower()
+            shared_actor_id = (body.get("shared_actor_id") or "").strip()
+            shared_actor_ids = body.get("shared_actor_ids") or []
+            if not isinstance(shared_actor_ids, list):
+                return _send(self, 400, {"error": "shared_actor_ids must be list"})
+            try:
+                col = self._with_db(
+                    create_collection,
+                    name=name,
+                    description=desc,
+                    intent=intent,
+                    shared_actor_id=shared_actor_id,
+                    shared_actor_ids=shared_actor_ids,
+                )
+            except ValueError as e:
+                return _send(self, 400, {"error": str(e)})
             return _send(self, 201, {"collection": col})
 
         if parsed.path == "/api/collections/bulk-hide":
@@ -815,11 +848,29 @@ class ApiHandler(BaseHTTPRequestHandler):
             return _send(self, 200, {"ok": True})
 
         if parsed.path == "/api/tray/create-collection":
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
             name = (body.get("name") or "").strip()
             if not name:
                 return _send(self, 400, {"error": "name required"})
             desc = (body.get("description") or "").strip()
-            col = self._with_db(create_collection_from_tray, name=name, description=desc)
+            intent = (body.get("intent") or "working").strip().lower()
+            shared_actor_id = (body.get("shared_actor_id") or "").strip()
+            shared_actor_ids = body.get("shared_actor_ids") or []
+            if not isinstance(shared_actor_ids, list):
+                return _send(self, 400, {"error": "shared_actor_ids must be list"})
+            try:
+                col = self._with_db(
+                    create_collection_from_tray,
+                    name=name,
+                    description=desc,
+                    intent=intent,
+                    shared_actor_id=shared_actor_id,
+                    shared_actor_ids=shared_actor_ids,
+                )
+            except ValueError as e:
+                return _send(self, 400, {"error": str(e)})
             return _send(self, 201, {"collection": col})
 
         if parsed.path == "/api/admin/login":
@@ -1330,6 +1381,31 @@ class ApiHandler(BaseHTTPRequestHandler):
         except Exception as e:
             return _send(self, 400, {"error": str(e)})
 
+        m = re.match(r"^/api/collections/([^/]+)$", parsed.path)
+        if m:
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
+            collection_id = m.group(1)
+            shared_actor_ids = body.get("shared_actor_ids") or []
+            if not isinstance(shared_actor_ids, list):
+                return _send(self, 400, {"error": "shared_actor_ids must be list"})
+            try:
+                collection = self._with_db(
+                    update_collection,
+                    collection_id=collection_id,
+                    name=body.get("name"),
+                    description=body.get("description"),
+                    intent=body.get("intent"),
+                    shared_actor_id=(body.get("shared_actor_id") or "").strip(),
+                    shared_actor_ids=shared_actor_ids,
+                )
+            except FileNotFoundError:
+                return _send(self, 404, {"error": "collection not found"})
+            except ValueError as e:
+                return _send(self, 400, {"error": str(e)})
+            return _send(self, 200, {"collection": collection})
+
         m = re.match(r"^/api/assets/([^/]+)/title$", parsed.path)
         if m:
             actor = _resolve_actor(self)
@@ -1720,9 +1796,10 @@ class ApiHandler(BaseHTTPRequestHandler):
         collection_id: str,
         item_id: str,
         actor_role: str,
+        actor_id: str,
     ) -> dict:
         collection_rows = db.query(
-            "select id, name from collections where id = ? limit 1",
+            "select id, name, coalesce(intent, 'working') as intent, coalesce(shared_actor_id, '') as shared_actor_id from collections where id = ? limit 1",
             (collection_id,),
         )
         if not collection_rows:
@@ -1735,6 +1812,29 @@ class ApiHandler(BaseHTTPRequestHandler):
             }
 
         collection_name = str(collection_rows[0]["name"] or "")
+        collection_intent = str(collection_rows[0]["intent"] or "working").strip().lower()
+        collection_shared_actor_id = str(collection_rows[0]["shared_actor_id"] or "").strip()
+        actor_role_norm = str(actor_role or "").strip().lower()
+        actor_id_norm = str(actor_id or "").strip()
+        if actor_role_norm != "owner":
+            shared_match = False
+            if actor_id_norm and collection_intent == "shared":
+                shared_match = bool(
+                    collection_shared_actor_id == actor_id_norm
+                    or db.query_value(
+                        "select 1 from collection_shares where collection_id = ? and actor_id = ? limit 1",
+                        (collection_id, actor_id_norm),
+                    )
+                )
+            if not shared_match:
+                return {
+                    "ok": True,
+                    "found": False,
+                    "collection_id": collection_id,
+                    "collection_name": collection_name,
+                    "item_id": item_id,
+                    "reason": "collection_not_shared_with_actor",
+                }
         in_collection = db.query_value(
             "select 1 from collection_items where collection_id = ? and asset_id = ? limit 1",
             (collection_id, item_id),
@@ -1765,7 +1865,7 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         triage_status = str(asset_rows[0]["triage_status"] or "")
         is_hidden = triage_status == "hidden"
-        if is_hidden and str(actor_role or "").strip().lower() != "owner":
+        if is_hidden and actor_role_norm != "owner":
             return {
                 "ok": True,
                 "found": False,
@@ -1834,7 +1934,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 short_ids.append(sid)
         return short_ids, None, None
 
-    def _build_catalog_tree(self, catalog_dir: Path) -> list[dict]:
+    def _build_catalog_tree(self, catalog_dir: Path, *, actor: dict | None = None) -> list[dict]:
         """Build a tree structure from the catalog for the sidebar browser."""
         index_path = catalog_dir / "_index.md"
         if not index_path.exists():
@@ -1958,28 +2058,11 @@ class ApiHandler(BaseHTTPRequestHandler):
         try:
             with Db(self.server.db_path) as db:
                 ensure_schema(db)
-                rows = db.query(
-                    """
-                    select c.id, c.name, c.description,
-                           c.provenance_kind, c.provenance_note, c.curator,
-                           (
-                             select count(*)
-                             from collection_items ci
-                             join assets a on a.id = ci.asset_id
-                             where ci.collection_id = c.id
-                               and (a.triage_status is null or a.triage_status != 'hidden')
-                               and a.id not in (
-                                 select h.asset_id
-                                 from collection_items h
-                                 where h.collection_id = (
-                                   select id from collections where lower(name)='hidden' limit 1
-                                 )
-                               )
-                           ) as item_count
-                    from collections c
-                    where lower(c.name) != 'hidden' and coalesce(c.hidden, 0) = 0
-                    order by c.name collate nocase asc, c.updated_at desc
-                    """
+                rows = list_collections(
+                    db,
+                    include_hidden=False,
+                    viewer_role=str((actor or {}).get("role") or ""),
+                    viewer_actor_id=str((actor or {}).get("id") or ""),
                 )
             if rows:
                 collections_node = {
@@ -1998,14 +2081,17 @@ class ApiHandler(BaseHTTPRequestHandler):
                         {
                             "id": f"collection:{cid}",
                             "label": str(data["name"] or ""),
-                            "count": int(data.get("item_count") or 0),
+                            "count": int(data.get("count_visible") or data.get("count") or 0),
                             "type": "collection",
                             "collection_id": cid,
                             "description": str(data.get("description") or ""),
                             "provenance_kind": str(data.get("provenance_kind") or ""),
-                            "provenance_label": collection_provenance_label(str(data.get("provenance_kind") or "")),
-                            "provenance_badge": collection_provenance_badge(str(data.get("provenance_kind") or "")),
+                            "provenance_label": str(data.get("provenance_label") or collection_provenance_label(str(data.get("provenance_kind") or ""))),
+                            "provenance_badge": str(data.get("provenance_badge") or collection_provenance_badge(str(data.get("provenance_kind") or ""))),
                             "provenance_note": str(data.get("provenance_note") or ""),
+                            "intent": str(data.get("intent") or "working"),
+                            "shared_actor_id": str(data.get("shared_actor_id") or ""),
+                            "shared_actor_name": str(data.get("shared_actor_name") or ""),
                         }
                     )
                 if collections_node["children"]:

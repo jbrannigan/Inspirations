@@ -121,6 +121,10 @@ class TestTreeContract(unittest.TestCase):
         with Db(self.db_path) as db:
             ensure_schema(db)
             _seed_assets(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-tree", "Owner", "owner-tree-token", "owner"),
+            )
             generate_catalog(db, self.catalog_dir)
 
         self.server = HTTPServer(("127.0.0.1", 0), ApiHandler)
@@ -150,9 +154,9 @@ class TestTreeContract(unittest.TestCase):
         self.thread.join(timeout=2)
         self._tmp.cleanup()
 
-    def _get(self, path: str) -> dict:
+    def _get(self, path: str, *, headers: dict | None = None) -> dict:
         """GET a JSON endpoint, return parsed body."""
-        req = urllib.request.Request(f"{self.base_url}{path}")
+        req = urllib.request.Request(f"{self.base_url}{path}", headers=headers or {})
         with urllib.request.urlopen(req, timeout=5) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
@@ -306,7 +310,7 @@ class TestTreeContract(unittest.TestCase):
                 ("c-hidden", "CB: Hidden", "", "2026-03-01T00:00:00+00:00", "2026-03-02T00:00:04+00:00"),
             )
 
-        tree = self._get("/api/catalog/tree")["tree"]
+        tree = self._get("/api/catalog/tree", headers={"X-Actor-Token": "owner-tree-token"})["tree"]
         collections_node = next((n for n in tree if n.get("type") == "collections_group"), None)
         self.assertIsNotNone(collections_node, "collections group should be present")
         labels = [str(c.get("label") or "") for c in collections_node.get("children", [])]
@@ -332,7 +336,7 @@ class TestTreeContract(unittest.TestCase):
                 ("c-visible-check", "dd000000-1000-4000-a000-000000000000", 2),
             )
 
-        tree = self._get("/api/catalog/tree")["tree"]
+        tree = self._get("/api/catalog/tree", headers={"X-Actor-Token": "owner-tree-token"})["tree"]
         collections_node = next((n for n in tree if n.get("type") == "collections_group"), None)
         self.assertIsNotNone(collections_node, "collections group should be present")
         target = next(
@@ -360,7 +364,7 @@ class TestTreeContract(unittest.TestCase):
             )
             ensure_schema(db)
 
-        tree = self._get("/api/catalog/tree")["tree"]
+        tree = self._get("/api/catalog/tree", headers={"X-Actor-Token": "owner-tree-token"})["tree"]
         collections_node = next((n for n in tree if n.get("type") == "collections_group"), None)
         self.assertIsNotNone(collections_node, "collections group should be present")
         child = next((c for c in collections_node.get("children", []) if c.get("collection_id") == "c-cb"), None)

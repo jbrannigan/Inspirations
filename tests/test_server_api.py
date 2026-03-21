@@ -784,11 +784,6 @@ class TestServerApi(unittest.TestCase):
         with Db(self.db_path) as db:
             ensure_schema(db)
             db.exec(
-                "insert into collections (id, name, description, created_at, updated_at) values (?, ?, ?, datetime('now'), datetime('now'))",
-                ("c2", "Bathroom", ""),
-            )
-            db.exec("update collections set hidden=1, hidden_at=datetime('now') where id='c1'")
-            db.exec(
                 "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
                 ("owner-cols", "Owner", "owner-cols-token", "owner"),
             )
@@ -796,10 +791,20 @@ class TestServerApi(unittest.TestCase):
                 "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
                 ("collab-cols", "Collab", "collab-cols-token", "collaborator"),
             )
+            db.exec(
+                """
+                insert into collections
+                  (id, name, description, created_at, updated_at, intent, shared_actor_id)
+                values (?, ?, ?, datetime('now'), datetime('now'), ?, ?)
+                """,
+                ("c2", "Bathroom", "", "shared", "collab-cols"),
+            )
+            db.exec("update collections set hidden=1, hidden_at=datetime('now') where id='c1'")
+            db.exec("update collections set intent='shared', shared_actor_id='collab-cols' where id='c1'")
 
         status, body = self._request("/api/collections?include_hidden=1")
         self.assertEqual(status, 200)
-        self.assertEqual({c["id"] for c in body.get("collections", [])}, {"c2"})
+        self.assertEqual(body.get("collections", []), [])
 
         status, body = self._request(
             "/api/collections?include_hidden=1",
@@ -899,17 +904,25 @@ class TestServerApi(unittest.TestCase):
     def test_collections_count_reflects_visible_items(self):
         with Db(self.db_path) as db:
             ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-count-cols", "Owner", "owner-count-cols-token", "owner"),
+            )
             db.exec("update assets set triage_status='hidden' where id='a2'")
             db.exec(
-                "insert into collections (id, name, description, created_at, updated_at) values (?, ?, ?, datetime('now'), datetime('now'))",
-                ("hidden-col", "Hidden", "",),
+                """
+                insert into collections
+                  (id, name, description, created_at, updated_at, intent)
+                values (?, ?, ?, datetime('now'), datetime('now'), ?)
+                """,
+                ("hidden-col", "Hidden", "", "working"),
             )
             db.exec(
                 "insert into collection_items (collection_id, asset_id, position) values (?, ?, ?)",
                 ("hidden-col", "a1", 1),
             )
 
-        status, body = self._request("/api/collections")
+        status, body = self._request("/api/collections", headers={"X-Actor-Token": "owner-count-cols-token"})
         self.assertEqual(status, 200)
         c1 = next((c for c in body.get("collections", []) if c.get("id") == "c1"), None)
         self.assertIsNotNone(c1)
@@ -921,9 +934,13 @@ class TestServerApi(unittest.TestCase):
         with Db(self.db_path) as db:
             ensure_schema(db)
             db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-prov-cols", "Owner", "owner-prov-cols-token", "owner"),
+            )
+            db.exec(
                 """
-                insert into collections (id, name, description, created_at, updated_at)
-                values (?, ?, ?, ?, ?)
+                insert into collections (id, name, description, created_at, updated_at, intent)
+                values (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     "cb1",
@@ -931,11 +948,12 @@ class TestServerApi(unittest.TestCase):
                     "Kitchen layouts, cabinets, countertops, appliances.",
                     "2026-03-10T00:00:00+00:00",
                     "2026-03-10T00:00:00+00:00",
+                    "working",
                 ),
             )
             ensure_schema(db)
 
-        status, body = self._request("/api/collections")
+        status, body = self._request("/api/collections", headers={"X-Actor-Token": "owner-prov-cols-token"})
         self.assertEqual(status, 200)
         cb1 = next((c for c in body.get("collections", []) if c.get("id") == "cb1"), None)
         self.assertIsNotNone(cb1)
@@ -943,6 +961,191 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(cb1.get("provenance_badge"), "AI set")
         self.assertEqual(cb1.get("provenance_label"), "AI-derived representative")
         self.assertIn("Not a human-curated final selection", str(cb1.get("provenance_note") or ""))
+
+    def test_collection_creation_requires_owner_and_shared_collections_require_collaborator(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-create", "Owner", "owner-create-token", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-create", "Casey", "collab-create-token", "collaborator"),
+            )
+
+        status, body = self._request(
+            "/api/collections",
+            method="POST",
+            payload={"name": "Client Share", "intent": "shared", "shared_actor_id": "collab-create"},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(body.get("error"), "owner access required")
+
+        status, body = self._request(
+            "/api/collections",
+            method="POST",
+            payload={"name": "Client Share", "intent": "shared"},
+            headers={"X-Actor-Token": "owner-create-token"},
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("shared_actor_id", str(body.get("error") or ""))
+
+        status, body = self._request(
+            "/api/collections",
+            method="POST",
+            payload={"name": "Client Share", "intent": "shared", "shared_actor_id": "collab-create"},
+            headers={"X-Actor-Token": "owner-create-token"},
+        )
+        self.assertEqual(status, 201)
+        col = body.get("collection") or {}
+        self.assertEqual(col.get("intent"), "shared")
+        self.assertEqual(col.get("shared_actor_id"), "collab-create")
+        self.assertEqual(col.get("shared_actor_name"), "Casey")
+
+        status, body = self._request(
+            "/api/collections",
+            method="POST",
+            payload={
+                "name": "Multi Share",
+                "intent": "shared",
+                "shared_actor_ids": ["collab-create"],
+            },
+            headers={"X-Actor-Token": "owner-create-token"},
+        )
+        self.assertEqual(status, 201)
+        col = body.get("collection") or {}
+        self.assertEqual(col.get("shared_actor_ids"), ["collab-create"])
+        self.assertEqual(col.get("shared_actor_names"), ["Casey"])
+
+    def test_collaborator_only_sees_shared_collections_assigned_to_them(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-share", "Owner", "owner-share-token", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-one", "Alex", "collab-one-token", "collaborator"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-two", "Blair", "collab-two-token", "collaborator"),
+            )
+            db.exec("update collections set intent='working' where id='c1'")
+            db.exec(
+                """
+                insert into collections
+                  (id, name, description, created_at, updated_at, intent, shared_actor_id)
+                values (?, ?, ?, datetime('now'), datetime('now'), ?, ?)
+                """,
+                ("c-shared-alex", "Alex Share", "", "shared", "collab-one"),
+            )
+            db.exec(
+                """
+                insert into collections
+                  (id, name, description, created_at, updated_at, intent, shared_actor_id)
+                values (?, ?, ?, datetime('now'), datetime('now'), ?, ?)
+                """,
+                ("c-shared-blair", "Blair Share", "", "shared", "collab-two"),
+            )
+            db.exec(
+                """
+                insert into collections
+                  (id, name, description, created_at, updated_at, intent)
+                values (?, ?, ?, datetime('now'), datetime('now'), ?)
+                """,
+                ("c-shared-both", "Shared With Both", "", "shared"),
+            )
+            db.exec(
+                "insert into collection_shares (id, collection_id, actor_id, created_at) values (?, ?, ?, datetime('now'))",
+                ("share-both-1", "c-shared-both", "collab-one"),
+            )
+            db.exec(
+                "insert into collection_shares (id, collection_id, actor_id, created_at) values (?, ?, ?, datetime('now'))",
+                ("share-both-2", "c-shared-both", "collab-two"),
+            )
+
+        status, body = self._request("/api/collections")
+        self.assertEqual(status, 200)
+        self.assertEqual(body.get("collections", []), [])
+
+        status, body = self._request(
+            "/api/collections",
+            headers={"X-Actor-Token": "collab-one-token"},
+        )
+        self.assertEqual(status, 200)
+        alex_map = {c["id"]: c for c in body.get("collections", [])}
+        self.assertEqual(set(alex_map.keys()), {"c-shared-alex", "c-shared-both"})
+        self.assertEqual(alex_map["c-shared-both"].get("shared_actor_ids"), ["collab-one", "collab-two"])
+
+        status, body = self._request(
+            "/api/collections",
+            headers={"X-Actor-Token": "owner-share-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue({"c1", "c-shared-alex", "c-shared-blair"}.issubset({c["id"] for c in body.get("collections", [])}))
+
+    def test_owner_can_update_collection_intent_and_shares(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-update", "Owner", "owner-update-token", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-one", "Alex", "collab-one-token", "collaborator"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-two", "Blair", "collab-two-token", "collaborator"),
+            )
+
+        status, body = self._request(
+            "/api/collections/c1",
+            method="PUT",
+            headers={"X-Actor-Token": "owner-update-token"},
+            payload={
+                "name": "Kitchen Share",
+                "description": "For client discussion",
+                "intent": "shared",
+                "shared_actor_ids": ["collab-one", "collab-two"],
+            },
+        )
+        self.assertEqual(status, 200)
+        collection = body.get("collection") or {}
+        self.assertEqual(collection.get("name"), "Kitchen Share")
+        self.assertEqual(collection.get("intent"), "shared")
+        self.assertEqual(collection.get("shared_actor_id"), "collab-one")
+        self.assertEqual(collection.get("shared_actor_ids"), ["collab-one", "collab-two"])
+        self.assertEqual(collection.get("shared_actor_names"), ["Alex", "Blair"])
+
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            share_rows = db.query(
+                "select actor_id from collection_shares where collection_id='c1' order by actor_id"
+            )
+        self.assertEqual([str(r["actor_id"]) for r in share_rows], ["collab-one", "collab-two"])
+
+    def test_owner_can_get_actor_list_for_collection_sharing(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-list", "Owner", "owner-list-token", "owner"),
+            )
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-list", "Casey", "collab-list-token", "collaborator"),
+            )
+
+        status, body = self._request("/api/actors", headers={"X-Actor-Token": "owner-list-token"})
+        self.assertEqual(status, 200)
+        actor_map = {a["id"]: a for a in body.get("actors", [])}
+        self.assertIn("owner-list", actor_map)
+        self.assertIn("collab-list", actor_map)
 
     def test_catalog_endpoints_include_hidden_require_owner(self):
         visible_id = "feedface-0000-0000-0000-000000000000"
@@ -1031,6 +1234,7 @@ class TestServerApi(unittest.TestCase):
                 "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
                 ("collab-scope-1", "Collab", "collab-scope-token-1", "collaborator"),
             )
+            db.exec("update collections set intent='shared', shared_actor_id='collab-scope-1' where id='c1'")
 
         status, body = self._request(
             "/api/assets?limit=20",
@@ -1870,12 +2074,22 @@ class TestServerApi(unittest.TestCase):
                 ("c2", "Bathroom", ""),
             )
             db.exec("insert into collection_items (collection_id, asset_id, position) values (?, ?, ?)", ("c2", "a3", 1))
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-multi-col", "Owner", "owner-multi-col-token", "owner"),
+            )
 
-        status, ids_body = self._request("/api/asset-ids?collection_id=c1,c2")
+        status, ids_body = self._request(
+            "/api/asset-ids?collection_id=c1,c2",
+            headers={"X-Actor-Token": "owner-multi-col-token"},
+        )
         self.assertEqual(status, 200)
         self.assertEqual(set(ids_body.get("ids", [])), {"a1", "a2", "a3"})
 
-        status, body = self._request("/api/assets?collection_id=c1,c2&limit=10")
+        status, body = self._request(
+            "/api/assets?collection_id=c1,c2&limit=10",
+            headers={"X-Actor-Token": "owner-multi-col-token"},
+        )
         self.assertEqual(status, 200)
         self.assertEqual({a["id"] for a in body.get("assets", [])}, {"a1", "a2", "a3"})
 
@@ -1891,6 +2105,7 @@ class TestServerApi(unittest.TestCase):
                 "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
                 ("collab-ctx-1", "Collab", "collab-ctx-token-1", "collaborator"),
             )
+            db.exec("update collections set intent='shared', shared_actor_id='collab-ctx-1' where id='c1'")
 
         status, body = self._request(
             "/api/context/resolve?collection_id=c1&item_id=a1",
@@ -1913,6 +2128,22 @@ class TestServerApi(unittest.TestCase):
         self.assertFalse(body.get("found"))
         self.assertEqual(body.get("reason"), "item_not_in_collection")
 
+    def test_context_resolve_denies_collection_not_shared_with_actor(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-ctx-denied", "Collab", "collab-ctx-denied-token", "collaborator"),
+            )
+
+        status, body = self._request(
+            "/api/context/resolve?collection_id=c1&item_id=a1",
+            headers={"X-Actor-Token": "collab-ctx-denied-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(body.get("found"))
+        self.assertEqual(body.get("reason"), "collection_not_shared_with_actor")
+
     def test_context_resolve_hidden_item_is_owner_only(self):
         with Db(self.db_path) as db:
             ensure_schema(db)
@@ -1925,6 +2156,7 @@ class TestServerApi(unittest.TestCase):
                 "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
                 ("collab-ctx-2", "Collab", "collab-ctx-token-2", "collaborator"),
             )
+            db.exec("update collections set intent='shared', shared_actor_id='collab-ctx-2' where id='c1'")
 
         status, body = self._request(
             "/api/context/resolve?collection_id=c1&item_id=a2",
@@ -1941,6 +2173,47 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(body.get("found"))
         self.assertTrue(body.get("item_hidden"))
+
+    def test_collection_scoped_asset_endpoints_require_shared_collection_access(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("collab-asset-scope", "Collab", "collab-asset-scope-token", "collaborator"),
+            )
+
+        status, body = self._request(
+            "/api/assets?collection_id=c1&limit=10",
+            headers={"X-Actor-Token": "collab-asset-scope-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body.get("assets", []), [])
+        self.assertEqual(int(body.get("total") or 0), 0)
+
+        status, body = self._request(
+            "/api/asset-ids?collection_id=c1",
+            headers={"X-Actor-Token": "collab-asset-scope-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body.get("ids", []), [])
+
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec("update collections set intent='shared', shared_actor_id='collab-asset-scope' where id='c1'")
+
+        status, body = self._request(
+            "/api/assets?collection_id=c1&limit=10",
+            headers={"X-Actor-Token": "collab-asset-scope-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual({a["id"] for a in body.get("assets", [])}, {"a1", "a2"})
+
+        status, body = self._request(
+            "/api/asset-ids?collection_id=c1",
+            headers={"X-Actor-Token": "collab-asset-scope-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(set(body.get("ids", [])), {"a1", "a2"})
 
     def test_me_prefers_query_actor_over_header_token(self):
         with Db(self.db_path) as db:
@@ -2355,6 +2628,12 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual([a["id"] for a in body["assets"]], ["a1"])
 
     def test_hide_asset_moves_to_hidden_collection_and_excludes_from_main_canvas(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-hidden-view", "Owner", "owner-hidden-view-token", "owner"),
+            )
         status, body = self._request("/api/assets/a2/hide", method="POST", payload={})
         self.assertEqual(status, 200)
         hidden_id = body.get("hidden_collection_id")
@@ -2364,7 +2643,10 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual([a["id"] for a in body["assets"]], ["a1"])
 
-        status, body = self._request(f"/api/assets?collection_id={hidden_id}")
+        status, body = self._request(
+            f"/api/assets?collection_id={hidden_id}",
+            headers={"X-Actor-Token": "owner-hidden-view-token"},
+        )
         self.assertEqual(status, 200)
         self.assertEqual([a["id"] for a in body["assets"]], ["a2"])
 

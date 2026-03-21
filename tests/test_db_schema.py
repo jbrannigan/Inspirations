@@ -199,6 +199,64 @@ class TestDbSchema(unittest.TestCase):
                 )
             )
 
+    def test_collection_intent_backfills_to_working(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    """
+                    insert into collections (id, name, description, created_at, updated_at)
+                    values (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "c1",
+                        "Kitchen Notes",
+                        "",
+                        "2026-03-10T00:00:00+00:00",
+                        "2026-03-10T00:00:00+00:00",
+                    ),
+                )
+                ensure_schema(db)
+                row = db.query(
+                    "select intent, shared_actor_id from collections where id='c1'"
+                )[0]
+            self.assertEqual(str(row["intent"]), "working")
+            self.assertFalse(str(row["shared_actor_id"] or "").strip())
+
+    def test_collection_shares_backfills_from_legacy_shared_actor_id(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, ?)",
+                    ("collab-1", "Alex", "tok-1", "collaborator", "2026-03-10T00:00:00+00:00"),
+                )
+                db.exec(
+                    """
+                    insert into collections
+                      (id, name, description, created_at, updated_at, intent, shared_actor_id)
+                    values (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "c1",
+                        "Shared Kitchen",
+                        "",
+                        "2026-03-10T00:00:00+00:00",
+                        "2026-03-10T00:00:00+00:00",
+                        "shared",
+                        "collab-1",
+                    ),
+                )
+                ensure_schema(db)
+                rows = db.query(
+                    "select collection_id, actor_id from collection_shares where collection_id='c1'"
+                )
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(str(rows[0]["collection_id"]), "c1")
+            self.assertEqual(str(rows[0]["actor_id"]), "collab-1")
+
 
 if __name__ == "__main__":
     unittest.main()
