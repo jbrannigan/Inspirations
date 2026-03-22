@@ -315,6 +315,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   align-items: center;
   gap: 12px;
 }
+.ann-hint-row[hidden] { display: none !important; }
 .ann-question-label {
   display: inline-flex;
   align-items: center;
@@ -330,6 +331,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .sectionTitle.sectionTitle-questions {
   color: #e67e22;
+}
+.sectionTitle.sectionTitle-context {
+  color: #6d7d8e;
 }
 
 /* ── Header actions ────────────────────────────────────────────────────────── */
@@ -2360,7 +2364,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   flex-wrap: wrap;
   gap: 4px;
   margin-bottom: 8px;
-  max-height: 120px;
+  max-height: 56px;
   overflow-y: auto;
 }
 .modal-labels.expanded { max-height: none; }
@@ -2961,16 +2965,27 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .notes { display: flex; flex-direction: column; gap: 10px; }
 .modal-side-section { display: grid; gap: 8px; }
 .modal-side-section[hidden] { display: none !important; }
-#modalAnnotationsSection { order: 30; }
-#modalNotesSection { order: 40; }
+#modalNotesSection { order: 30; }
+#modalAnnotationsSection { order: 40; }
 #modalLabelsSection { order: 50; }
-html[data-actor-role="owner"] #modalNotesSection { order: 30; }
-html[data-actor-role="owner"] #modalAnnotationsSection { order: 40; }
 .notes textarea { width: 100%; min-height: 90px; }
 .notes textarea[readonly] {
   background: var(--surface-subtle);
   color: var(--text-secondary);
   border-style: dashed;
+}
+.modal-side-section-readonly {
+  padding: 10px 12px;
+  border: 1px dashed rgba(109, 125, 142, 0.35);
+  border-radius: 12px;
+  background: rgba(240, 237, 232, 0.55);
+}
+.modal-side-section-readonly .sectionTitle {
+  margin-bottom: 2px;
+}
+.modal-side-section-readonly textarea[readonly] {
+  min-height: 72px;
+  background: rgba(255, 255, 255, 0.6);
 }
 .notes .list { display: grid; gap: 8px; }
 .listItem {
@@ -2991,6 +3006,24 @@ html[data-actor-role="owner"] #modalAnnotationsSection { order: 40; }
   color: var(--muted);
   margin-top: 2px;
   line-height: 1.45;
+}
+.ann-empty-state {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: rgba(240, 237, 232, 0.42);
+}
+.ann-empty-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+.ann-empty-body {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
 }
 .marker {
   position: absolute;

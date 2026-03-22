@@ -4343,6 +4343,7 @@ async function openModal(asset, options = {}) {
   const annotationsTitle = $("#modalAnnotationsTitle");
   const stagePrompt = $("#modalStagePrompt");
   const notesSection = $("#modalNotesSection");
+  const notesTitle = $("#modalNotesTitle");
   const collaboratorOnlyQuestions = !!(state.actor && state.actor.role !== "owner");
   if (annHintText) {
     annHintText.textContent = collaboratorOnlyQuestions
@@ -4360,6 +4361,10 @@ async function openModal(asset, options = {}) {
     annotationsTitle.textContent = collaboratorOnlyQuestions ? "Questions" : "Annotations";
     annotationsTitle.classList.toggle("sectionTitle-questions", collaboratorOnlyQuestions);
     annotationsTitle.classList.toggle("sectionTitle-annotations", !collaboratorOnlyQuestions);
+  }
+  if (notesTitle) {
+    notesTitle.textContent = collaboratorOnlyQuestions ? "Owner notes" : "Notes";
+    notesTitle.classList.toggle("sectionTitle-context", collaboratorOnlyQuestions);
   }
   if (stagePrompt) {
     if (collaboratorOnlyQuestions) {
@@ -4387,17 +4392,19 @@ async function openModal(asset, options = {}) {
     const hasNotes = !!notesValue.trim();
     notesArea.value = notesValue;
     const editable = canEditAssetNotes();
+    notesArea.placeholder = editable ? "General notes about this image…" : "Owner notes will appear here.";
     notesArea.readOnly = !editable;
     notesArea.disabled = false;
     notesArea.oninput = editable ? () => scheduleNotesUpdate(asset.id, notesArea.value) : null;
     notesArea.onblur = editable ? () => { void persistAssetNotesNow(asset.id, notesArea.value); } : null;
     notesArea.onfocus = () => { clearActiveAnnotationSelection(); };
     if (notesSection) notesSection.hidden = !editable && !hasNotes;
+    if (notesSection) notesSection.classList.toggle("modal-side-section-readonly", !editable);
     if (notesHint) {
       notesHint.hidden = editable;
       notesHint.textContent = editable
         ? ""
-        : "General notes are owner-only. Use annotations or questions to leave feedback.";
+        : "Owner notes are read-only context for this item. Ask questions on the image if anything is unclear.";
     }
   }
 
@@ -4666,6 +4673,7 @@ function renderAnnotations() {
   const wrap = $("#annList");
   if (!wrap) return;
   wrap.innerHTML = "";
+  const collaboratorOnlyQuestions = !!(state.actor && state.actor.role !== "owner");
   let questionNumber = 0;
   let annotationNumber = 0;
   state.annotations.forEach((ann, idx) => {
@@ -4737,6 +4745,20 @@ function renderAnnotations() {
     }
     wrap.appendChild(el);
   });
+  if (!wrap.childElementCount) {
+    const empty = document.createElement("div");
+    empty.className = "ann-empty-state";
+    empty.innerHTML = collaboratorOnlyQuestions
+      ? `
+        <div class="ann-empty-title">No questions yet</div>
+        <div class="ann-empty-body">Click on the image to ask the first question about this item.</div>
+      `
+      : `
+        <div class="ann-empty-title">No annotations yet</div>
+        <div class="ann-empty-body">Click on the image to add a note or question.</div>
+      `;
+    wrap.appendChild(empty);
+  }
 }
 
 function scheduleAnnotationUpdate(annId, patch) {
