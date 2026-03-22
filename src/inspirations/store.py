@@ -252,6 +252,22 @@ def _scan_doc_page_from_values(source_ref: str, title: str) -> int:
     return int(title_page or ref_page or 1)
 
 
+def _scan_doc_group_has_explicit_pages(rows: list[dict[str, Any]] | list[Any]) -> bool:
+    if len(rows) <= 1:
+        return False
+    pages: list[int] = []
+    for row in rows:
+        title = str(row.get("title") or "") if isinstance(row, dict) else str(row["title"] or "")
+        _doc_idx, doc_page = _scan_doc_parts(title)
+        if doc_page is None:
+            return False
+        pages.append(int(doc_page))
+    if len(set(pages)) != len(rows):
+        return False
+    ordered = sorted(pages)
+    return ordered == list(range(1, len(rows) + 1))
+
+
 def _scan_doc_display_title(title: str) -> str:
     text = (title or "").strip()
     text = _SCAN_DOC_SUFFIX_RE.sub("", text).strip()
@@ -354,8 +370,19 @@ def _expand_scan_asset_ids(db: Db, asset_ids: list[str]) -> list[str]:
                 members = [aid]
             elif len(members) > _MAX_SCAN_DOC_COLLAPSE_PAGES:
                 # Large inferred scan-doc groups are ambiguous in this dataset;
-                # keep item-level behavior instead of expanding to the whole group.
-                members = [aid]
+                # keep item-level behavior instead of expanding to the whole group,
+                # unless the stored titles explicitly encode page membership.
+                member_rows = [
+                    {
+                        "id": str(c["id"]),
+                        "source_ref": str(c["source_ref"] or ""),
+                        "title": str(c["title"] or ""),
+                    }
+                    for c in candidates
+                    if _scan_doc_key_from_values(str(c["source_ref"] or ""), str(c["title"] or "")) == key
+                ]
+                if not _scan_doc_group_has_explicit_pages(member_rows):
+                    members = [aid]
             scan_member_cache[key] = members
 
         for member_id in members:
@@ -403,7 +430,7 @@ def _collapse_scan_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             ),
         )
         member_ids = _unique_ids([str(r.get("id") or "") for r in sorted_rows])
-        if len(member_ids) > _MAX_SCAN_DOC_COLLAPSE_PAGES:
+        if len(member_ids) > _MAX_SCAN_DOC_COLLAPSE_PAGES and not _scan_doc_group_has_explicit_pages(sorted_rows):
             # Avoid over-collapsing very large inferred groups; expose items individually.
             for row in sorted_rows:
                 item = dict(row)

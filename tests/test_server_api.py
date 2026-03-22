@@ -2830,7 +2830,7 @@ class TestServerApi(unittest.TestCase):
             self.assertTrue(body.startswith(b"%PDF"))
             self.assertNotEqual(body, source_pdf_bytes)
 
-    def test_large_scan_doc_groups_are_not_collapsed_in_assets_list(self):
+    def test_large_explicit_scan_doc_groups_are_collapsed_in_assets_list(self):
         try:
             from PIL import Image  # type: ignore
         except Exception:
@@ -2868,9 +2868,11 @@ class TestServerApi(unittest.TestCase):
 
         status, body = self._request("/api/assets?source=scan&limit=20&include_hidden=1")
         self.assertEqual(status, 200)
-        ids = [a["id"] for a in body.get("assets", [])]
-        for idx in range(1, 8):
-            self.assertIn(f"s_big_{idx}", ids)
+        assets = body.get("assets", [])
+        self.assertEqual(len(assets), 1)
+        self.assertEqual(assets[0]["id"], "s_big_1")
+        self.assertEqual(int(assets[0].get("scan_doc_pages") or 0), 7)
+        self.assertEqual(set(assets[0].get("scan_group_member_ids") or []), {f"s_big_{idx}" for idx in range(1, 8)})
 
         with urllib.request.urlopen(
             urllib.request.Request(f"{self.base_url}/media/s_big_1?kind=pdf", method="GET"),
