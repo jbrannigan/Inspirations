@@ -31,7 +31,7 @@
       __unavailable: true,
       init() {}, loadData() {}, setFilter() {}, setSearch() {},
       setFocusedMode() {}, getVisibleNodeIds() { return []; }, highlight() {}, onSelect() {}, onClickNode() {},
-      pause() {}, resume() {}, destroy() {},
+      pause() {}, resume() {}, resize() {}, destroy() {},
     };
     return;
   }
@@ -744,14 +744,23 @@
 
     // Resize
     _resizeObserver = new ResizeObserver(() => {
-      if (!_renderer || !_camera) return;
-      const nw = _container.clientWidth;
-      const nh = _container.clientHeight;
-      _camera.aspect = nw / nh;
-      _camera.updateProjectionMatrix();
-      _renderer.setSize(nw, nh);
+      resize();
     });
     _resizeObserver.observe(_container);
+  }
+
+  function resize() {
+    if (!_renderer || !_camera || !_container) return;
+    const nw = Math.max(1, _container.clientWidth || 800);
+    const nh = Math.max(1, _container.clientHeight || 600);
+    _camera.aspect = nw / nh;
+    _camera.updateProjectionMatrix();
+    _renderer.setSize(nw, nh);
+    _needsVisualUpdate = true;
+    _needsInstanceUpdate = true;
+    _needsOverlaySync = true;
+    _updatePoleLabelsScreen();
+    _renderer.render(_scene, _camera);
   }
 
   function _initialCameraZ(w, h) {
@@ -2357,6 +2366,7 @@
     onClickNode,
     pause,
     resume,
+    resize,
     destroy,
   };
 })();

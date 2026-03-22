@@ -148,13 +148,18 @@
 
     // Resize observer
     const ro = new ResizeObserver(() => {
-      _width = _container.clientWidth;
-      _height = _container.clientHeight;
-      _canvas.width = _width;
-      _canvas.height = _height;
-      _scheduleRender();
+      resize();
     });
     ro.observe(_container);
+  }
+
+  function resize() {
+    if (!_container || !_canvas) return;
+    _width = Math.max(1, _container.clientWidth || 800);
+    _height = Math.max(1, _container.clientHeight || 600);
+    _canvas.width = _width;
+    _canvas.height = _height;
+    _scheduleRender();
   }
 
   // ─── Data loading ────────────────────────────────────────────────────────
@@ -1061,6 +1066,7 @@
     onClickNode,
     pause,
     resume,
+    resize,
     destroy,
   };
 })();

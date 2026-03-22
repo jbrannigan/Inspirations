@@ -342,11 +342,18 @@
 
   function _onResize() {
     if (!_container || !_renderer) return;
-    const w = _container.clientWidth;
-    const h = _container.clientHeight;
+    const w = Math.max(1, _container.clientWidth || window.innerWidth || 1);
+    const h = Math.max(1, _container.clientHeight || window.innerHeight || 1);
     _camera.aspect = w / h;
     _camera.updateProjectionMatrix();
     _renderer.setSize(w, h);
+  }
+
+  function resize() {
+    _onResize();
+    if (_renderer && _scene && _camera) {
+      _renderer.render(_scene, _camera);
+    }
   }
 
   // Hover state for raycasting (throttled via rAF — handled in render loop)
@@ -582,5 +589,5 @@
     _updateLabelVisibility();
   }
 
-  window.Explorer = { init, loadData, setFilter, highlight, onSelect, onClickNode, resetCamera, setSpread, setLabels, pause, resume, destroy };
+  window.Explorer = { init, loadData, setFilter, highlight, onSelect, onClickNode, resetCamera, setSpread, setLabels, pause, resume, resize, destroy };
 })();
