@@ -9,7 +9,10 @@ from unittest import mock
 from inspirations.db import Db, ensure_schema
 from inspirations.importers.scans import (
     audit_scan_separator_pages,
+    repair_scan_document_grouping,
+    _choose_regroup_base_title,
     _delimiter_candidates_from_metrics,
+    _split_asset_pages_for_regrouping,
     _split_pages_into_documents,
     import_scans_inbox,
     import_videos_inbox,
@@ -108,6 +111,23 @@ class TestScansImport(unittest.TestCase):
             (35, 0.997538, 58.670, 9.200),
         ]
         self.assertEqual(_delimiter_candidates_from_metrics(metrics), {10, 19, 28})
+
+    def test_split_asset_pages_for_regrouping_respects_delimiters_and_exclusions(self):
+        docs = _split_asset_pages_for_regrouping(
+            list(range(1, 13)),
+            delimiter_pages={5, 10},
+            excluded_pages={8},
+        )
+        self.assertEqual(docs, [[1, 2, 3, 4], [6, 7], [9], [11, 12]])
+
+    def test_choose_regroup_base_title_skips_generic_repeated_titles(self):
+        rows = [
+            {"title": "Book Mar 4, 2026 - doc 11"},
+            {"title": "Modern farmhouse kitchen featuring a large stainless steel range - doc 12"},
+            {"title": "Book Mar 4, 2026 - doc 13"},
+        ]
+        base = _choose_regroup_base_title(rows, generic_bases={"Book Mar 4, 2026"})
+        self.assertEqual(base, "Modern farmhouse kitchen featuring a large stainless steel range")
 
     def test_pdf_delimiters_are_skipped(self):
         with tempfile.TemporaryDirectory() as td:
@@ -246,6 +266,105 @@ class TestScansImport(unittest.TestCase):
             )
             self.assertTrue(all(str(row["axis_value"]) == "irrelevant" for row in overrides))
             self.assertTrue(all(str(row["actor"]) == "scan_test" for row in overrides))
+
+    def test_repair_scan_document_grouping_uses_delimiters_and_irrelevant_pages(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            store = base / "store"
+            pdf_dir = store / "originals" / "scan"
+            pdf_dir.mkdir(parents=True)
+            sha = "b" * 64
+            pdf = pdf_dir / f"{sha}.pdf"
+            pdf.write_text("%PDF-1.4 mock")
+
+            db_path = base / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                rows = []
+                for idx, title in [
+                    (1, "Kitchen cover story - doc 1"),
+                    (2, "Kitchen spread - doc 2"),
+                    (3, "Book Mar 4, 2026 - doc 3"),
+                    (4, "Range detail - doc 4"),
+                    (5, "Book Mar 4, 2026 - doc 5"),
+                    (6, "Kitchen island detail - doc 6"),
+                ]:
+                    rows.append(
+                        (
+                            f"asset-{idx}",
+                            "scan",
+                            f"scan://{sha}#p{idx}",
+                            title,
+                            "2026-03-22T00:00:00+00:00",
+                            f"/tmp/page-{idx}.jpg",
+                            f"/tmp/page-{idx}.jpg",
+                            sha,
+                            "image",
+                            "scan",
+                        )
+                    )
+                db.executemany(
+                    """
+                    insert into assets
+                      (id, source, source_ref, title, imported_at, image_url, stored_path, sha256, media_status, content_kind)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+                db.exec(
+                    """
+                    insert into asset_overrides
+                      (id, asset_id, track, axis_name, axis_value, operation, actor, note, created_at, expires_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "ovr-5",
+                        "asset-5",
+                        "irrelevant",
+                        "track",
+                        "irrelevant",
+                        "set",
+                        "Jim",
+                        "exclude ad page",
+                        "2026-03-22T00:00:00+00:00",
+                        None,
+                    ),
+                )
+                with mock.patch("inspirations.importers.scans._detect_pdf_delimiter_pages", return_value={3}):
+                    preview = repair_scan_document_grouping(db, store_dir=store, pdf_sha256=sha, apply=False)
+                    applied = repair_scan_document_grouping(db, store_dir=store, pdf_sha256=sha, apply=True)
+                titles = {
+                    str(r["source_ref"]): str(r["title"])
+                    for r in db.query("select source_ref, title from assets where source='scan' order by source_ref asc")
+                }
+
+            self.assertEqual(preview["delimiter_pages"], [3])
+            self.assertEqual(preview["excluded_pages"], [5])
+            self.assertEqual(
+                [doc["pages"] for doc in preview["documents"]],
+                [[1, 2], [4], [6]],
+            )
+            self.assertEqual(
+                titles[f"scan://{sha}#p1"],
+                "Kitchen cover story - doc 1 p1",
+            )
+            self.assertEqual(
+                titles[f"scan://{sha}#p2"],
+                "Kitchen cover story - doc 1 p2",
+            )
+            self.assertEqual(
+                titles[f"scan://{sha}#p4"],
+                "Range detail - doc 2",
+            )
+            self.assertEqual(
+                titles[f"scan://{sha}#p5"],
+                "Book Mar 4, 2026 - doc 5",
+            )
+            self.assertEqual(
+                titles[f"scan://{sha}#p6"],
+                "Kitchen island detail - doc 3",
+            )
+            self.assertTrue(applied["apply"])
 
     def test_import_single_video_idempotent(self):
         with tempfile.TemporaryDirectory() as td:

@@ -9,7 +9,7 @@ import sys
 from datetime import datetime
 
 from .db import Db, ensure_schema
-from .importers.scans import audit_scan_separator_pages, import_scans_inbox
+from .importers.scans import audit_scan_separator_pages, import_scans_inbox, repair_scan_document_grouping
 from .importers.pinterest_scrape import import_pinterest_scrape
 from .importers.facebook_scrape import import_facebook_scrape
 from .importers.houzz import import_houzz_ideabook
@@ -333,6 +333,23 @@ def cmd_audit_scan_separators(args: argparse.Namespace) -> int:
             apply=args.apply,
             actor=args.actor,
             note=args.note,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_repair_scan_grouping(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    store_dir = _p(args.store)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = repair_scan_document_grouping(
+            db,
+            store_dir=store_dir,
+            pdf_sha256=args.pdf_sha,
+            renderer=args.renderer,
+            max_pages=args.max_pages,
+            apply=args.apply,
         )
     print(json.dumps(report, indent=2))
     return 0
@@ -908,6 +925,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Note recorded on applied overrides",
     )
     scan_sep.set_defaults(func=cmd_audit_scan_separators)
+
+    scan_repair = sub.add_parser(
+        "repair-scan-grouping",
+        help="Repair logical scan document grouping for one stored scan PDF by rewriting page titles",
+    )
+    scan_repair.add_argument("--pdf-sha", required=True, help="Stored scan PDF SHA-256 to regroup")
+    scan_repair.add_argument("--renderer", default="auto", help="PDF renderer: auto | pdftoppm | mutool")
+    scan_repair.add_argument("--max-pages", type=int, default=0, help="Max pages inspected (0 = all)")
+    scan_repair.add_argument("--apply", action="store_true", help="Apply regrouped titles to the DB")
+    scan_repair.set_defaults(func=cmd_repair_scan_grouping)
 
 
     thumbs = sub.add_parser("thumbs", help="Generate thumbnails from stored originals/pages")

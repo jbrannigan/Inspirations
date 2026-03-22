@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import hashlib
 import math
 import re
@@ -19,6 +20,7 @@ PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".heif"
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".mpeg", ".mpg", ".wmv", ".3gp"}
 _WS_BYTES = b" \t\r\n"
 _PAGE_NUM_RE = re.compile(r"-(\d+)\.[^.]+$")
+_SCAN_DOC_SUFFIX_RE = re.compile(r"\s+- doc \d+(?: p\d+)?\s*$", re.IGNORECASE)
 
 
 def _now_iso() -> str:
@@ -357,6 +359,234 @@ def _split_pages_into_documents(total_pages: int, delimiter_pages: set[int]) -> 
         for doc_page, page_idx in enumerate(doc_pages, start=1):
             page_map[page_idx] = (doc_idx, doc_page, doc_len)
     return (page_map, len(docs))
+
+
+def _scan_page_number_from_source_ref(source_ref: str) -> int | None:
+    m = re.search(r"#p(\d+)$", str(source_ref or ""))
+    if not m:
+        return None
+    return int(m.group(1))
+
+
+def _strip_scan_doc_suffix(title: str) -> str:
+    return _SCAN_DOC_SUFFIX_RE.sub("", str(title or "").strip()).strip()
+
+
+def _choose_regroup_base_title(
+    rows: list[dict[str, Any]],
+    *,
+    generic_bases: set[str],
+) -> str:
+    bases = [_strip_scan_doc_suffix(str(row.get("title") or "")) for row in rows]
+    for base in bases:
+        if base and base not in generic_bases:
+            return base
+    for base in bases:
+        if base:
+            return base
+    return "Scanned document"
+
+
+def _split_asset_pages_for_regrouping(
+    page_numbers: list[int],
+    *,
+    delimiter_pages: set[int],
+    excluded_pages: set[int],
+) -> list[list[int]]:
+    docs: list[list[int]] = []
+    current: list[int] = []
+    prev_page: int | None = None
+    for page in sorted(page_numbers):
+        if page in delimiter_pages or page in excluded_pages:
+            if current:
+                docs.append(current)
+            current = []
+            prev_page = None
+            continue
+        if prev_page is None or page == prev_page + 1:
+            current.append(page)
+        else:
+            if current:
+                docs.append(current)
+            current = [page]
+        prev_page = page
+    if current:
+        docs.append(current)
+    return docs
+
+
+def repair_scan_document_grouping(
+    db: Db,
+    store_dir: Path,
+    *,
+    pdf_sha256: str,
+    renderer: str = "auto",
+    max_pages: int = 0,
+    apply: bool = False,
+    actor: str = "scan_group_repair",
+) -> dict[str, Any]:
+    sha = str(pdf_sha256 or "").strip().lower()
+    if not re.fullmatch(r"[a-f0-9]{64}", sha):
+        raise ValueError("pdf_sha256 must be a 64-character hex SHA-256")
+    store = store_dir.expanduser().resolve()
+    renderer = _select_pdf_renderer(renderer)
+    if renderer is None:
+        raise RuntimeError("No PDF renderer available (install poppler or mupdf)")
+    pdf_path = store / "originals" / "scan" / f"{sha}.pdf"
+    if not pdf_path.exists():
+        raise FileNotFoundError(f"Stored scan PDF not found: {pdf_path}")
+
+    rows = [dict(r) for r in db.query(
+        """
+        select id, source_ref, title
+        from assets
+        where source='scan' and source_ref like ?
+        order by cast(substr(source_ref, instr(source_ref, '#p') + 2) as integer)
+        """,
+        (f"scan://{sha}#p%",),
+    )]
+    if not rows:
+        return {
+            "pdf_sha256": sha,
+            "pdf_path": str(pdf_path),
+            "apply": bool(apply),
+            "pages_found": 0,
+            "message": "No scan page assets found for PDF SHA.",
+            "documents": [],
+            "updates": [],
+        }
+
+    delimiter_pages = set(_detect_pdf_delimiter_pages(pdf_path=pdf_path, max_pages=max_pages, renderer=renderer))
+    historical_irrelevant_rows = db.query(
+        """
+        select distinct ao.asset_id,
+               max(case when ao.expires_at is null then 1 else 0 end) as is_active
+        from asset_overrides ao
+        where ao.axis_name='track'
+          and ao.operation='set'
+          and ao.axis_value='irrelevant'
+          and ao.asset_id in (
+            select id from assets where source='scan' and source_ref like ?
+          )
+        group by ao.asset_id
+        """,
+        (f"scan://{sha}#p%",),
+    )
+    excluded_asset_ids = {str(r["asset_id"]) for r in historical_irrelevant_rows}
+    active_excluded_asset_ids = {
+        str(r["asset_id"])
+        for r in historical_irrelevant_rows
+        if int(r["is_active"] or 0) == 1
+    }
+
+    row_by_page: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        page_num = _scan_page_number_from_source_ref(str(row.get("source_ref") or ""))
+        if page_num is None:
+            continue
+        row_by_page[page_num] = row
+
+    excluded_pages = {
+        page
+        for page, row in row_by_page.items()
+        if str(row.get("id") or "") in excluded_asset_ids
+    }
+    page_numbers = sorted(row_by_page.keys())
+    doc_pages = _split_asset_pages_for_regrouping(
+        page_numbers,
+        delimiter_pages=delimiter_pages,
+        excluded_pages=excluded_pages,
+    )
+
+    base_counts = Counter(
+        _strip_scan_doc_suffix(str(row.get("title") or ""))
+        for row in rows
+        if _strip_scan_doc_suffix(str(row.get("title") or ""))
+    )
+    generic_bases = {base for base, count in base_counts.items() if count >= 3}
+
+    documents: list[dict[str, Any]] = []
+    updates: list[tuple[str, str]] = []
+    update_preview: list[dict[str, Any]] = []
+    for doc_index, pages in enumerate(doc_pages, start=1):
+        doc_rows = [row_by_page[p] for p in pages if p in row_by_page]
+        if not doc_rows:
+            continue
+        base_title = _choose_regroup_base_title(doc_rows, generic_bases=generic_bases)
+        documents.append(
+            {
+                "doc_index": doc_index,
+                "pages": pages,
+                "page_count": len(pages),
+                "base_title": base_title,
+                "asset_ids": [str(row.get("id") or "") for row in doc_rows],
+            }
+        )
+        doc_len = len(pages)
+        for doc_page, row in enumerate(doc_rows, start=1):
+            if doc_len <= 1:
+                new_title = f"{base_title} - doc {doc_index}"
+            else:
+                new_title = f"{base_title} - doc {doc_index} p{doc_page}"
+            asset_id = str(row.get("id") or "")
+            old_title = str(row.get("title") or "")
+            if old_title == new_title:
+                continue
+            updates.append((new_title, asset_id))
+            update_preview.append(
+                {
+                    "asset_id": asset_id,
+                    "source_ref": str(row.get("source_ref") or ""),
+                    "old_title": old_title,
+                    "new_title": new_title,
+                }
+            )
+
+    reactivated_irrelevant_asset_ids = sorted(excluded_asset_ids - active_excluded_asset_ids)
+    if apply:
+        if updates:
+            db.executemany("update assets set title=? where id=?", updates)
+        if reactivated_irrelevant_asset_ids:
+            created_at = _now_iso()
+            db.executemany(
+                """
+                insert into asset_overrides
+                  (id, asset_id, track, axis_name, axis_value, operation, actor, note, created_at, expires_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        str(uuid.uuid4()),
+                        asset_id,
+                        "irrelevant",
+                        "track",
+                        "irrelevant",
+                        "set",
+                        actor,
+                        "restored during scan regrouping repair",
+                        created_at,
+                        None,
+                    )
+                    for asset_id in reactivated_irrelevant_asset_ids
+                ],
+            )
+
+    return {
+        "pdf_sha256": sha,
+        "pdf_path": str(pdf_path),
+        "apply": bool(apply),
+        "renderer": renderer,
+        "pages_found": len(rows),
+        "delimiter_pages": sorted(delimiter_pages),
+        "excluded_pages": sorted(excluded_pages),
+        "excluded_asset_ids": sorted(excluded_asset_ids),
+        "active_excluded_asset_ids": sorted(active_excluded_asset_ids),
+        "reactivated_irrelevant_asset_ids": reactivated_irrelevant_asset_ids,
+        "documents": documents,
+        "title_updates": len(updates),
+        "updates": update_preview[:250],
+        "note": "Updates truncated to 250 in output.",
+    }
 
 
 def import_scans_inbox(
