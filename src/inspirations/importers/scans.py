@@ -900,6 +900,133 @@ def audit_scan_separator_pages(
     }
 
 
+def _safe_unlink_within(root: Path, candidate: str) -> bool:
+    text = str(candidate or "").strip()
+    if not text:
+        return False
+    try:
+        root_resolved = root.expanduser().resolve()
+        path = Path(text).expanduser().resolve()
+    except Exception:
+        return False
+    try:
+        path.relative_to(root_resolved)
+    except Exception:
+        return False
+    if not path.exists() or not path.is_file():
+        return False
+    path.unlink()
+    return True
+
+
+def purge_scan_separator_pages(
+    db: Db,
+    store_dir: Path,
+    *,
+    renderer: str = "auto",
+    max_pages: int = 0,
+    limit: int = 0,
+    pdf_sha256s: list[str] | None = None,
+    apply: bool = False,
+) -> dict[str, Any]:
+    store = store_dir.expanduser().resolve()
+    renderer = _select_pdf_renderer(renderer)
+    if renderer is None:
+        raise RuntimeError("No PDF renderer available (install poppler or mupdf)")
+    pdf_dir = store / "originals" / "scan"
+    pdfs = sorted(pdf_dir.glob("*.pdf"))
+    requested_shas = {
+        str(value or "").strip().lower()
+        for value in (pdf_sha256s or [])
+        if re.fullmatch(r"[a-f0-9]{64}", str(value or "").strip().lower())
+    }
+    if requested_shas:
+        pdfs = [pdf for pdf in pdfs if pdf.stem.strip().lower() in requested_shas]
+    if limit:
+        pdfs = pdfs[:limit]
+
+    pdfs_with_candidates = 0
+    candidate_count = 0
+    deleted_assets = 0
+    deleted_files = 0
+    errors: list[dict[str, str]] = []
+    candidates: list[dict[str, Any]] = []
+    for pdf in pdfs:
+        sha = pdf.stem.strip().lower()
+        if not re.fullmatch(r"[a-f0-9]{64}", sha):
+            continue
+        try:
+            delimiter_pages = sorted(
+                _detect_pdf_delimiter_pages(pdf_path=pdf, max_pages=max_pages, renderer=renderer)
+            )
+        except Exception as exc:
+            errors.append({"pdf": str(pdf), "error": str(exc)})
+            continue
+        if not delimiter_pages:
+            continue
+        pdfs_with_candidates += 1
+        rows = db.query(
+            """
+            select id, source_ref, title, stored_path, thumb_path
+            from assets
+            where source='scan'
+              and source_ref like ?
+            order by source_ref asc
+            """,
+            (f"scan://{sha}#p%",),
+        )
+        page_to_asset: dict[int, dict[str, Any]] = {}
+        for row in rows:
+            m = re.search(r"#p(\d+)$", str(row["source_ref"] or ""))
+            if not m:
+                continue
+            page_to_asset[int(m.group(1))] = dict(row)
+        purge_ids: list[str] = []
+        file_targets: list[str] = []
+        for page_idx in delimiter_pages:
+            item: dict[str, Any] = {
+                "pdf_sha256": sha,
+                "pdf_path": str(pdf),
+                "page": int(page_idx),
+            }
+            asset = page_to_asset.get(int(page_idx))
+            if asset:
+                item["asset_id"] = str(asset.get("id") or "")
+                item["source_ref"] = str(asset.get("source_ref") or "")
+                item["title"] = str(asset.get("title") or "")
+                stored_path = str(asset.get("stored_path") or "")
+                thumb_path = str(asset.get("thumb_path") or "")
+                if stored_path:
+                    file_targets.append(stored_path)
+                if thumb_path and thumb_path != stored_path:
+                    file_targets.append(thumb_path)
+                purge_ids.append(str(asset.get("id") or ""))
+            candidates.append(item)
+            candidate_count += 1
+        purge_ids = [asset_id for asset_id in purge_ids if asset_id]
+        if apply and purge_ids:
+            placeholders = ",".join(["?"] * len(purge_ids))
+            db.exec(f"delete from assets where id in ({placeholders})", tuple(purge_ids))
+            deleted_assets += len(purge_ids)
+            for target in file_targets:
+                if _safe_unlink_within(store, target):
+                    deleted_files += 1
+
+    return {
+        "pdfs_scanned": len(pdfs),
+        "pdfs_with_candidates": pdfs_with_candidates,
+        "candidate_pages": candidate_count,
+        "deleted_assets": deleted_assets,
+        "deleted_files": deleted_files,
+        "apply": bool(apply),
+        "requested_pdf_sha256s": sorted(requested_shas),
+        "renderer": renderer,
+        "candidates": candidates[:250],
+        "errors": errors[:50],
+        "note": "Candidates/errors truncated in output.",
+    }
+
+
 def import_photos_inbox(
     db: Db,
     inbox_dir: Path,

@@ -12,6 +12,7 @@ from inspirations.importers.scans import (
     repair_scan_document_grouping,
     _choose_regroup_base_title,
     _delimiter_candidates_from_metrics,
+    purge_scan_separator_pages,
     _split_asset_pages_for_regrouping,
     _split_pages_into_documents,
     import_scans_inbox,
@@ -365,6 +366,60 @@ class TestScansImport(unittest.TestCase):
                 "Kitchen island detail - doc 3",
             )
             self.assertTrue(applied["apply"])
+
+    def test_purge_scan_separator_pages_deletes_assets_and_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            store = base / "store"
+            pdf_dir = store / "originals" / "scan"
+            pages_dir = store / "pages" / "scan" / ("c" * 64)
+            pdf_dir.mkdir(parents=True)
+            pages_dir.mkdir(parents=True)
+            sha = "c" * 64
+            pdf = pdf_dir / f"{sha}.pdf"
+            pdf.write_text("%PDF-1.4 mock")
+            page2 = pages_dir / "page-2.jpg"
+            page3 = pages_dir / "page-3.jpg"
+            page2.write_bytes(b"p2")
+            page3.write_bytes(b"p3")
+
+            db_path = base / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.executemany(
+                    """
+                    insert into assets
+                      (id, source, source_ref, title, imported_at, image_url, stored_path, sha256, media_status, content_kind)
+                    values (?, 'scan', ?, ?, '2026-03-22T00:00:00+00:00', ?, ?, ?, 'image', 'scan')
+                    """,
+                    [
+                        ("asset-p1", f"scan://{sha}#p1", "batch - doc 1", str(page2), str(page2), sha),
+                        ("asset-p2", f"scan://{sha}#p2", "blank separator - doc 2", str(page2), str(page2), sha),
+                        ("asset-p3", f"scan://{sha}#p3", "blank separator - doc 3", str(page3), str(page3), sha),
+                    ],
+                )
+                db.exec(
+                    """
+                    insert into collections (id, name, created_at, updated_at, hidden)
+                    values (?, ?, '2026-03-22T00:00:00+00:00', '2026-03-22T00:00:00+00:00', 0)
+                    """,
+                    ("col-1", "Test Collection"),
+                )
+                db.exec(
+                    """
+                    insert into collection_items (collection_id, asset_id, position)
+                    values (?, ?, 1)
+                    """,
+                    ("col-1", "asset-p2"),
+                )
+                with mock.patch("inspirations.importers.scans._detect_pdf_delimiter_pages", return_value={2, 3}):
+                    report = purge_scan_separator_pages(db, store_dir=store, pdf_sha256s=[sha], apply=True)
+                remaining = [str(r["id"]) for r in db.query("select id from assets order by id asc")]
+
+            self.assertEqual(report["deleted_assets"], 2)
+            self.assertEqual(remaining, ["asset-p1"])
+            self.assertFalse(page2.exists())
+            self.assertFalse(page3.exists())
 
     def test_import_single_video_idempotent(self):
         with tempfile.TemporaryDirectory() as td:

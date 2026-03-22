@@ -9,7 +9,12 @@ import sys
 from datetime import datetime
 
 from .db import Db, ensure_schema
-from .importers.scans import audit_scan_separator_pages, import_scans_inbox, repair_scan_document_grouping
+from .importers.scans import (
+    audit_scan_separator_pages,
+    import_scans_inbox,
+    purge_scan_separator_pages,
+    repair_scan_document_grouping,
+)
 from .importers.pinterest_scrape import import_pinterest_scrape
 from .importers.facebook_scrape import import_facebook_scrape
 from .importers.houzz import import_houzz_ideabook
@@ -349,6 +354,24 @@ def cmd_repair_scan_grouping(args: argparse.Namespace) -> int:
             pdf_sha256=args.pdf_sha,
             renderer=args.renderer,
             max_pages=args.max_pages,
+            apply=args.apply,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_purge_scan_separators(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    store_dir = _p(args.store)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = purge_scan_separator_pages(
+            db,
+            store_dir=store_dir,
+            renderer=args.renderer,
+            max_pages=args.max_pages,
+            limit=args.limit,
+            pdf_sha256s=args.pdf_sha,
             apply=args.apply,
         )
     print(json.dumps(report, indent=2))
@@ -935,6 +958,22 @@ def build_parser() -> argparse.ArgumentParser:
     scan_repair.add_argument("--max-pages", type=int, default=0, help="Max pages inspected (0 = all)")
     scan_repair.add_argument("--apply", action="store_true", help="Apply regrouped titles to the DB")
     scan_repair.set_defaults(func=cmd_repair_scan_grouping)
+
+    scan_purge = sub.add_parser(
+        "purge-scan-separators",
+        help="Delete confirmed blank separator scan pages from the DB and store",
+    )
+    scan_purge.add_argument("--renderer", default="auto", help="PDF renderer: auto | pdftoppm | mutool")
+    scan_purge.add_argument("--max-pages", type=int, default=0, help="Max pages inspected (0 = all)")
+    scan_purge.add_argument("--limit", type=int, default=0, help="Limit PDFs scanned (0 = all)")
+    scan_purge.add_argument(
+        "--pdf-sha",
+        action="append",
+        default=[],
+        help="Only purge separator pages for one specific stored scan PDF SHA-256 (repeatable)",
+    )
+    scan_purge.add_argument("--apply", action="store_true", help="Delete matching separator page assets")
+    scan_purge.set_defaults(func=cmd_purge_scan_separators)
 
 
     thumbs = sub.add_parser("thumbs", help="Generate thumbnails from stored originals/pages")
