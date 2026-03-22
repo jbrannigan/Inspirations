@@ -127,7 +127,7 @@ def _next_pgm_token(data: bytes, start: int) -> tuple[bytes, int]:
     return data[token_start:idx], idx
 
 
-def _pgm_blank_metrics(path: Path) -> tuple[float, float] | None:
+def _pgm_blank_metrics(path: Path) -> tuple[float, float, float] | None:
     data = path.read_bytes()
     if not data.startswith(b"P5"):
         return None
@@ -168,7 +168,29 @@ def _pgm_blank_metrics(path: Path) -> tuple[float, float] | None:
         diff = px - mean
         variance += diff * diff
     stddev = math.sqrt(variance / total)
-    return (dark / total, stddev)
+    row_step = max(1, height // 300)
+    col_step = max(1, width // 300)
+    horiz_total = 0.0
+    horiz_count = 0
+    vert_total = 0.0
+    vert_count = 0
+    prev_row_sampled: bytes | None = None
+    for row_idx in range(0, height, row_step):
+        row = pixels[row_idx * width : (row_idx + 1) * width]
+        sampled_row = row[::col_step]
+        if len(sampled_row) >= 2:
+            for left, right in zip(sampled_row, sampled_row[1:]):
+                horiz_total += abs(left - right)
+                horiz_count += 1
+        if prev_row_sampled is not None:
+            for top, bottom in zip(prev_row_sampled, sampled_row):
+                vert_total += abs(top - bottom)
+                vert_count += 1
+        prev_row_sampled = sampled_row
+    horiz_mean = horiz_total / horiz_count if horiz_count else 0.0
+    vert_mean = vert_total / vert_count if vert_count else 0.0
+    edge_mean = (horiz_mean + vert_mean) / 2.0
+    return (dark / total, stddev, edge_mean)
 
 
 def _median(values: list[float]) -> float:
@@ -182,28 +204,58 @@ def _median(values: list[float]) -> float:
     return (vals[m - 1] + vals[m]) / 2.0
 
 
-def _delimiter_candidates_from_metrics(metrics: list[tuple[int, float, float]]) -> set[int]:
+def _delimiter_candidates_from_metrics(metrics: list[tuple[int, ...]]) -> set[int]:
     if len(metrics) < 3:
         return set()
-    inks = [m[1] for m in metrics]
-    stds = [m[2] for m in metrics]
+    normalized: list[tuple[int, float, float, float]] = []
+    for metric in metrics:
+        if len(metric) >= 4:
+            page_idx, ink_ratio, stddev, edge_mean = metric[:4]
+        elif len(metric) == 3:
+            page_idx, ink_ratio, stddev = metric
+            edge_mean = float("inf")
+        else:
+            continue
+        normalized.append((int(page_idx), float(ink_ratio), float(stddev), float(edge_mean)))
+    if len(normalized) < 3:
+        return set()
+    inks = [m[1] for m in normalized]
+    stds = [m[2] for m in normalized]
+    edges = [m[3] for m in normalized if math.isfinite(m[3])]
     median_ink = _median(inks)
     median_std = _median(stds)
+    median_edge = _median(edges) if edges else 0.0
     abs_ink = 0.018
     abs_std = 16.0
     rel_ink = median_ink * 0.35 if median_ink > 0 else 0.0
     rel_std = median_std * 0.60 if median_std > 0 else 0.0
     ink_threshold = min(abs_ink, rel_ink) if rel_ink else abs_ink
     std_threshold = min(abs_std, rel_std) if rel_std else abs_std
-    candidates = {
+    white_candidates = {
         page_idx
-        for page_idx, ink_ratio, stddev in metrics
+        for page_idx, ink_ratio, stddev, _edge_mean in normalized
         if ink_ratio <= ink_threshold and stddev <= std_threshold
     }
-    if not candidates:
-        candidates = {
-            page_idx for page_idx, ink_ratio, stddev in metrics if ink_ratio <= abs_ink and stddev <= abs_std
+    if not white_candidates:
+        white_candidates = {
+            page_idx
+            for page_idx, ink_ratio, stddev, _edge_mean in normalized
+            if ink_ratio <= abs_ink and stddev <= abs_std
         }
+    # Some scan separator sheets are not white; they show up as nearly uniform gray pages
+    # with very low edge energy. Detect that shape separately so missed divider pages do not
+    # get imported as standalone clips.
+    uniform_ink_threshold = max(0.9985, min(0.9997, median_ink + 0.003))
+    uniform_std_threshold = max(28.0, min(32.0, median_std * 0.62)) if median_std > 0 else 32.0
+    uniform_edge_threshold = max(1.2, min(1.75, median_edge * 0.25)) if median_edge > 0 else 1.75
+    uniform_candidates = {
+        page_idx
+        for page_idx, ink_ratio, stddev, edge_mean in normalized
+        if ink_ratio >= uniform_ink_threshold
+        and stddev <= uniform_std_threshold
+        and edge_mean <= uniform_edge_threshold
+    }
+    candidates = white_candidates | uniform_candidates
     if len(candidates) > int(len(metrics) * 0.60):
         return set()
     return candidates
@@ -216,12 +268,12 @@ def _detect_pdf_delimiter_pages(*, pdf_path: Path, max_pages: int, renderer: str
             probe_files = _render_pdf_probe_pages(
                 pdf_path=pdf_path, out_dir=probe_dir, max_pages=max_pages, renderer=renderer
             )
-            metrics: list[tuple[int, float, float]] = []
+            metrics: list[tuple[int, float, float, float]] = []
             for idx, probe_file in enumerate(probe_files, start=1):
                 probe = _pgm_blank_metrics(probe_file)
                 if not probe:
                     continue
-                metrics.append((idx, probe[0], probe[1]))
+                metrics.append((idx, probe[0], probe[1], probe[2]))
             return _delimiter_candidates_from_metrics(metrics)
     except Exception:
         return set()
@@ -482,6 +534,139 @@ def import_scans_inbox(
         "errors": errors[:25],
         "note": "Errors are truncated to 25 in output.",
         "renderer": renderer,
+    }
+
+
+def audit_scan_separator_pages(
+    db: Db,
+    store_dir: Path,
+    *,
+    renderer: str = "auto",
+    max_pages: int = 0,
+    limit: int = 0,
+    pdf_sha256s: list[str] | None = None,
+    apply: bool = False,
+    actor: str = "scan_separator_audit",
+    note: str = "auto-detected blank/separator scan page",
+) -> dict[str, Any]:
+    store = store_dir.expanduser().resolve()
+    renderer = _select_pdf_renderer(renderer)
+    if renderer is None:
+        raise RuntimeError("No PDF renderer available (install poppler or mupdf)")
+    pdf_dir = store / "originals" / "scan"
+    pdfs = sorted(pdf_dir.glob("*.pdf"))
+    requested_shas = {
+        str(value or "").strip().lower()
+        for value in (pdf_sha256s or [])
+        if re.fullmatch(r"[a-f0-9]{64}", str(value or "").strip().lower())
+    }
+    if requested_shas:
+        pdfs = [pdf for pdf in pdfs if pdf.stem.strip().lower() in requested_shas]
+    if limit:
+        pdfs = pdfs[:limit]
+    created_at = _now_iso()
+    pdfs_with_candidates = 0
+    candidate_count = 0
+    applied_count = 0
+    skipped_existing_override = 0
+    errors: list[dict[str, str]] = []
+    candidates: list[dict[str, Any]] = []
+    for pdf in pdfs:
+        sha = pdf.stem.strip().lower()
+        if not re.fullmatch(r"[a-f0-9]{64}", sha):
+            continue
+        try:
+            delimiter_pages = sorted(
+                _detect_pdf_delimiter_pages(pdf_path=pdf, max_pages=max_pages, renderer=renderer)
+            )
+        except Exception as exc:
+            errors.append({"pdf": str(pdf), "error": str(exc)})
+            continue
+        if not delimiter_pages:
+            continue
+        pdfs_with_candidates += 1
+        rows = db.query(
+            """
+            select id, source_ref, title
+            from assets
+            where source='scan'
+              and source_ref like ?
+            order by source_ref asc
+            """,
+            (f"scan://{sha}#p%",),
+        )
+        page_to_asset: dict[int, dict[str, Any]] = {}
+        for row in rows:
+            m = re.search(r"#p(\d+)$", str(row["source_ref"] or ""))
+            if not m:
+                continue
+            page_to_asset[int(m.group(1))] = dict(row)
+        for page_idx in delimiter_pages:
+            item: dict[str, Any] = {
+                "pdf_sha256": sha,
+                "pdf_path": str(pdf),
+                "page": int(page_idx),
+            }
+            asset = page_to_asset.get(int(page_idx))
+            if asset:
+                item["asset_id"] = str(asset.get("id") or "")
+                item["source_ref"] = str(asset.get("source_ref") or "")
+                item["title"] = str(asset.get("title") or "")
+            candidates.append(item)
+            candidate_count += 1
+            if not apply or not asset:
+                continue
+            active_override = db.query(
+                """
+                select id, axis_value, actor, note
+                from asset_overrides
+                where asset_id=?
+                  and axis_name='track'
+                  and operation='set'
+                  and expires_at is null
+                order by created_at desc
+                limit 1
+                """,
+                (str(asset["id"]),),
+            )
+            if active_override:
+                skipped_existing_override += 1
+                item["apply_status"] = "skipped_existing_override"
+                item["active_override_track"] = str(active_override[0]["axis_value"] or "")
+                continue
+            db.exec(
+                """
+                insert into asset_overrides
+                  (id, asset_id, track, axis_name, axis_value, operation, actor, note, created_at, expires_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    str(asset["id"]),
+                    "irrelevant",
+                    "track",
+                    "irrelevant",
+                    "set",
+                    actor,
+                    note,
+                    created_at,
+                    None,
+                ),
+            )
+            applied_count += 1
+            item["apply_status"] = "applied_irrelevant_override"
+    return {
+        "pdfs_scanned": len(pdfs),
+        "pdfs_with_candidates": pdfs_with_candidates,
+        "candidate_pages": candidate_count,
+        "applied_irrelevant_overrides": applied_count,
+        "skipped_existing_override": skipped_existing_override,
+        "apply": bool(apply),
+        "requested_pdf_sha256s": sorted(requested_shas),
+        "renderer": renderer,
+        "candidates": candidates[:250],
+        "errors": errors[:50],
+        "note": "Candidates/errors truncated in output.",
     }
 
 

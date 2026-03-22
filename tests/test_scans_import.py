@@ -7,7 +7,13 @@ from pathlib import Path
 from unittest import mock
 
 from inspirations.db import Db, ensure_schema
-from inspirations.importers.scans import import_scans_inbox, import_videos_inbox, _split_pages_into_documents
+from inspirations.importers.scans import (
+    audit_scan_separator_pages,
+    _delimiter_candidates_from_metrics,
+    _split_pages_into_documents,
+    import_scans_inbox,
+    import_videos_inbox,
+)
 
 
 TINY_PNG = base64.b64decode(
@@ -90,6 +96,18 @@ class TestScansImport(unittest.TestCase):
         self.assertEqual(page_map[5], (4, 1, 3))
         self.assertEqual(page_map[7], (4, 3, 3))
         self.assertEqual(page_map[6], (4, 2, 3))
+
+    def test_delimiter_candidates_detect_uniform_separator_sheets(self):
+        metrics = [
+            (1, 0.996358, 51.146, 8.400),
+            (8, 0.995648, 46.058, 10.809),
+            (10, 1.0, 24.056, 0.728),
+            (16, 0.999888, 29.749, 1.758),
+            (19, 1.0, 16.664, 0.625),
+            (28, 0.999853, 26.959, 1.033),
+            (35, 0.997538, 58.670, 9.200),
+        ]
+        self.assertEqual(_delimiter_candidates_from_metrics(metrics), {10, 19, 28})
 
     def test_pdf_delimiters_are_skipped(self):
         with tempfile.TemporaryDirectory() as td:
@@ -183,6 +201,51 @@ class TestScansImport(unittest.TestCase):
                     f"scan://{sha}#p4",
                 ],
             )
+
+    def test_audit_scan_separator_pages_reports_and_applies_overrides(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            store = base / "store"
+            pdf_dir = store / "originals" / "scan"
+            pdf_dir.mkdir(parents=True)
+            pdf = pdf_dir / ("a" * 64 + ".pdf")
+            pdf.write_text("%PDF-1.4 mock")
+
+            db_path = base / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.executemany(
+                    """
+                    insert into assets
+                      (id, source, source_ref, title, imported_at, image_url, stored_path, sha256, media_status, content_kind)
+                    values (?, 'scan', ?, ?, '2026-03-21T00:00:00+00:00', ?, ?, ?, 'image', 'scan')
+                    """,
+                    [
+                        ("asset-p1", f"scan://{'a' * 64}#p1", "batch - doc 1", "/tmp/p1.jpg", "/tmp/p1.jpg", "a" * 64),
+                        ("asset-p2", f"scan://{'a' * 64}#p2", "batch - doc 2", "/tmp/p2.jpg", "/tmp/p2.jpg", "a" * 64),
+                        ("asset-p3", f"scan://{'a' * 64}#p3", "batch - doc 3", "/tmp/p3.jpg", "/tmp/p3.jpg", "a" * 64),
+                    ],
+                )
+                with mock.patch("inspirations.importers.scans._detect_pdf_delimiter_pages", return_value={2, 3}):
+                    report = audit_scan_separator_pages(db, store_dir=store)
+                    applied = audit_scan_separator_pages(db, store_dir=store, apply=True, actor="scan_test")
+                overrides = db.query(
+                    """
+                    select asset_id, axis_value, actor, note
+                    from asset_overrides
+                    where axis_name='track' and operation='set'
+                    order by asset_id asc
+                    """
+                )
+
+            self.assertEqual(report["candidate_pages"], 2)
+            self.assertEqual(applied["applied_irrelevant_overrides"], 2)
+            self.assertEqual(
+                [str(row["asset_id"]) for row in overrides],
+                ["asset-p2", "asset-p3"],
+            )
+            self.assertTrue(all(str(row["axis_value"]) == "irrelevant" for row in overrides))
+            self.assertTrue(all(str(row["actor"]) == "scan_test" for row in overrides))
 
     def test_import_single_video_idempotent(self):
         with tempfile.TemporaryDirectory() as td:

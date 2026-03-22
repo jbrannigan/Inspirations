@@ -9,7 +9,7 @@ import sys
 from datetime import datetime
 
 from .db import Db, ensure_schema
-from .importers.scans import import_scans_inbox
+from .importers.scans import audit_scan_separator_pages, import_scans_inbox
 from .importers.pinterest_scrape import import_pinterest_scrape
 from .importers.facebook_scrape import import_facebook_scrape
 from .importers.houzz import import_houzz_ideabook
@@ -313,6 +313,26 @@ def cmd_import_scans(args: argparse.Namespace) -> int:
             limit=args.limit,
             max_pages=args.max_pages,
             renderer=args.renderer,
+        )
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_audit_scan_separators(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    store_dir = _p(args.store)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = audit_scan_separator_pages(
+            db,
+            store_dir=store_dir,
+            renderer=args.renderer,
+            max_pages=args.max_pages,
+            limit=args.limit,
+            pdf_sha256s=args.pdf_sha,
+            apply=args.apply,
+            actor=args.actor,
+            note=args.note,
         )
     print(json.dumps(report, indent=2))
     return 0
@@ -866,6 +886,28 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--max-pages", type=int, default=0, help="Max pages per PDF (0 = all)")
     sc.add_argument("--limit", type=int, default=0, help="Limit files (0 = no limit)")
     sc.set_defaults(func=cmd_import_scans)
+
+    scan_sep = sub.add_parser(
+        "audit-scan-separators",
+        help="Audit stored scan PDFs for likely blank separator pages and optionally apply irrelevant overrides",
+    )
+    scan_sep.add_argument("--renderer", default="auto", help="PDF renderer: auto | pdftoppm | mutool")
+    scan_sep.add_argument("--max-pages", type=int, default=0, help="Max pages per PDF (0 = all)")
+    scan_sep.add_argument("--limit", type=int, default=0, help="Limit PDFs scanned (0 = all)")
+    scan_sep.add_argument(
+        "--pdf-sha",
+        action="append",
+        default=[],
+        help="Only audit one specific stored scan PDF SHA-256 (repeatable)",
+    )
+    scan_sep.add_argument("--apply", action="store_true", help="Apply irrelevant track overrides to detected separator pages")
+    scan_sep.add_argument("--actor", default="scan_separator_audit", help="Actor name recorded on applied overrides")
+    scan_sep.add_argument(
+        "--note",
+        default="auto-detected blank/separator scan page",
+        help="Note recorded on applied overrides",
+    )
+    scan_sep.set_defaults(func=cmd_audit_scan_separators)
 
 
     thumbs = sub.add_parser("thumbs", help="Generate thumbnails from stored originals/pages")
