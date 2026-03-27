@@ -389,15 +389,15 @@ class TestTreeContract(unittest.TestCase):
     def test_catalog_endpoints_support_multi_file_scope(self):
         """Catalog endpoints should union descendants when multiple files are selected."""
         tree = self._get("/api/catalog/tree")["tree"]
+        # Any node type (source or dimension) with ≥2 file children works for this test.
         dim = next(
             (
                 n for n in tree
-                if n.get("type") == "dimension"
-                and len([c for c in n.get("children", []) if c.get("file")]) >= 2
+                if len([c for c in n.get("children", []) if c.get("file")]) >= 2
             ),
             None,
         )
-        self.assertIsNotNone(dim, "need a dimension with at least two file children")
+        self.assertIsNotNone(dim, "need a node with at least two file children")
         files = [c["file"] for c in dim.get("children", []) if c.get("file")][:2]
         f0 = urllib.parse.quote(files[0])
         f1 = urllib.parse.quote(files[1])

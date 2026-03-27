@@ -507,7 +507,7 @@ class TestStore(unittest.TestCase):
 
                 main = list_assets(db)
                 show_hidden = list_assets(db, include_hidden=True)
-                hidden_only = list_assets(db, collection_id=hidden["id"])
+                hidden_only = list_assets(db, collection_id=hidden["id"], viewer_role="owner")
 
             self.assertEqual([r["id"] for r in main], ["a1"])
             self.assertEqual({r["id"] for r in show_hidden}, {"a1", "a2"})

@@ -247,7 +247,8 @@ class TestScansImport(unittest.TestCase):
                         ("asset-p3", f"scan://{'a' * 64}#p3", "batch - doc 3", "/tmp/p3.jpg", "/tmp/p3.jpg", "a" * 64),
                     ],
                 )
-                with mock.patch("inspirations.importers.scans._detect_pdf_delimiter_pages", return_value={2, 3}):
+                with mock.patch("inspirations.importers.scans._select_pdf_renderer", return_value="pdftoppm"), \
+                     mock.patch("inspirations.importers.scans._detect_pdf_delimiter_pages", return_value={2, 3}):
                     report = audit_scan_separator_pages(db, store_dir=store)
                     applied = audit_scan_separator_pages(db, store_dir=store, apply=True, actor="scan_test")
                 overrides = db.query(
@@ -331,7 +332,8 @@ class TestScansImport(unittest.TestCase):
                         None,
                     ),
                 )
-                with mock.patch("inspirations.importers.scans._detect_pdf_delimiter_pages", return_value={3}):
+                with mock.patch("inspirations.importers.scans._select_pdf_renderer", return_value="pdftoppm"), \
+                     mock.patch("inspirations.importers.scans._detect_pdf_delimiter_pages", return_value={3}):
                     preview = repair_scan_document_grouping(db, store_dir=store, pdf_sha256=sha, apply=False)
                     applied = repair_scan_document_grouping(db, store_dir=store, pdf_sha256=sha, apply=True)
                 titles = {
@@ -412,7 +414,8 @@ class TestScansImport(unittest.TestCase):
                     """,
                     ("col-1", "asset-p2"),
                 )
-                with mock.patch("inspirations.importers.scans._detect_pdf_delimiter_pages", return_value={2, 3}):
+                with mock.patch("inspirations.importers.scans._select_pdf_renderer", return_value="pdftoppm"), \
+                     mock.patch("inspirations.importers.scans._detect_pdf_delimiter_pages", return_value={2, 3}):
                     report = purge_scan_separator_pages(db, store_dir=store, pdf_sha256s=[sha], apply=True)
                 remaining = [str(r["id"]) for r in db.query("select id from assets order by id asc")]
 
