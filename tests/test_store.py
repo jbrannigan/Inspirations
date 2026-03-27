@@ -209,7 +209,7 @@ class TestStore(unittest.TestCase):
                 )
                 col = create_collection(db, name="Kitchen", description="Round 1")
                 add_items_to_collection(db, collection_id=col["id"], asset_ids=["a1"])
-                cols = list_collections(db)
+                cols = list_collections(db, viewer_role="owner")
                 items = list_collection_items(db, collection_id=col["id"])
             self.assertEqual(cols[0]["count"], 1)
             self.assertEqual(items[0]["id"], "a1")

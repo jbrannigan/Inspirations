@@ -3068,8 +3068,11 @@ class TestServerApi(unittest.TestCase):
                 self.serve_forever_called = False
                 created.append(self)
 
-            def serve_forever(self):
+            def serve_forever(self, **kwargs):
                 self.serve_forever_called = True
+
+            def server_close(self):
+                pass
 
         with mock.patch("inspirations.server.InspirationsHTTPServer", FakeServer), \
              mock.patch("inspirations.server._seed_default_actors") as seed:
