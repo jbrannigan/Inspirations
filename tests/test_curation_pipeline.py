@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from inspirations.curation import TRACK_CONSTRUCTION, TRACK_IRRELEVANT, TRACK_STYLE, run_curation_pipeline
+from inspirations.curation import TRACK_CONSTRUCTION, TRACK_STYLE, run_curation_pipeline
 from inspirations.db import Db, ensure_schema
 
 
