@@ -26,5 +26,15 @@ context.md
 
 # Generated / scratch
 tools/cluster_data.json
-.playwright-cli/
 .claude/worktrees/
+
+# Playwright / browser automation artifacts
+.playwright-cli/
+
+# Derived doc formats (source is .md or .mmd)
+docs/**/*.pdf
+docs/**/*.html
+*.docx
+
+# Rendered diagrams (regeneratable from .mmd)
+docs/**/*.svg
