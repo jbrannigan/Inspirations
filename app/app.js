@@ -111,6 +111,8 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 const escapeHtml = Shared.escapeHtml;
 const api = Shared.api;
 const formatApiError = Shared.formatApiError;
+const _bp = Shared.prefixPath;
+const _B = Shared.basePath;
 const SIDEBAR_VISIBILITY_KEY = "inspirations.ui.sidebar.hidden.v1";
 const SIDEBAR_WIDTH_KEY = "inspirations.ui.sidebar.width.v1";
 const VIEW_MODE_KEY = "inspirations.ui.view.mode.v1";
@@ -204,7 +206,7 @@ const INGEST_TAG_GROUPS = [
 async function apiUpload(path, formData) {
   const actorToken = typeof Shared.getActorToken === "function" ? Shared.getActorToken() : "";
   const headers = actorToken ? { "X-Actor-Token": actorToken } : {};
-  const res = await fetch(path, { method: "POST", body: formData, headers });
+  const res = await fetch(_bp(path), { method: "POST", body: formData, headers });
   if (!res.ok) { const t = await res.text(); throw new Error(t || res.statusText); }
   return res.json();
 }
@@ -221,8 +223,8 @@ function semanticQueryFromInput(value) {
 }
 
 function previewForAsset(a) {
-  if (a.thumb_path) return `/media/${a.id}?kind=thumb`;
-  if (a.stored_path && IMAGE_SUFFIX_RE.test(a.stored_path)) return `/media/${a.id}?kind=original`;
+  if (a.thumb_path) return `${_B}/media/${a.id}?kind=thumb`;
+  if (a.stored_path && IMAGE_SUFFIX_RE.test(a.stored_path)) return `${_B}/media/${a.id}?kind=original`;
   if (a.image_url && IMAGE_SUFFIX_RE.test(a.image_url)) return a.image_url;
   return "";
 }
@@ -239,7 +241,7 @@ function isVideoAsset(asset) {
 
 function videoUrlForAsset(asset) {
   if (!asset || !isVideoAsset(asset)) return "";
-  if (asset.stored_path) return `/media/${asset.id}?kind=original`;
+  if (asset.stored_path) return `${_B}/media/${asset.id}?kind=original`;
   if (asset.image_url && VIDEO_SUFFIX_RE.test(asset.image_url)) return asset.image_url;
   return "";
 }
@@ -520,10 +522,10 @@ function _loadModalImageAsset(asset, seq) {
   const img = $("#modalImage");
   if (!img) return;
   const assetId = String(asset?.id || "").trim();
-  const thumbUrl = asset?.thumb_path ? `/media/${assetId}?kind=thumb` : "";
+  const thumbUrl = asset?.thumb_path ? `${_B}/media/${assetId}?kind=thumb` : "";
   const originalUrl = asset?.stored_path
-    ? `/media/${assetId}?kind=original`
-    : (asset?.thumb_path ? `/media/${assetId}?kind=original` : String(asset?.image_url || "").trim());
+    ? `${_B}/media/${assetId}?kind=original`
+    : (asset?.thumb_path ? `${_B}/media/${assetId}?kind=original` : String(asset?.image_url || "").trim());
 
   const showUnavailable = () => {
     if (!_isCurrentModalLoad(assetId, seq)) return;
@@ -1325,7 +1327,7 @@ function _scanPdfHrefForAsset(asset) {
     const idx = state.modalScanPages.indexOf(asset.id);
     if (idx >= 0) page = idx + 1;
   }
-  return `/api/scan/doc-pdf?asset_id=${encodeURIComponent(asset.id)}#page=${page}`;
+  return `${_B}/api/scan/doc-pdf?asset_id=${encodeURIComponent(asset.id)}#page=${page}`;
 }
 
 function renderModalSourceLinks(asset) {
@@ -1636,7 +1638,7 @@ async function loadAssets(opts = {}) {
       catParams.set("offset", state.offset);
       data = await api(`/api/catalog/items?${catParams}`);
     } else if (semQ) {
-      const res = await fetch(`/api/search/similar?${params}`);
+      const res = await fetch(_bp(`/api/search/similar?${params}`));
       if (!res.ok) throw new Error(await res.text());
       data = await res.json();
     } else {
@@ -1834,7 +1836,7 @@ function buildCard(a) {
       if (prev) prev.disabled = pageIdx === 0;
       if (next) next.disabled = pageIdx >= memberIds.length - 1;
       if (indicator) indicator.textContent = `${pageIdx + 1} / ${memberIds.length}`;
-      if (img) img.src = `/media/${memberIds[pageIdx]}?kind=thumb`;
+      if (img) img.src = `${_B}/media/${memberIds[pageIdx]}?kind=thumb`;
     };
 
     if (prev) prev.addEventListener("click", (e) => { e.stopPropagation(); pageIdx = Math.max(0, pageIdx - 1); updateNav(); });
@@ -3769,7 +3771,7 @@ function _renderModalLabels(labels) {
 
 async function _loadModalLabels(assetId, seq) {
   try {
-    const resp = await fetch(`/api/assets/${encodeURIComponent(assetId)}/labels`);
+    const resp = await fetch(_bp(`/api/assets/${encodeURIComponent(assetId)}/labels`));
     if (!resp.ok || !_isCurrentModalLoad(assetId, seq)) return;
     const data = await resp.json();
     if (!_isCurrentModalLoad(assetId, seq)) return;
@@ -4221,7 +4223,7 @@ async function openModal(asset, options = {}) {
     }
     if (video) {
       video.src = modalVideoUrl;
-      const poster = asset.thumb_path ? `/media/${asset.id}?kind=thumb` : "";
+      const poster = asset.thumb_path ? `${_B}/media/${asset.id}?kind=thumb` : "";
       if (poster) video.poster = poster;
       else video.removeAttribute("poster");
       video.hidden = false;
@@ -4605,7 +4607,7 @@ async function _navModalScan(delta) {
   const siblingSourceRef = sourceBase ? `${sourceBase}#p${absolutePage}` : (curAsset.source_ref || "");
   state.modalAsset = { ...curAsset, id: siblingId, source_ref: siblingSourceRef };
   const modalImage = $("#modalImage");
-  if (modalImage) modalImage.src = `/media/${siblingId}?kind=thumb`;
+  if (modalImage) modalImage.src = `${_B}/media/${siblingId}?kind=thumb`;
   const indicator = document.querySelector(".modalScanIndicator");
   if (indicator) indicator.textContent = `Page ${newIdx + 1} of ${state.modalScanPages.length}`;
   const prevBtn = document.querySelector(".modalScanPrev");
@@ -5054,8 +5056,8 @@ function printModalAsset(asset) {
     ? String(modalVideo.poster || "").trim()
     : "";
   const fallbackUrl = asset?.thumb_path
-    ? `/media/${asset.id}?kind=thumb`
-    : (asset?.id ? `/media/${asset.id}?kind=original` : (asset?.image_url || ""));
+    ? `${_B}/media/${asset.id}?kind=thumb`
+    : (asset?.id ? `${_B}/media/${asset.id}?kind=original` : (asset?.image_url || ""));
   const url = modalImageUrl || modalPosterUrl || fallbackUrl;
   if (!url) {
     Shared.showToast("Nothing to print for this item.", { type: "info" });
@@ -5533,8 +5535,8 @@ async function renderReviewCard() {
 
   const img = $("#reviewImg");
   if (img) {
-    const url = item.thumb_path ? `/media/${item.id}?kind=original`
-                : item.stored_path ? `/media/${item.id}?kind=original`
+    const url = item.thumb_path ? `${_B}/media/${item.id}?kind=original`
+                : item.stored_path ? `${_B}/media/${item.id}?kind=original`
                 : item.image_url || "";
     img.src = url;
     img.alt = displayTitle(item);
@@ -6659,7 +6661,7 @@ let _explorerMode = "3d";   // "2d" | "3d"
 let _ExplorerImpl = null;
 let _disable3DForSession = false;
 let _explorer3DLoadPromise = null;
-const EXPLORER_3D_MODULE_URL = "/app/attractor-explorer-3d.js?v=40";
+const EXPLORER_3D_MODULE_URL = `${_B}/app/attractor-explorer-3d.js?v=40`;
 // Hard refresh in Safari can cold-load Three.js from CDN; allow enough
 // headroom so we do not incorrectly drop into 2D fallback.
 const EXPLORER_3D_READY_WAIT_MS = 12000;

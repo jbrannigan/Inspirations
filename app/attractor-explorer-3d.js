@@ -841,7 +841,7 @@
         _restY: (a.y || 0) + jy,
         _restZ: (a.z || 0) + jz,
         vx: 0, vy: 0, vz: 0,
-        thumb_url: a.t,
+        thumb_url: (window.Shared && Shared.prefixPath) ? Shared.prefixPath(a.t) : a.t,
         title: a.title || "",
         source: _normalizeSourceKey(a.src || ""),
         _tex: null,

@@ -213,7 +213,7 @@
         y: sy,
         _restX: sx,
         _restY: sy,
-        thumb_url: a.t,
+        thumb_url: (window.Shared && Shared.prefixPath) ? Shared.prefixPath(a.t) : a.t,
         title: a.title || "",
         source: _normalizeSourceKey(a.src || ""),
         _img: null,
