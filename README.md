@@ -58,6 +58,11 @@ For iPhone/iPad/LAN testing:
 PYTHONPATH=src python3 -m inspirations serve --host 0.0.0.0 --port 8000
 ```
 
+Behind a reverse proxy (e.g., New Home Next.js site at `/inspirations-app`):
+```sh
+BASE_PATH=/inspirations-app PYTHONPATH=src python3 -m inspirations serve --port 8001
+```
+
 ## App Workflows
 
 ### Collection Browsing

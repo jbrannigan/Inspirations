@@ -84,6 +84,12 @@ PYTHONPATH=src python3 -m inspirations serve --host 0.0.0.0 --port 8001
 ```
 Then open `http://<hostname>.local:8001` or `http://<lan-ip>:8001`.
 
+### Start the server behind a reverse proxy (New Home site)
+```bash
+BASE_PATH=/inspirations-app PYTHONPATH=src python3 -m inspirations serve --port 8001
+```
+When `BASE_PATH` is set, the server strips that prefix from incoming request paths and injects `window.__BASE_PATH` into the HTML so all frontend asset/API/media URLs are prefixed accordingly. The New Home Next.js app rewrites `/inspirations-app/:path*` to `http://127.0.0.1:8001/:path*`.
+
 ### AI tagging (Gemini)
 ```bash
 PYTHONPATH=src python3 -m inspirations ai tag --provider gemini --api-key "$GEMINI_API_KEY"
@@ -101,7 +107,7 @@ PYTHONPATH=src python3 -m inspirations ai tag --provider gemini --api-key "$GEMI
 - **`thumbnails.py`** — Auto-detects system tools (`sips` on macOS, `magick` on Linux), Pillow fallback.
 - **`ai.py`** — AI tagging pipeline. Gemini integration. Primary model: `gemini-2.5-flash`, fallback to `gemini-2.0-flash` on `RECITATION` errors.
 - **`export.py`** — Share-by-export utilities. Generates single-file HTML galleries and static share portal.
-- **`server.py`** — Standard library `HTTPServer`. REST API endpoints plus media serving and static files.
+- **`server.py`** — Standard library `HTTPServer`. REST API endpoints plus media serving and static files. Supports optional `BASE_PATH` env var for reverse-proxy deployments (strips prefix from incoming requests, injects `window.__BASE_PATH` into HTML).
 - **`devserver.py`** — File-watching wrapper for auto-reload during development.
 - **`importers/`** — Adapter pattern. Each normalizes source data into consistent `Asset` records. Imports are idempotent.
   - `pinterest_scrape.py` — Imports browser-scraped Pinterest JSON (new)
@@ -204,6 +210,7 @@ If the dev server command, port, or startup requirements change, update that con
 - Tests use Python's built-in `unittest` (no pytest).
 - The package is run via `PYTHONPATH=src python3 -m inspirations` (or editable install via `pip install -e .`).
 - `data/`, `store/`, `imports/` are local-only and never committed.
+- `BASE_PATH` env var enables reverse-proxy mode. Frontend JS uses `Shared.prefixPath(path)` (or `Shared.basePath` for template literals) to prefix absolute URLs. When adding new `fetch()` calls or `/media/` URLs in the frontend, always use these helpers.
 
 ## Future Work (TODO)
 

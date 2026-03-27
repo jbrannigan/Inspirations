@@ -1,5 +1,7 @@
 // shared.js — utilities used by both index.html (app.js) and admin.html (admin.js)
 (function () {
+  const _basePath = (window.__BASE_PATH || "").replace(/\/+$/, "");
+
   // --- Actor token detection (magic links) ---
   // Check URL for ?actor=TOKEN on first visit, persist in localStorage
   const _urlActorToken = new URLSearchParams(window.location.search).get("actor");
@@ -27,13 +29,20 @@
       .replace(/'/g, "&#39;");
   }
 
+  function prefixPath(path) {
+    if (_basePath && typeof path === "string" && path.startsWith("/")) {
+      return _basePath + path;
+    }
+    return path;
+  }
+
   async function api(path, opts = {}) {
     const headers = {
       "Content-Type": "application/json",
       ...(actorToken ? { "X-Actor-Token": actorToken } : {}),
       ...(opts.headers || {}),
     };
-    const res = await fetch(path, { ...opts, headers });
+    const res = await fetch(prefixPath(path), { ...opts, headers });
     if (!res.ok) {
       const t = await res.text();
       throw new Error(t || res.statusText);
@@ -88,5 +97,5 @@
 
   function getActorToken() { return actorToken; }
 
-  window.Shared = { escapeHtml, api, formatApiError, showToast, _removeToast, getActorToken };
+  window.Shared = { escapeHtml, api, formatApiError, showToast, _removeToast, getActorToken, basePath: _basePath, prefixPath };
 })();
