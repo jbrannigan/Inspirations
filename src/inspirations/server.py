@@ -65,6 +65,8 @@ from .feature_vectors import build_feature_vectors
 from .thumbnails import generate_thumbnails
 
 
+BASE_PATH = os.environ.get("BASE_PATH", "").strip().rstrip("/")
+
 MAX_BODY = 2_000_000
 MAX_UPLOAD_BODY = 350_000_000
 DEFAULT_ASSETS_PAGE_SIZE = 240
@@ -220,7 +222,13 @@ class ApiHandler(BaseHTTPRequestHandler):
     server_version = "Inspirations/0.1"
     protocol_version = "HTTP/1.1"
 
+    def _strip_base_path(self) -> None:
+        """Strip BASE_PATH prefix from self.path so routing works unchanged."""
+        if BASE_PATH and self.path.startswith(BASE_PATH):
+            self.path = self.path[len(BASE_PATH):] or "/"
+
     def do_HEAD(self) -> None:
+        self._strip_base_path()
         parsed = urlparse(self.path)
         if parsed.path in ("/", "/index.html"):
             return self._serve_file("index.html", "text/html", cache_control="no-cache")
@@ -246,6 +254,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         return self.send_error(404)
 
     def do_GET(self) -> None:
+        self._strip_base_path()
         parsed = urlparse(self.path)
         if parsed.path in ("/", "/index.html"):
             return self._serve_file("index.html", "text/html", cache_control="no-cache")
@@ -622,6 +631,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self) -> None:
+        self._strip_base_path()
         parsed = urlparse(self.path)
         if parsed.path == "/api/import/scans":
             return self._handle_scan_pdf_upload()
@@ -1190,6 +1200,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         )
 
     def do_PUT(self) -> None:
+        self._strip_base_path()
         parsed = urlparse(self.path)
         try:
             body = _json_body(self)
@@ -1230,6 +1241,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_DELETE(self) -> None:
+        self._strip_base_path()
         parsed = urlparse(self.path)
         if parsed.path == "/api/assets" or re.match(r"^/api/assets/([^/]+)$", parsed.path):
             return _send(self, 403, {"error": "Use POST /api/admin/assets/delete in admin mode"})
@@ -1843,7 +1855,36 @@ class ApiHandler(BaseHTTPRequestHandler):
             target.relative_to(base)
         except ValueError:
             return self.send_error(403)
+        if BASE_PATH and rel == "index.html":
+            return self._serve_index_with_base_path(target, cache_control=cache_control)
         return self._serve_path(target, mime, cache_control=cache_control)
+
+    def _serve_index_with_base_path(self, target: Path, *, cache_control: str) -> None:
+        if not target.exists() or not target.is_file():
+            return self.send_error(404)
+        html = target.read_text(encoding="utf-8")
+        # Inject window.__BASE_PATH before the first script tag
+        bp_script = f'<script>window.__BASE_PATH="{BASE_PATH}"</script>\n'
+        html = html.replace("<head>\n", f"<head>\n    {bp_script}", 1)
+        # Rewrite absolute asset paths to include the base path
+        html = html.replace('href="/app/', f'href="{BASE_PATH}/app/')
+        html = html.replace('src="/app/', f'src="{BASE_PATH}/app/')
+        raw = html.encode("utf-8")
+        data = raw
+        wants_gzip = "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
+        use_gzip = wants_gzip and len(raw) >= 1024
+        if use_gzip:
+            data = gzip.compress(raw, compresslevel=6)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Cache-Control", cache_control)
+        if use_gzip:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(data)
 
     def _serve_store_file(self, rel: str, mime: str, *, cache_control: str = "no-store") -> None:
         base = Path(self.server.store_dir).resolve()
@@ -2172,14 +2213,14 @@ def _seed_default_actors(db_path: Path, host: str, port: int) -> None:
             # Print existing magic links on startup
             actors = list_actors(db)
             for a in actors:
-                url = f"http://{host}:{port}/?actor={a['token']}"
+                url = f"http://{host}:{port}{BASE_PATH}/?actor={a['token']}"
                 print(f"  {a['name']} ({a['role']}): {url}")
             return
         leslie = create_actor(db, name="Leslie", role="owner")
         jim = create_actor(db, name="Jim", role="owner")
         print("Created default owner actors:")
-        print(f"  Leslie (owner): http://{host}:{port}/?actor={leslie['token']}")
-        print(f"  Jim (owner): http://{host}:{port}/?actor={jim['token']}")
+        print(f"  Leslie (owner): http://{host}:{port}{BASE_PATH}/?actor={leslie['token']}")
+        print(f"  Jim (owner): http://{host}:{port}{BASE_PATH}/?actor={jim['token']}")
 
 
 def _guess_mime(path: str) -> str:

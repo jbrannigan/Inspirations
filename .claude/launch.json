@@ -9,6 +9,16 @@
       "env": {
         "PYTHONPATH": "src"
       }
+    },
+    {
+      "name": "inspirations-proxy",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "inspirations", "serve", "--host", "127.0.0.1", "--port", "8001"],
+      "port": 8001,
+      "env": {
+        "PYTHONPATH": "src",
+        "BASE_PATH": "/inspirations-app"
+      }
     }
   ]
 }
