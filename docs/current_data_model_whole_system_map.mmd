@@ -1,0 +1,36 @@
+erDiagram
+    ASSETS ||--o{ COLLECTION_ITEMS : contains
+    COLLECTIONS ||--o{ COLLECTION_ITEMS : groups
+    ASSETS ||--o{ ANNOTATIONS : annotated_by
+    ACTORS ||--o{ ANNOTATIONS : authored
+    ASSETS ||--o| TRAY_ITEMS : staged
+
+    ASSETS ||--o{ ASSET_AI : summarized_by
+    ASSETS ||--o{ ASSET_LABELS : labeled_by
+    ASSETS ||--o{ ASSET_AI_ERRORS : failed_ai
+    ASSETS ||--o{ ASSET_EMBEDDINGS : embedded_as
+    AI_RUNS ||--o{ ASSET_LABELS : produced
+
+    ASSETS ||--o{ TRIAGE_LOG : triaged
+
+    TITLE_AUDIT_BATCHES ||--o{ TITLE_AUDIT_CANDIDATES : stages
+    TITLE_AUDIT_BATCHES ||--o{ TITLE_AUDIT_APPLIED : applies
+    ASSETS ||--o{ TITLE_AUDIT_CANDIDATES : candidate_for
+    ASSETS ||--o{ TITLE_AUDIT_APPLIED : title_changed
+    ASSETS ||--o{ ASSET_FIELD_PROVENANCE : field_history
+
+    CLASSIFICATION_RUNS ||--o{ ASSET_TRACK_ASSESSMENTS : evaluates
+    CLASSIFICATION_RUNS ||--o{ ASSET_AXIS_MEMBERSHIPS : assigns
+    CLASSIFICATION_RUNS ||--o{ ASSET_AXIS_EVIDENCE : records
+    CLASSIFICATION_RUNS ||--o{ ASSET_SOURCE_LINK_ENRICHMENT : enriches
+    CLASSIFICATION_RUNS ||--o{ ASSET_SOURCE_LINK_QC : qc_pass
+
+    ASSETS ||--o{ ASSET_TRACK_ASSESSMENTS : track_scored
+    ASSETS ||--o{ ASSET_AXIS_MEMBERSHIPS : axis_membership
+    ASSETS ||--o{ ASSET_AXIS_EVIDENCE : evidence_for
+    ASSETS ||--o{ ASSET_OVERRIDES : manually_overridden
+    ASSETS ||--o{ ASSET_SOURCE_LINK_ENRICHMENT : source_enriched
+    ASSETS ||--o{ ASSET_SOURCE_LINK_QC : source_qc
+
+    SOURCE_COLLECTIONS }o--|| ASSETS : mirrored_from_source
+    ACTORS }o--o{ COLLECTIONS : shares_with
