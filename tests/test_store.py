@@ -81,6 +81,60 @@ class TestStore(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0].get("title"), "Scanned inspiration")
 
+    def test_list_assets_collapses_large_explicit_scan_document_pages(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            sha = "e" * 64
+            with Db(db_path) as db:
+                ensure_schema(db)
+                for idx in range(1, 8):
+                    db.exec(
+                        """
+                        insert into assets (id, source, source_ref, title, imported_at, media_status, content_kind)
+                        values (?, ?, ?, ?, datetime('now'), ?, ?)
+                        """,
+                        (
+                            f"s{idx}",
+                            "scan",
+                            f"scan://{sha}#p{idx}",
+                            f"Big Scan Story - doc 12 p{idx}",
+                            "image",
+                            "scan",
+                        ),
+                    )
+                rows = list_assets(db, source="scan", limit=20)
+
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].get("title"), "Big Scan Story")
+            self.assertEqual(int(rows[0].get("scan_doc_pages") or 0), 7)
+            self.assertEqual(set(rows[0].get("scan_group_member_ids") or []), {f"s{idx}" for idx in range(1, 8)})
+
+    def test_list_assets_does_not_collapse_large_ambiguous_scan_group(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            sha = "f" * 64
+            with Db(db_path) as db:
+                ensure_schema(db)
+                for idx in range(1, 8):
+                    db.exec(
+                        """
+                        insert into assets (id, source, source_ref, title, imported_at, media_status, content_kind)
+                        values (?, ?, ?, ?, datetime('now'), ?, ?)
+                        """,
+                        (
+                            f"a{idx}",
+                            "scan",
+                            f"scan://{sha}#p{idx}",
+                            "Ambiguous Scan Story - doc 1",
+                            "image",
+                            "scan",
+                        ),
+                    )
+                rows = list_assets(db, source="scan", limit=20)
+
+            self.assertEqual(len(rows), 7)
+            self.assertTrue(all(int(row.get("scan_doc_pages") or 1) == 1 for row in rows))
+
     def test_add_remove_collection_expands_scan_document_members(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "t.sqlite"
@@ -155,7 +209,7 @@ class TestStore(unittest.TestCase):
                 )
                 col = create_collection(db, name="Kitchen", description="Round 1")
                 add_items_to_collection(db, collection_id=col["id"], asset_ids=["a1"])
-                cols = list_collections(db)
+                cols = list_collections(db, viewer_role="owner")
                 items = list_collection_items(db, collection_id=col["id"])
             self.assertEqual(cols[0]["count"], 1)
             self.assertEqual(items[0]["id"], "a1")
@@ -453,7 +507,7 @@ class TestStore(unittest.TestCase):
 
                 main = list_assets(db)
                 show_hidden = list_assets(db, include_hidden=True)
-                hidden_only = list_assets(db, collection_id=hidden["id"])
+                hidden_only = list_assets(db, collection_id=hidden["id"], viewer_role="owner")
 
             self.assertEqual([r["id"] for r in main], ["a1"])
             self.assertEqual({r["id"] for r in show_hidden}, {"a1", "a2"})

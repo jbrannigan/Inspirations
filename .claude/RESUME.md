@@ -538,3 +538,120 @@ Validation:
 - `python3 tools/run_bugfix_suite.py` → PASS
   - lint: PASS
   - full unit discover: PASS (`214` tests)
+
+## Session Update (Mar 2, 2026 — JIM-4 Implemented: Video Poster Generation)
+
+Implemented `JIM-4` to generate and use video poster thumbnails in ingest and display flows.
+
+Files changed:
+- `src/inspirations/importers/scans.py`
+- `app/app.js`
+- `tests/test_scans_import.py`
+- `.claude/TODO.md`
+- `.claude/RESUME.md`
+
+Delivered:
+- Added `ffmpeg`-backed poster extraction during video ingest in `import_videos_inbox`.
+- Video imports now assign deterministic asset IDs before ingest and attempt poster write to:
+  - `store/thumbs/video/<asset_id>.jpg`
+- Poster generation is non-blocking:
+  - if `ffmpeg` is missing or extraction fails, ingest still succeeds.
+- Import report now includes poster diagnostics:
+  - `poster.tool`
+  - `poster.generated`
+  - `poster.errors`
+- UI now prefers generated posters for video assets:
+  - Grid cards use video thumb endpoint when available.
+  - Modal video element sets `poster` when a thumb exists, preserving current playback behavior.
+
+Validation:
+- `PYTHONPATH=src python3 -m unittest tests.test_scans_import tests.test_server_api.TestServerApi.test_video_upload_runs_import tests.test_server_api.TestServerApi.test_video_upload_applies_title_and_tags_to_import_batch` → PASS (`12` tests)
+- `python3 tools/run_bugfix_suite.py` → PASS
+  - lint: PASS
+  - full unit discover: PASS (`216` tests)
+
+## Session Update (Mar 2, 2026 — Bug-Fix Sprint Wrap + Reboot Handoff)
+
+Branch:
+- `codex/sprint6-jim4-video-poster`
+
+Key outcomes now in codebase:
+- Collaborator IA defaults and collection-first browse behavior were implemented and iterated.
+- Managed Collections workflow added for owners (bulk hide, restore, delete hidden).
+- Tag workflow retired in product/API paths (`/api/assets/*/tag` and bulk tag now return `410`).
+- Tree + contract hardening added (alphabetized collections, subtype branches, visible-node contract tests).
+- Dave chat resilience improved:
+  - timeout-aware Claude retries,
+  - local fallback router for common intents,
+  - fallback guard to avoid stranding users on empty keyword filters,
+  - auto-refresh of chat catalog when DB changes.
+- Dave key runbook added and linked in project docs:
+  - `docs/LOCAL_DAVE_API_KEY.md`
+  - `README.md`
+  - `AGENTS.md`
+
+Latest validation (final before reboot):
+- `PYTHONPATH=src python3 tools/run_bugfix_suite.py` → `PASS`
+  - lint: `PASS`
+  - unit tests: `PASS` (`232` tests)
+
+Reboot-safe startup checklist:
+1. Confirm branch and working tree:
+   - `git rev-parse --abbrev-ref HEAD`
+   - `git status --short`
+2. Verify Dave key availability:
+   - `security find-generic-password -s inspirations_anthropic_api_key >/dev/null && echo found`
+3. Start server for cross-device testing:
+   - `PYTHONPATH=src python3 -m inspirations serve --host 0.0.0.0 --port 8001 --reload`
+4. Quick sanity checks:
+   - Ask Dave a known intent (`show collections`).
+   - Try a timeout/fallback-style query and ensure view is not stranded empty.
+   - Verify managed collections modal actions (hide/restore/delete hidden).
+
+## Session Update (Mar 4, 2026 — Final Bug-Fix Sign-Off + Reboot Continuity)
+
+Branch:
+- `codex/sprint6-jim4-video-poster`
+
+Commits added this session:
+- `c96ab22` — collaborator browse toggle clarity + tree hierarchy UI polish
+- `d334345` — keep unmatched 3D explorer nodes near cluster centroid
+
+Key UX/behavior updates:
+- Collaborator browse control now has explicit dual-state wording:
+  - `Browse more from Leslie collection ...`
+  - `Hide extra folders`
+- Hide-extra-folders path now relocks collaborator browse and restores shared-collections scope.
+- Tree visual hierarchy is clearer via nested branches, with internal vertical guide lines removed per latest UX preference.
+- 3D view no longer isolates unmatched layout assets (notably lone video cases) far from cluster cloud; unmatched nodes now spawn near layout centroid with deterministic jitter.
+
+Validation status:
+- Automated (Mar 4, 2026):
+  - `python3 tools/run_bugfix_suite.py` → PASS
+  - lint: PASS
+  - unit tests: PASS (`232` tests, `36.028s`)
+- Manual:
+  - Owner reported full checklist PASS on target platforms (iPad + desktop).
+  - Run log recorded: `docs/MANUAL_SIGNOFF_LOG_2026-03-04.md`
+  - Open manual failures: `0`
+
+Documentation synchronized:
+- `docs/BUGFIX_SPRINT_BASELINE_2026-03-02.md`
+- `docs/WORKFLOW_TEST_MATRIX_2026-03-02.md`
+- `docs/MANUAL_SIGNOFF_LOG_2026-03-04.md`
+- `.claude/TODO.md`
+
+Reboot-safe startup checklist (current):
+1. Confirm branch + working tree:
+   - `git rev-parse --abbrev-ref HEAD`
+   - `git status --short`
+2. Ensure API keys are available:
+   - Dave: `security find-generic-password -s inspirations_anthropic_api_key >/dev/null && echo found`
+   - Gemini (if needed): `security find-generic-password -s inspirations_gemini_api_key >/dev/null && echo found`
+3. Start server for cross-device validation:
+   - `PYTHONPATH=src python3 -m inspirations serve --host 0.0.0.0 --port 8001 --reload`
+4. If browser appears stale, hard refresh once and verify current cache-busters:
+   - `styles.css?v=15`
+   - `app.js?v=30`
+5. Optional regression confidence run:
+   - `python3 tools/run_bugfix_suite.py`

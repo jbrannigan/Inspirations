@@ -1,23 +1,68 @@
 // shared.js — utilities used by both index.html (app.js) and admin.html (admin.js)
 (function () {
   const _basePath = (window.__BASE_PATH || "").replace(/\/+$/, "");
+  const ACTOR_TOKEN_SESSION_KEY = "actorTokenSession";
+
+  function _readCookieToken() {
+    return (document.cookie.match(/(?:^|;\s*)actorToken=([^;]+)/) || [])[1] || "";
+  }
+
+  function _readLocalStorageToken() {
+    try {
+      return localStorage.getItem("actorToken") || "";
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function _readSessionStorageToken() {
+    try {
+      return sessionStorage.getItem(ACTOR_TOKEN_SESSION_KEY) || "";
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function _persistActorToken(token, { scope = "global" } = {}) {
+    const clean = String(token || "").trim();
+    if (!clean) return;
+    if (scope === "session") {
+      try {
+        sessionStorage.setItem(ACTOR_TOKEN_SESSION_KEY, clean);
+      } catch (_) {}
+      return;
+    }
+    try {
+      localStorage.setItem("actorToken", clean);
+    } catch (_) {}
+    document.cookie = `actorToken=${encodeURIComponent(clean)}; path=/; max-age=${60 * 60 * 24 * 365}; SameSite=Lax`;
+  }
+
+  function _globalActorToken() {
+    const fromStorage = _readLocalStorageToken();
+    const fromCookie = decodeURIComponent(_readCookieToken() || "");
+    return (fromStorage || fromCookie || "").trim();
+  }
+
+  function _currentActorToken() {
+    const fromSession = _readSessionStorageToken();
+    if (fromSession) return fromSession.trim();
+    return _globalActorToken();
+  }
 
   // --- Actor token detection (magic links) ---
-  // Check URL for ?actor=TOKEN on first visit, persist in localStorage
-  const _urlActorToken = new URLSearchParams(window.location.search).get("actor");
+  // Check URL for ?actor=TOKEN on first visit.
+  // Keep URL actor as tab-scoped to support side-by-side owner/collaborator tabs.
+  const _urlActorToken = (new URLSearchParams(window.location.search).get("actor") || "").trim();
   if (_urlActorToken) {
-    localStorage.setItem("actorToken", _urlActorToken);
-    // Also set a cookie so the token works across hostnames (localhost vs minime.local)
-    document.cookie = `actorToken=${_urlActorToken}; path=/; max-age=${60 * 60 * 24 * 365}; SameSite=Lax`;
+    _persistActorToken(_urlActorToken, { scope: "session" });
+    // Seed global token once when no actor token exists yet.
+    if (!_globalActorToken()) _persistActorToken(_urlActorToken);
     // Clean the URL so the token isn't visible / bookmarkable
     const cleaned = new URL(window.location);
     cleaned.searchParams.delete("actor");
     window.history.replaceState({}, "", cleaned.toString());
   }
-  // Try localStorage first, fall back to cookie
-  const actorToken = localStorage.getItem("actorToken")
-    || (document.cookie.match(/(?:^|;\s*)actorToken=([^;]+)/) || [])[1]
-    || "";
 
   function escapeHtml(value) {
     return (value || "")
@@ -37,6 +82,7 @@
   }
 
   async function api(path, opts = {}) {
+    const actorToken = _currentActorToken();
     const headers = {
       "Content-Type": "application/json",
       ...(actorToken ? { "X-Actor-Token": actorToken } : {}),
@@ -95,7 +141,7 @@
     toast.addEventListener("animationend", () => toast.remove());
   }
 
-  function getActorToken() { return actorToken; }
+  function getActorToken() { return _currentActorToken(); }
 
   window.Shared = { escapeHtml, api, formatApiError, showToast, _removeToast, getActorToken, basePath: _basePath, prefixPath };
 })();

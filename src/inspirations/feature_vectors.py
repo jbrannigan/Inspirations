@@ -65,6 +65,59 @@ CATEGORIES = {
     "elements":   {"label": "Elements",  "start": len(ROOMS) + len(STYLES) + len(MATERIALS) + len(COLORS) + len(IMAGE_TYPES) + len(SOURCES), "count": len(ELEMENTS)},
 }
 
+# Explorer v2 emphasizes the new corpus characterization first, while keeping
+# a few legacy visual facets as secondary attractors for open-ended browsing.
+EXPLORER_AXIS_SPECS: tuple[tuple[str, str], ...] = (
+    ("track", "Track"),
+    ("space_context", "Space Context"),
+    ("subject_type", "Subject Type"),
+    ("room", "Rooms"),
+    ("product_focus", "Style Product Focus"),
+    ("concern_domain", "Construction Concerns"),
+    ("product_system_focus", "Construction Systems"),
+)
+
+EXPLORER_LEGACY_SPECS: tuple[tuple[str, str, list[str], float], ...] = (
+    ("style_family", "Style Family", STYLES, 0.75),
+    ("materials", "Materials", MATERIALS, 0.80),
+    ("colors", "Colors", COLORS, 0.70),
+)
+
+_CLASSIFICATION_VALUE_LABELS = {
+    "style_product_decor": "Style / Decor",
+    "construction_concern": "Construction",
+    "home_maintenance_diy": "Maintenance / DIY",
+    "plans_code_permits": "Plans / Code / Permits",
+    "site_exterior": "Site / Exterior",
+    "non_spatial": "Non-Spatial",
+    "full_space_scene": "Full Space Scene",
+    "single_product": "Single Product",
+    "material_finish": "Material / Finish",
+    "architectural_detail": "Architectural Detail",
+    "plan_drawing": "Plan / Drawing",
+    "vignette_styling": "Vignette / Styling",
+    "lighting_fixture": "Lighting",
+    "laundry_room": "Laundry",
+    "entryway": "Entry",
+    "mep": "MEP",
+    "zip_system": "ZIP System",
+    "mid_century": "Mid-Century",
+}
+
+_CLASSIFICATION_VALUE_ORDER = {
+    "track": ["style_product_decor", "construction_concern", "home_maintenance_diy", "irrelevant"],
+    "space_context": ["interior_room", "outdoor_zone", "transition_space", "non_spatial"],
+    "subject_type": [
+        "full_space_scene",
+        "vignette_styling",
+        "single_product",
+        "material_finish",
+        "architectural_detail",
+        "plan_drawing",
+    ],
+    "concern_domain": ["envelope", "mep", "plans_code_permits", "site_exterior", "structure"],
+}
+
 # ─── Alias maps ──────────────────────────────────────────────────────────────
 
 _ROOM_ALIASES: dict[str, str] = {}
@@ -392,7 +445,11 @@ def _apply_text(vec: list[float], text: str, weight: float = 0.3) -> None:
             _set_dim(vec, dim_name, weight)
 
 
-def _apply_high_df_idf(vectors: list[list[float]], threshold_ratio: float = 0.5) -> dict[str, float]:
+def _apply_high_df_idf(
+    vectors: list[list[float]],
+    dim_labels: list[str] | tuple[str, ...] | None = None,
+    threshold_ratio: float = 0.5,
+) -> dict[str, float]:
     """Downweight dimensions that appear in most items using log(N / df)."""
     if not vectors:
         return {}
@@ -400,6 +457,9 @@ def _apply_high_df_idf(vectors: list[list[float]], threshold_ratio: float = 0.5)
     d = len(vectors[0]) if vectors[0] else 0
     if n <= 1 or d == 0:
         return {}
+    labels = list(dim_labels or ALL_DIMS)
+    if len(labels) < d:
+        labels = labels + [f"dim_{i}" for i in range(len(labels), d)]
 
     dim_counts = [0] * d
     for vec in vectors:
@@ -421,7 +481,7 @@ def _apply_high_df_idf(vectors: list[list[float]], threshold_ratio: float = 0.5)
         for vec in vectors:
             if vec[i] > 0:
                 vec[i] *= scale
-        applied[ALL_DIMS[i]] = scale
+        applied[labels[i]] = scale
     return applied
 
 
@@ -592,6 +652,140 @@ def _fallback_title_from_source_ref(title: str, source_ref: str) -> str:
     return ""
 
 
+def _latest_classification_run_id(db: Db, run_type: str) -> str:
+    return str(
+        db.query_value(
+            "select id from classification_runs where run_type=? order by created_at desc limit 1",
+            (str(run_type or "").strip(),),
+        )
+        or ""
+    ).strip()
+
+
+def _classification_value_label(axis_name: str, axis_value: str) -> str:
+    axis = str(axis_name or "").strip().lower()
+    value = str(axis_value or "").strip().lower()
+    if not value:
+        return ""
+    if value in _CLASSIFICATION_VALUE_LABELS:
+        return _CLASSIFICATION_VALUE_LABELS[value]
+    if axis == "product_system_focus" and value.endswith("_system"):
+        return value.replace("_", " ").title()
+    return value.replace("_", " ").title()
+
+
+def _ordered_classification_values(axis_name: str, values: set[str]) -> list[str]:
+    order = _CLASSIFICATION_VALUE_ORDER.get(axis_name, [])
+    rank = {value: idx for idx, value in enumerate(order)}
+    return sorted(
+        {str(value or "").strip() for value in values if str(value or "").strip()},
+        key=lambda value: (rank.get(value, len(rank)), _classification_value_label(axis_name, value)),
+    )
+
+
+def _legacy_dim_label(dim_name: str) -> str:
+    value = str(dim_name or "").strip().lower()
+    if not value:
+        return ""
+    if value in _CLASSIFICATION_VALUE_LABELS:
+        return _CLASSIFICATION_VALUE_LABELS[value]
+    return value.replace("_", " ").title()
+
+
+def _confidence_weight(raw_value: object, *, default: float = 0.9) -> float:
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        value = default
+    if value <= 0:
+        value = default
+    return max(0.25, min(1.0, value))
+
+
+def _load_classification_memberships(
+    db: Db,
+    asset_ids: list[str],
+) -> tuple[str, str, dict[str, list[tuple[str, float]]], dict[str, dict[str, list[tuple[str, float]]]], dict[str, set[str]]]:
+    asset_id_set = {str(asset_id or "").strip() for asset_id in asset_ids if str(asset_id or "").strip()}
+    track_run_id = _latest_classification_run_id(db, "track_gate")
+    axis_run_id = _latest_classification_run_id(db, "multi_axis_inference")
+    track_by_asset: dict[str, list[tuple[str, float]]] = {}
+    axis_by_asset: dict[str, dict[str, list[tuple[str, float]]]] = {}
+    axis_values_by_axis: dict[str, set[str]] = {axis_name: set() for axis_name, _ in EXPLORER_AXIS_SPECS}
+    axis_names = {axis_name for axis_name, _ in EXPLORER_AXIS_SPECS if axis_name != "track"}
+
+    if track_run_id:
+        for row in db.query(
+            "select asset_id, track, confidence from asset_track_assessments where run_id=?",
+            (track_run_id,),
+        ):
+            asset_id = str(row["asset_id"] or "").strip()
+            track = str(row["track"] or "").strip()
+            if not asset_id or asset_id not in asset_id_set or not track:
+                continue
+            confidence = _confidence_weight(row["confidence"], default=0.95)
+            track_by_asset.setdefault(asset_id, []).append((track, confidence))
+            axis_values_by_axis["track"].add(track)
+
+    if axis_run_id:
+        for row in db.query(
+            "select asset_id, axis_name, axis_value, confidence from asset_axis_memberships where run_id=?",
+            (axis_run_id,),
+        ):
+            asset_id = str(row["asset_id"] or "").strip()
+            axis_name = str(row["axis_name"] or "").strip()
+            axis_value = str(row["axis_value"] or "").strip()
+            if (
+                not asset_id
+                or asset_id not in asset_id_set
+                or axis_name not in axis_names
+                or not axis_value
+            ):
+                continue
+            confidence = _confidence_weight(row["confidence"], default=0.85)
+            axis_values_by_axis.setdefault(axis_name, set()).add(axis_value)
+            axis_by_asset.setdefault(asset_id, {}).setdefault(axis_name, []).append((axis_value, confidence))
+
+    return track_run_id, axis_run_id, track_by_asset, axis_by_asset, axis_values_by_axis
+
+
+def _build_explorer_dimensions(
+    axis_values_by_axis: dict[str, set[str]],
+) -> tuple[list[str], dict[str, dict[str, int | str]], dict[int, str], dict[tuple[str, str], int], dict[tuple[str, str], int]]:
+    dimensions: list[str] = []
+    categories: dict[str, dict[str, int | str]] = {}
+    dim_labels: dict[int, str] = {}
+    classification_lookup: dict[tuple[str, str], int] = {}
+    legacy_lookup: dict[tuple[str, str], int] = {}
+
+    def _add_category(category_key: str, label: str, items: list[tuple[str, str]]) -> None:
+        if not items:
+            return
+        start = len(dimensions)
+        categories[category_key] = {"label": label, "start": start, "count": len(items)}
+        for dim_name, dim_label in items:
+            idx = len(dimensions)
+            dimensions.append(dim_name)
+            dim_labels[idx] = dim_label
+
+    for axis_name, label in EXPLORER_AXIS_SPECS:
+        values = _ordered_classification_values(axis_name, axis_values_by_axis.get(axis_name, set()))
+        items = [(f"{axis_name}:{value}", _classification_value_label(axis_name, value)) for value in values]
+        start = len(dimensions)
+        _add_category(axis_name, label, items)
+        for offset, value in enumerate(values):
+            classification_lookup[(axis_name, value)] = start + offset
+
+    for category_key, label, dim_names, _weight in EXPLORER_LEGACY_SPECS:
+        start = len(dimensions)
+        items = [(f"{category_key}:{dim_name}", _legacy_dim_label(dim_name)) for dim_name in dim_names]
+        _add_category(category_key, label, items)
+        for offset, dim_name in enumerate(dim_names):
+            legacy_lookup[(category_key, dim_name)] = start + offset
+
+    return dimensions, categories, dim_labels, classification_lookup, legacy_lookup
+
+
 # ─── Main entry point ────────────────────────────────────────────────────────
 
 def build_feature_vectors(
@@ -621,10 +815,21 @@ def build_feature_vectors(
         tuple(params),
     )
     if not assets:
-        return {"dimensions": ALL_DIMS, "categories": CATEGORIES,
-                "assets": [], "attractors": {}}
+        return {"dimensions": [], "categories": {}, "assets": [], "attractors": {}}
 
     asset_ids = [a["id"] for a in assets]
+    (
+        track_run_id,
+        axis_run_id,
+        track_by_asset,
+        axis_by_asset,
+        axis_values_by_axis,
+    ) = _load_classification_memberships(db, asset_ids)
+    explorer_dims, explorer_categories, explorer_dim_labels, classification_lookup, legacy_lookup = (
+        _build_explorer_dimensions(axis_values_by_axis)
+    )
+    if not explorer_dims:
+        return {"dimensions": [], "categories": {}, "assets": [], "attractors": {}}
 
     # 2. Load AI JSON
     ai_rows = db.query("select asset_id, provider, json from asset_ai")
@@ -648,30 +853,41 @@ def build_feature_vectors(
     node_meta: list[dict] = []
 
     for asset in assets:
-        vec = [0.0] * NUM_DIMS
         aid = asset["id"]
+        vec = [0.0] * len(explorer_dims)
+        legacy_vec = [0.0] * NUM_DIMS
 
-        # Source (always available)
+        for track, confidence in track_by_asset.get(aid, []):
+            idx = classification_lookup.get(("track", track))
+            if idx is not None:
+                vec[idx] = max(vec[idx], confidence)
+        for axis_name, memberships in axis_by_asset.get(aid, {}).items():
+            for axis_value, confidence in memberships:
+                idx = classification_lookup.get((axis_name, axis_value))
+                if idx is not None:
+                    vec[idx] = max(vec[idx], confidence)
+
+        # Source is still exposed as a separate explorer chip group, but not as a
+        # semantic dimension. That keeps the layout driven by corpus meaning
+        # instead of clustering by import source.
         src = (asset["source"] or "").lower()
-        if src in DIM_INDEX:
-            _set_dim(vec, src, 0.5)
 
-        # AI analysis
+        # AI analysis and text-derived legacy facets
         for provider, ai_json in ai_by_asset.get(aid, []):
             if provider == "gemini":
-                _apply_ai_json(vec, ai_json, weight=1.0)
+                _apply_ai_json(legacy_vec, ai_json, weight=1.0)
             elif provider == "gemini-video":
-                _apply_video_json(vec, ai_json, weight=0.9)
+                _apply_video_json(legacy_vec, ai_json, weight=0.9)
 
         # Labels
         asset_labels = labels_by_asset.get(aid, [])
         if asset_labels:
-            _apply_labels(vec, asset_labels, weight=0.8)
+            _apply_labels(legacy_vec, asset_labels, weight=0.8)
 
         # Board name
         board = asset["board"] or ""
         if board:
-            _apply_board(vec, board, weight=0.6)
+            _apply_board(legacy_vec, board, weight=0.6)
 
         # Title / SEO alt text (lowest priority)
         title = asset["title"] or ""
@@ -682,7 +898,17 @@ def build_feature_vectors(
         text = f"{text_title} {seo}".strip()
         if text and not ai_by_asset.get(aid):
             # Only use text extraction for assets without AI analysis
-            _apply_text(vec, text, weight=0.3)
+            _apply_text(legacy_vec, text, weight=0.3)
+
+        for category_key, _label, dim_names, weight in EXPLORER_LEGACY_SPECS:
+            for dim_name in dim_names:
+                legacy_idx = DIM_INDEX.get(dim_name)
+                explorer_idx = legacy_lookup.get((category_key, dim_name))
+                if legacy_idx is None or explorer_idx is None:
+                    continue
+                legacy_weight = legacy_vec[legacy_idx]
+                if legacy_weight > 0:
+                    vec[explorer_idx] = max(vec[explorer_idx], legacy_weight * weight)
 
         vectors.append(vec)
 
@@ -699,7 +925,7 @@ def build_feature_vectors(
         })
 
     # 5. IDF downweighting for high-frequency dimensions
-    _apply_high_df_idf(vectors, threshold_ratio=0.5)
+    _apply_high_df_idf(vectors, dim_labels=explorer_dims, threshold_ratio=0.5)
 
     # Build sparse vectors for transport (only non-zero entries)
     for i, meta in enumerate(node_meta):
@@ -731,23 +957,23 @@ def build_feature_vectors(
             node["y"] = round(coords[i][1], 1)
 
     # 7. Compute attractor options (dims with enough items to be useful)
-    dim_counts = [0] * NUM_DIMS
+    dim_counts = [0] * len(explorer_dims)
     for vec in vectors:
         for i, v in enumerate(vec):
             if v > 0:
                 dim_counts[i] += 1
 
     attractors: dict[str, list[dict]] = {}
-    for cat_key, cat_info in CATEGORIES.items():
+    for cat_key, cat_info in explorer_categories.items():
         start = cat_info["start"]
         count = cat_info["count"]
         options = []
         for offset in range(count):
             idx = start + offset
-            dim_name = ALL_DIMS[idx]
+            dim_name = explorer_dims[idx]
             cnt = dim_counts[idx]
             if cnt >= 3:  # Only show dimensions with at least 3 items
-                nice_name = dim_name.replace("_", " ").title()
+                nice_name = explorer_dim_labels.get(idx, dim_name.replace("_", " ").title())
                 options.append({"dim": idx, "name": nice_name, "count": cnt})
         options.sort(key=lambda x: x["count"], reverse=True)
         if options:
@@ -757,13 +983,18 @@ def build_feature_vectors(
     if data_dir:
         data_dir.mkdir(parents=True, exist_ok=True)
         cache_key = hashlib.sha256(
-            f"{','.join(sorted(asset_ids))}:dims={dims}:idf=v1".encode()
+            (
+                f"{','.join(sorted(asset_ids))}:dims={dims}:include_hidden={int(include_hidden)}:"
+                f"track_run={track_run_id}:axis_run={axis_run_id}:idf=v2"
+            ).encode()
         ).hexdigest()[:16]
         cache_file = data_dir / f"attractors_{cache_key}.json"
         payload = {
-            "dimensions": ALL_DIMS,
-            "categories": {k: {"label": v["label"], "start": v["start"], "count": v["count"]}
-                          for k, v in CATEGORIES.items()},
+            "dimensions": explorer_dims,
+            "categories": {
+                k: {"label": v["label"], "start": v["start"], "count": v["count"]}
+                for k, v in explorer_categories.items()
+            },
             "assets": node_list,
             "attractors": attractors,
         }
@@ -774,9 +1005,11 @@ def build_feature_vectors(
         return payload
 
     return {
-        "dimensions": ALL_DIMS,
-        "categories": {k: {"label": v["label"], "start": v["start"], "count": v["count"]}
-                      for k, v in CATEGORIES.items()},
+        "dimensions": explorer_dims,
+        "categories": {
+            k: {"label": v["label"], "start": v["start"], "count": v["count"]}
+            for k, v in explorer_categories.items()
+        },
         "assets": node_list,
         "attractors": attractors,
     }

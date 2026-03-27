@@ -148,13 +148,18 @@
 
     // Resize observer
     const ro = new ResizeObserver(() => {
-      _width = _container.clientWidth;
-      _height = _container.clientHeight;
-      _canvas.width = _width;
-      _canvas.height = _height;
-      _scheduleRender();
+      resize();
     });
     ro.observe(_container);
+  }
+
+  function resize() {
+    if (!_container || !_canvas) return;
+    _width = Math.max(1, _container.clientWidth || 800);
+    _height = Math.max(1, _container.clientHeight || 600);
+    _canvas.width = _width;
+    _canvas.height = _height;
+    _scheduleRender();
   }
 
   // ─── Data loading ────────────────────────────────────────────────────────
@@ -709,7 +714,18 @@
       }
     }
 
-    const chipOrder = ["rooms", "styles", "materials", "colors", "image_type", "elements"];
+    const chipOrder = [
+      "track",
+      "space_context",
+      "subject_type",
+      "room",
+      "product_focus",
+      "concern_domain",
+      "product_system_focus",
+      "style_family",
+      "materials",
+      "colors",
+    ];
     for (const catKey of chipOrder) {
       const options = _attractorOptions[catKey];
       if (!options || options.length === 0) continue;
@@ -726,7 +742,9 @@
       chips.className = "attractor-chips";
 
       // Show top items (most popular)
-      const maxChips = catKey === "colors" ? 8 : 10;
+      const maxChips = catKey === "colors"
+        ? 8
+        : (catKey === "product_focus" || catKey === "room" ? 12 : 10);
       for (const opt of options.slice(0, maxChips)) {
         const btn = document.createElement("button");
         btn.className = "attractor-chip";
@@ -1032,17 +1050,23 @@
     _rebuildForFocusedMode();
   }
 
+  function getVisibleNodeIds() {
+    return (_nodes || []).map((node) => node.id).filter(Boolean);
+  }
+
   window.AttractorExplorer = {
     init,
     loadData,
     setFilter,
     setSearch,
     setFocusedMode,
+    getVisibleNodeIds,
     highlight,
     onSelect,
     onClickNode,
     pause,
     resume,
+    resize,
     destroy,
   };
 })();

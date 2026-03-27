@@ -121,6 +121,10 @@ class TestTreeContract(unittest.TestCase):
         with Db(self.db_path) as db:
             ensure_schema(db)
             _seed_assets(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("owner-tree", "Owner", "owner-tree-token", "owner"),
+            )
             generate_catalog(db, self.catalog_dir)
 
         self.server = HTTPServer(("127.0.0.1", 0), ApiHandler)
@@ -150,9 +154,9 @@ class TestTreeContract(unittest.TestCase):
         self.thread.join(timeout=2)
         self._tmp.cleanup()
 
-    def _get(self, path: str) -> dict:
+    def _get(self, path: str, *, headers: dict | None = None) -> dict:
         """GET a JSON endpoint, return parsed body."""
-        req = urllib.request.Request(f"{self.base_url}{path}")
+        req = urllib.request.Request(f"{self.base_url}{path}", headers=headers or {})
         with urllib.request.urlopen(req, timeout=5) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
@@ -273,6 +277,102 @@ class TestTreeContract(unittest.TestCase):
         self.assertNotIn("scan", source_labels,
                          "Fully-hidden source should be removed from tree")
 
+    def test_collections_group_is_alphabetized(self):
+        """Collections in the browse tree should be stable and alphabetical."""
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into collections (id, name, description, created_at, updated_at, hidden)
+                values (?, ?, ?, ?, ?, 0)
+                """,
+                ("c-zebra", "CB: Zebra", "", "2026-03-01T00:00:00+00:00", "2026-03-02T00:00:03+00:00"),
+            )
+            db.exec(
+                """
+                insert into collections (id, name, description, created_at, updated_at, hidden)
+                values (?, ?, ?, ?, ?, 0)
+                """,
+                ("c-alpha", "CB: Alpha", "", "2026-03-01T00:00:00+00:00", "2026-03-02T00:00:01+00:00"),
+            )
+            db.exec(
+                """
+                insert into collections (id, name, description, created_at, updated_at, hidden)
+                values (?, ?, ?, ?, ?, 0)
+                """,
+                ("c-bath", "Bathroom", "", "2026-03-01T00:00:00+00:00", "2026-03-02T00:00:02+00:00"),
+            )
+            db.exec(
+                """
+                insert into collections (id, name, description, created_at, updated_at, hidden)
+                values (?, ?, ?, ?, ?, 1)
+                """,
+                ("c-hidden", "CB: Hidden", "", "2026-03-01T00:00:00+00:00", "2026-03-02T00:00:04+00:00"),
+            )
+
+        tree = self._get("/api/catalog/tree", headers={"X-Actor-Token": "owner-tree-token"})["tree"]
+        collections_node = next((n for n in tree if n.get("type") == "collections_group"), None)
+        self.assertIsNotNone(collections_node, "collections group should be present")
+        labels = [str(c.get("label") or "") for c in collections_node.get("children", [])]
+        self.assertEqual(labels, ["Bathroom", "CB: Alpha", "CB: Zebra"])
+
+    def test_collections_group_counts_only_visible_items(self):
+        """Collection counts should match visible items returned by /api/assets."""
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into collections (id, name, description, created_at, updated_at, hidden)
+                values (?, ?, ?, ?, ?, 0)
+                """,
+                ("c-visible-check", "Visible Count Check", "", "2026-03-01T00:00:00+00:00", "2026-03-02T00:00:00+00:00"),
+            )
+            db.exec(
+                "insert into collection_items (collection_id, asset_id, position) values (?, ?, ?)",
+                ("c-visible-check", "aa000000-1000-4000-a000-000000000000", 1),
+            )
+            db.exec(
+                "insert into collection_items (collection_id, asset_id, position) values (?, ?, ?)",
+                ("c-visible-check", "dd000000-1000-4000-a000-000000000000", 2),
+            )
+
+        tree = self._get("/api/catalog/tree", headers={"X-Actor-Token": "owner-tree-token"})["tree"]
+        collections_node = next((n for n in tree if n.get("type") == "collections_group"), None)
+        self.assertIsNotNone(collections_node, "collections group should be present")
+        target = next(
+            (c for c in collections_node.get("children", []) if str(c.get("collection_id") or "") == "c-visible-check"),
+            None,
+        )
+        self.assertIsNotNone(target, "collection should appear in collections group")
+        self.assertEqual(int(target.get("count") or 0), 1)
+
+    def test_collections_group_exposes_collection_provenance(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into collections (id, name, description, created_at, updated_at, hidden)
+                values (?, ?, ?, ?, ?, 0)
+                """,
+                (
+                    "c-cb",
+                    "CB: Kitchen",
+                    "Kitchen layouts, cabinets, countertops, appliances.",
+                    "2026-03-01T00:00:00+00:00",
+                    "2026-03-02T00:00:00+00:00",
+                ),
+            )
+            ensure_schema(db)
+
+        tree = self._get("/api/catalog/tree", headers={"X-Actor-Token": "owner-tree-token"})["tree"]
+        collections_node = next((n for n in tree if n.get("type") == "collections_group"), None)
+        self.assertIsNotNone(collections_node, "collections group should be present")
+        child = next((c for c in collections_node.get("children", []) if c.get("collection_id") == "c-cb"), None)
+        self.assertIsNotNone(child, "CB collection should appear in collections group")
+        self.assertEqual(child.get("provenance_kind"), "ai_derived_representative")
+        self.assertEqual(child.get("provenance_badge"), "AI set")
+        self.assertEqual(child.get("provenance_label"), "AI-derived representative")
+
     def test_scan_source_exposes_subtype_branches(self):
         tree = self._get("/api/catalog/tree")["tree"]
         scan = next((n for n in tree if n.get("type") == "source" and n.get("label", "").lower() == "scan"), None)
@@ -289,15 +389,15 @@ class TestTreeContract(unittest.TestCase):
     def test_catalog_endpoints_support_multi_file_scope(self):
         """Catalog endpoints should union descendants when multiple files are selected."""
         tree = self._get("/api/catalog/tree")["tree"]
+        # Any node type (source or dimension) with ≥2 file children works for this test.
         dim = next(
             (
                 n for n in tree
-                if n.get("type") == "dimension"
-                and len([c for c in n.get("children", []) if c.get("file")]) >= 2
+                if len([c for c in n.get("children", []) if c.get("file")]) >= 2
             ),
             None,
         )
-        self.assertIsNotNone(dim, "need a dimension with at least two file children")
+        self.assertIsNotNone(dim, "need a node with at least two file children")
         files = [c["file"] for c in dim.get("children", []) if c.get("file")][:2]
         f0 = urllib.parse.quote(files[0])
         f1 = urllib.parse.quote(files[1])

@@ -6,10 +6,12 @@ import mimetypes
 import os
 import re
 import secrets
+import signal
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -20,17 +22,20 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .ai import DEFAULT_GEMINI_EMBEDDING_MODEL, run_similarity_search
+from .catalog import generate_catalog
 from .chat import process_chat_message
 from .db import Db, ensure_schema
 from .importers.scans import import_photos_inbox, import_scans_inbox, import_videos_inbox
 from .store import (
     add_items_to_collection,
     bulk_set_flag,
-    bulk_set_tag,
     bulk_set_triage_status,
+    collection_provenance_badge,
+    collection_provenance_label,
     create_actor,
     create_annotation,
     create_collection,
+    decorate_collection_record,
     delete_actor,
     delete_annotation,
     delete_assets,
@@ -44,6 +49,7 @@ from .store import (
     list_collection_items,
     list_collections,
     delete_collection,
+    delete_hidden_collections,
     list_facets,
     list_open_questions,
     list_tray,
@@ -54,14 +60,23 @@ from .store import (
     remove_item_from_collection,
     remove_items_from_collection,
     rollback_triage_since,
+    set_collections_hidden,
     set_collection_order,
     set_triage_status,
     triage_stats,
+    update_collection,
     update_annotation,
     update_asset_notes,
 )
+from .title_workflow import TitleConflictError, TitleNotFoundError, apply_working_title, enrich_assets_with_title_info
 from .explorer_layout import compute_layout
 from .feature_vectors import build_feature_vectors
+from .source_link_enrichment import (
+    capture_source_link_candidate_for_asset,
+    default_auth_browser_profile_dir,
+    latest_source_link_enrichment_for_asset,
+    promote_latest_hero_image_for_asset,
+)
 from .thumbnails import generate_thumbnails
 
 
@@ -73,6 +88,23 @@ DEFAULT_ASSETS_PAGE_SIZE = 240
 MAX_SCAN_DOC_GROUP_PAGES = 6
 VIDEO_UPLOAD_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".mpeg", ".mpg", ".wmv", ".3gp"}
 SCAN_DOC_TITLE_SUFFIX_RE = re.compile(r"(\s-\sdoc\s+\d+(?:\s+p\d+)?)\s*$", re.IGNORECASE)
+CLASSIFICATION_TRACK_OPTIONS = (
+    "style_product_decor",
+    "construction_concern",
+    "home_maintenance_diy",
+    "irrelevant",
+)
+REVIEW_FOCUS_OPTIONS = (
+    "",
+    "landscaping",
+    "inspection",
+)
+MEDIA_RELIABILITY_OPTIONS = (
+    "",
+    "trust_title_source",
+    "thumbnail_placeholder",
+    "thumbnail_mismatch",
+)
 
 # ── API key helpers ──────────────────────────────────────────────────────────────
 
@@ -205,17 +237,55 @@ def _send(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
 
 
 def _resolve_actor(handler: BaseHTTPRequestHandler) -> dict | None:
-    """Resolve actor from X-Actor-Token header or ?actor= query param."""
-    token = (handler.headers.get("X-Actor-Token") or "").strip()
+    """Resolve actor token, preferring explicit magic-link query over header."""
+    parsed = urlparse(handler.path)
+    q = parse_qs(parsed.query)
+    token = (q.get("actor", [""])[0] or "").strip()
     if not token:
-        parsed = urlparse(handler.path)
-        q = parse_qs(parsed.query)
-        token = (q.get("actor", [""])[0] or "").strip()
+        token = (handler.headers.get("X-Actor-Token") or "").strip()
     if not token:
         return None
     with Db(handler.server.db_path) as db:
         ensure_schema(db)
         return get_actor_by_token(db, token=token)
+
+
+def _actor_role(actor: dict | None) -> str:
+    return str((actor or {}).get("role") or "").strip().lower()
+
+
+def _can_flag_assets(actor: dict | None) -> bool:
+    # Product rule: flagging is owner-only.
+    return _actor_role(actor) == "owner"
+
+
+def _is_collaborator(actor: dict | None) -> bool:
+    role = _actor_role(actor)
+    return bool(role and role != "owner")
+
+
+def _is_non_home_catalog_file(rel_path: str) -> bool:
+    rel = str(rel_path or "").replace("\\", "/").strip().lstrip("./").lower()
+    return rel == "other" or rel.startswith("other/")
+
+
+def _collaborator_excluded_tracks_csv() -> str:
+    return "home_maintenance_diy,irrelevant"
+
+
+def _is_non_home_tree_node(node: dict) -> bool:
+    if not isinstance(node, dict) or node.get("type") != "dimension":
+        return False
+    node_id = str(node.get("id") or "").strip().lower()
+    if node_id == "dimension:other":
+        return True
+    label = str(node.get("label") or "").strip().lower()
+    if "non-home" in label and "other" in label:
+        return True
+    for child in node.get("children") or []:
+        if _is_non_home_catalog_file(str((child or {}).get("file") or "")):
+            return True
+    return False
 
 
 class ApiHandler(BaseHTTPRequestHandler):
@@ -286,6 +356,13 @@ class ApiHandler(BaseHTTPRequestHandler):
             include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
             actor = _resolve_actor(self)
             include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
+            actor_role = str(actor.get("role") or "") if actor else ""
+            actor_id = str(actor.get("id") or "") if actor else ""
+            category = q.get("category", [""])[0]
+            exclude_tracks = ""
+            if _is_collaborator(actor):
+                category = "home_design"
+                exclude_tracks = _collaborator_excluded_tracks_csv()
             page_limit = int(q.get("limit", [str(DEFAULT_ASSETS_PAGE_SIZE)])[0])
             assets = self._with_db(
                 list_assets,
@@ -300,11 +377,16 @@ class ApiHandler(BaseHTTPRequestHandler):
                 creator=q.get("creator", [""])[0],
                 collection_id=q.get("collection_id", [""])[0],
                 triage_status=q.get("triage_status", [""])[0],
-                category=q.get("category", [""])[0],
+                category=category,
                 needs_annotation=_parse_bool_param(q.get("needs_annotation", [""])[0], default=False),
                 flagged_only=_parse_bool_param(q.get("flagged", [""])[0], default=False),
                 tagged_only=_parse_bool_param(q.get("tagged", [""])[0], default=False),
                 include_hidden=include_hidden,
+                classification_axis=q.get("classification_axis", [""])[0],
+                classification_value=q.get("classification_value", [""])[0],
+                exclude_tracks=exclude_tracks,
+                viewer_role=actor_role,
+                viewer_actor_id=actor_id,
                 limit=page_limit + 1,
                 offset=int(q.get("offset", ["0"])[0]),
             )
@@ -341,6 +423,13 @@ class ApiHandler(BaseHTTPRequestHandler):
             include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
             actor = _resolve_actor(self)
             include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
+            actor_role = str(actor.get("role") or "") if actor else ""
+            actor_id = str(actor.get("id") or "") if actor else ""
+            category = q.get("category", [""])[0]
+            exclude_tracks = ""
+            if _is_collaborator(actor):
+                category = "home_design"
+                exclude_tracks = _collaborator_excluded_tracks_csv()
             ids = self._with_db(
                 list_asset_ids,
                 q=q.get("q", [""])[0],
@@ -348,9 +437,15 @@ class ApiHandler(BaseHTTPRequestHandler):
                 board=q.get("board", [""])[0],
                 collection_id=q.get("collection_id", [""])[0],
                 triage_status=q.get("triage_status", [""])[0],
+                category=category,
                 needs_annotation=_parse_bool_param(q.get("needs_annotation", [""])[0], default=False),
                 flagged_only=_parse_bool_param(q.get("flagged", [""])[0], default=False),
                 include_hidden=include_hidden,
+                classification_axis=q.get("classification_axis", [""])[0],
+                classification_value=q.get("classification_value", [""])[0],
+                exclude_tracks=exclude_tracks,
+                viewer_role=actor_role,
+                viewer_actor_id=actor_id,
             )
             return _send(self, 200, {"ids": ids})
 
@@ -404,7 +499,16 @@ class ApiHandler(BaseHTTPRequestHandler):
             return _send(self, 200, report)
 
         if parsed.path == "/api/collections":
-            cols = self._with_db(list_collections)
+            q = parse_qs(parsed.query)
+            include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
+            actor = _resolve_actor(self)
+            include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
+            cols = self._with_db(
+                list_collections,
+                include_hidden=include_hidden,
+                viewer_role=str((actor or {}).get("role") or ""),
+                viewer_actor_id=str((actor or {}).get("id") or ""),
+            )
             return _send(self, 200, {"collections": cols})
 
         if parsed.path == "/api/facets":
@@ -506,15 +610,22 @@ class ApiHandler(BaseHTTPRequestHandler):
             catalog_dir = getattr(self.server, "catalog_dir", None)
             if not catalog_dir:
                 return _send(self, 200, {"tree": []})
+            actor = _resolve_actor(self)
             try:
-                tree = self._build_catalog_tree(Path(catalog_dir))
+                tree = self._build_catalog_tree(Path(catalog_dir), actor=actor)
             except Exception:
                 tree = []
             # Adjust counts to exclude hidden items
             try:
-                self._adjust_tree_counts_for_hidden(tree)
+                self._adjust_tree_counts_for_hidden(
+                    tree,
+                    home_only=_is_collaborator(actor),
+                    exclude_tracks=_collaborator_excluded_tracks_csv() if _is_collaborator(actor) else "",
+                )
             except Exception:
                 pass
+            if _is_collaborator(actor):
+                tree = [node for node in tree if not _is_non_home_tree_node(node)]
             return _send(self, 200, {"tree": tree})
 
         if parsed.path == "/api/catalog/items":
@@ -524,9 +635,14 @@ class ApiHandler(BaseHTTPRequestHandler):
             actor = _resolve_actor(self)
             include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
             catalog_dir = getattr(self.server, "catalog_dir", None)
-            file_params = [str(v or "").strip() for v in q.get("file", []) if str(v or "").strip()]
-            if not catalog_dir or not file_params:
+            raw_file_params = [str(v or "").strip() for v in q.get("file", []) if str(v or "").strip()]
+            file_params = list(raw_file_params)
+            if _is_collaborator(actor):
+                file_params = [fp for fp in file_params if not _is_non_home_catalog_file(fp)]
+            if not catalog_dir or not raw_file_params:
                 return _send(self, 400, {"error": "file param required"})
+            if not file_params:
+                return _send(self, 200, {"assets": [], "has_more": False, "total": 0})
             short_ids, err_status, err_msg = self._catalog_short_ids_for_files(Path(catalog_dir), file_params)
             if err_status:
                 return _send(self, err_status, {"error": err_msg})
@@ -535,9 +651,16 @@ class ApiHandler(BaseHTTPRequestHandler):
             ids_str = ",".join(short_ids)
             limit = int(q.get("limit", ["500"])[0])
             offset = int(q.get("offset", ["0"])[0])
+            category = q.get("category", [""])[0]
+            exclude_tracks = ""
+            if _is_collaborator(actor):
+                category = "home_design"
+                exclude_tracks = _collaborator_excluded_tracks_csv()
             assets = self._with_db(
                 list_assets,
                 ids=ids_str,
+                category=category,
+                exclude_tracks=exclude_tracks,
                 include_hidden=include_hidden,
                 limit=limit + 1,
                 offset=offset,
@@ -559,15 +682,31 @@ class ApiHandler(BaseHTTPRequestHandler):
             actor = _resolve_actor(self)
             include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
             catalog_dir = getattr(self.server, "catalog_dir", None)
-            file_params = [str(v or "").strip() for v in q.get("file", []) if str(v or "").strip()]
-            if not catalog_dir or not file_params:
+            raw_file_params = [str(v or "").strip() for v in q.get("file", []) if str(v or "").strip()]
+            file_params = list(raw_file_params)
+            if _is_collaborator(actor):
+                file_params = [fp for fp in file_params if not _is_non_home_catalog_file(fp)]
+            if not catalog_dir or not raw_file_params:
                 return _send(self, 400, {"error": "file param required"})
+            if not file_params:
+                return _send(self, 200, {"ids": []})
             short_ids, err_status, err_msg = self._catalog_short_ids_for_files(Path(catalog_dir), file_params)
             if err_status:
                 return _send(self, err_status, {"error": err_msg})
             if not short_ids:
                 return _send(self, 200, {"ids": []})
-            ids = self._with_db(list_asset_ids, ids=",".join(short_ids), include_hidden=include_hidden)
+            category = q.get("category", [""])[0]
+            exclude_tracks = ""
+            if _is_collaborator(actor):
+                category = "home_design"
+                exclude_tracks = _collaborator_excluded_tracks_csv()
+            ids = self._with_db(
+                list_asset_ids,
+                ids=",".join(short_ids),
+                category=category,
+                exclude_tracks=exclude_tracks,
+                include_hidden=include_hidden,
+            )
             return _send(self, 200, {"ids": ids})
 
         if parsed.path == "/api/tray":
@@ -600,6 +739,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 collection_id=collection_id,
                 item_id=item_id,
                 actor_role=str(actor.get("role") or ""),
+                actor_id=str(actor.get("id") or ""),
             )
             return _send(self, 200, report)
 
@@ -645,12 +785,51 @@ class ApiHandler(BaseHTTPRequestHandler):
             return _send(self, 400, {"error": str(e)})
 
         if parsed.path == "/api/collections":
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
             name = (body.get("name") or "").strip()
             if not name:
                 return _send(self, 400, {"error": "name required"})
             desc = (body.get("description") or "").strip()
-            col = self._with_db(create_collection, name=name, description=desc)
+            intent = (body.get("intent") or "working").strip().lower()
+            shared_actor_id = (body.get("shared_actor_id") or "").strip()
+            shared_actor_ids = body.get("shared_actor_ids") or []
+            if not isinstance(shared_actor_ids, list):
+                return _send(self, 400, {"error": "shared_actor_ids must be list"})
+            try:
+                col = self._with_db(
+                    create_collection,
+                    name=name,
+                    description=desc,
+                    intent=intent,
+                    shared_actor_id=shared_actor_id,
+                    shared_actor_ids=shared_actor_ids,
+                )
+            except ValueError as e:
+                return _send(self, 400, {"error": str(e)})
             return _send(self, 201, {"collection": col})
+
+        if parsed.path == "/api/collections/bulk-hide":
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
+            collection_ids = body.get("collection_ids") or []
+            if not isinstance(collection_ids, list):
+                return _send(self, 400, {"error": "collection_ids must be list"})
+            hidden = bool(body.get("hidden"))
+            updated = self._with_db(set_collections_hidden, collection_ids=collection_ids, hidden=hidden)
+            return _send(self, 200, {"updated": updated, "hidden": 1 if hidden else 0})
+
+        if parsed.path == "/api/collections/bulk-delete":
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
+            collection_ids = body.get("collection_ids") or []
+            if not isinstance(collection_ids, list):
+                return _send(self, 400, {"error": "collection_ids must be list"})
+            report = self._with_db(delete_hidden_collections, collection_ids=collection_ids)
+            return _send(self, 200, report)
 
         if parsed.path == "/api/tray/add":
             asset_ids = body.get("asset_ids") or []
@@ -671,11 +850,29 @@ class ApiHandler(BaseHTTPRequestHandler):
             return _send(self, 200, {"ok": True})
 
         if parsed.path == "/api/tray/create-collection":
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
             name = (body.get("name") or "").strip()
             if not name:
                 return _send(self, 400, {"error": "name required"})
             desc = (body.get("description") or "").strip()
-            col = self._with_db(create_collection_from_tray, name=name, description=desc)
+            intent = (body.get("intent") or "working").strip().lower()
+            shared_actor_id = (body.get("shared_actor_id") or "").strip()
+            shared_actor_ids = body.get("shared_actor_ids") or []
+            if not isinstance(shared_actor_ids, list):
+                return _send(self, 400, {"error": "shared_actor_ids must be list"})
+            try:
+                col = self._with_db(
+                    create_collection_from_tray,
+                    name=name,
+                    description=desc,
+                    intent=intent,
+                    shared_actor_id=shared_actor_id,
+                    shared_actor_ids=shared_actor_ids,
+                )
+            except ValueError as e:
+                return _send(self, 400, {"error": str(e)})
             return _send(self, 201, {"collection": col})
 
         if parsed.path == "/api/admin/login":
@@ -797,6 +994,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             if not isinstance(ids, list):
                 return _send(self, 400, {"error": "ids must be list"})
             actor = _resolve_actor(self)
+            if not _can_flag_assets(actor):
+                return _send(self, 403, {"error": "flagging is restricted to owners"})
             actor_name = actor.get("name", "") if actor else ""
             count = self._with_db(
                 bulk_set_flag,
@@ -828,6 +1027,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             flagged = body.get("flagged", 1)
             note = body.get("note", "")
             actor = _resolve_actor(self)
+            if not _can_flag_assets(actor):
+                return _send(self, 403, {"error": "flagging is restricted to owners"})
             actor_name = actor.get("name", "") if actor else ""
             self._with_db(
                 lambda db: db.exec(
@@ -838,34 +1039,11 @@ class ApiHandler(BaseHTTPRequestHandler):
             return _send(self, 200, {"ok": True})
 
         if parsed.path == "/api/assets/tag/bulk":
-            ids = body.get("ids") or []
-            tagged = body.get("tagged", 1)
-            if not isinstance(ids, list):
-                return _send(self, 400, {"error": "ids must be list"})
-            actor = _resolve_actor(self)
-            actor_name = actor.get("name", "") if actor else ""
-            count = self._with_db(
-                bulk_set_tag,
-                asset_ids=ids,
-                tagged=1 if tagged else 0,
-                tagged_by=actor_name,
-            )
-            return _send(self, 200, {"updated": count})
+            return _send(self, 410, {"error": "tag workflow retired"})
 
         m = re.match(r"^/api/assets/([^/]+)/tag$", parsed.path)
         if m:
-            asset_id = m.group(1)
-            tagged = body.get("tagged", 1)
-            note = body.get("note", "")
-            actor = _resolve_actor(self)
-            actor_name = actor.get("name", "") if actor else ""
-            self._with_db(
-                lambda db: db.exec(
-                    "update assets set tagged=?, tagged_by=?, tagged_note=? where id=?",
-                    (1 if tagged else 0, actor_name, note, asset_id),
-                )
-            )
-            return _send(self, 200, {"ok": True})
+            return _send(self, 410, {"error": "tag workflow retired"})
 
         m = re.match(r"^/api/assets/([^/]+)/hide$", parsed.path)
         if m:
@@ -894,10 +1072,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             if not user_message:
                 return _send(self, 400, {"error": "message required"})
             api_key = _get_api_key("ANTHROPIC_API_KEY", "inspirations_anthropic_api_key")
-            if not api_key:
-                return _send(self, 503, {"error": "Chat requires an Anthropic API key. Set ANTHROPIC_API_KEY."})
             try:
-                catalog_dir = getattr(self.server, "catalog_dir", None)
+                catalog_dir = self._ensure_chat_catalog_fresh()
                 result = self._with_db(
                     process_chat_message,
                     api_key=api_key,
@@ -1207,8 +1383,147 @@ class ApiHandler(BaseHTTPRequestHandler):
         except Exception as e:
             return _send(self, 400, {"error": str(e)})
 
+        m = re.match(r"^/api/collections/([^/]+)$", parsed.path)
+        if m:
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
+            collection_id = m.group(1)
+            shared_actor_ids = body.get("shared_actor_ids") or []
+            if not isinstance(shared_actor_ids, list):
+                return _send(self, 400, {"error": "shared_actor_ids must be list"})
+            try:
+                collection = self._with_db(
+                    update_collection,
+                    collection_id=collection_id,
+                    name=body.get("name"),
+                    description=body.get("description"),
+                    intent=body.get("intent"),
+                    shared_actor_id=(body.get("shared_actor_id") or "").strip(),
+                    shared_actor_ids=shared_actor_ids,
+                )
+            except FileNotFoundError:
+                return _send(self, 404, {"error": "collection not found"})
+            except ValueError as e:
+                return _send(self, 400, {"error": str(e)})
+            return _send(self, 200, {"collection": collection})
+
+        m = re.match(r"^/api/assets/([^/]+)/title$", parsed.path)
+        if m:
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
+            asset_id = m.group(1)
+            requested_title = str(body.get("title") or "").strip()
+            expected_title_raw = body.get("expected_title")
+            expected_title = str(expected_title_raw or "").strip() if expected_title_raw is not None else None
+            use_suggested = bool(body.get("use_suggested"))
+
+            try:
+                if use_suggested and not requested_title:
+                    current_asset = self._with_db(self._get_asset_for_modal, asset_id=asset_id, include_hidden=True)
+                    if not current_asset:
+                        return _send(self, 404, {"error": "asset not found"})
+                    requested_title = str(
+                        ((current_asset.get("title_info") or {}).get("suggested_title") or "")
+                    ).strip()
+                    if not requested_title:
+                        return _send(self, 400, {"error": "no suggested title available"})
+                updated_asset = self._with_db(
+                    apply_working_title,
+                    asset_id=asset_id,
+                    title=requested_title,
+                    actor_name=str(actor.get("name") or "").strip() or "ui",
+                    expected_title=expected_title,
+                    origin_ref="api:/api/assets/title",
+                )
+            except TitleNotFoundError:
+                return _send(self, 404, {"error": "asset not found"})
+            except TitleConflictError as e:
+                return _send(self, 409, {"error": str(e)})
+            except ValueError as e:
+                return _send(self, 400, {"error": str(e)})
+
+            return _send(self, 200, {"ok": True, "asset": updated_asset})
+
+        m = re.match(r"^/api/assets/([^/]+)/classification-review$", parsed.path)
+        if m:
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
+            asset_id = m.group(1)
+            clear_override = bool(body.get("clear"))
+            track = str(body.get("track") or "").strip()
+            note = str(body.get("note") or "").strip()
+            review_focus = str(body.get("review_focus") or body.get("focus") or "").strip()
+            media_reliability = str(body.get("media_reliability") or body.get("media_issue") or "").strip()
+            if not clear_override and track not in CLASSIFICATION_TRACK_OPTIONS:
+                return _send(self, 400, {"error": "track must be one of style_product_decor, construction_concern, home_maintenance_diy, irrelevant"})
+            if review_focus not in REVIEW_FOCUS_OPTIONS:
+                return _send(self, 400, {"error": "review_focus must be one of landscaping, inspection, or blank"})
+            if media_reliability not in MEDIA_RELIABILITY_OPTIONS:
+                return _send(self, 400, {"error": "media_reliability must be one of trust_title_source, thumbnail_placeholder, thumbnail_mismatch, or blank"})
+            try:
+                if clear_override:
+                    updated_asset = self._with_db(
+                        self._clear_modal_classification_review,
+                        asset_id=asset_id,
+                    )
+                else:
+                    updated_asset = self._with_db(
+                        self._apply_modal_classification_review,
+                        asset_id=asset_id,
+                        track=track,
+                        note=note,
+                        review_focus=review_focus,
+                        media_reliability=media_reliability,
+                        actor_name=str(actor.get("name") or "").strip() or "ui",
+                    )
+            except FileNotFoundError:
+                return _send(self, 404, {"error": "asset not found"})
+            return _send(self, 200, {"ok": True, "asset": updated_asset})
+
+        m = re.match(r"^/api/assets/([^/]+)/source-link-candidate$", parsed.path)
+        if m:
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
+            asset_id = m.group(1)
+            action = str(body.get("action") or "capture").strip().lower()
+            browser = bool(body.get("browser", True))
+            notes = str(body.get("notes") or "").strip()
+            try:
+                if action == "promote":
+                    result = self._with_db(
+                        promote_latest_hero_image_for_asset,
+                        asset_id=asset_id,
+                        store_dir=Path(self.server.store_dir).resolve(),
+                        notes=notes,
+                    )
+                else:
+                    result = self._with_db(
+                        capture_source_link_candidate_for_asset,
+                        asset_id=asset_id,
+                        store_dir=Path(self.server.store_dir).resolve(),
+                        browser=browser,
+                        include_platform_hosts=True,
+                        promote_best_source_url=False,
+                        promote_hero_image=False,
+                        notes=notes,
+                        browser_profile_dir=default_auth_browser_profile_dir(),
+                    )
+                asset = self._with_db(self._get_asset_for_modal, asset_id=asset_id, include_hidden=True)
+            except FileNotFoundError:
+                return _send(self, 404, {"error": "asset not found"})
+            except ValueError as e:
+                return _send(self, 400, {"error": str(e)})
+            return _send(self, 200, {"ok": True, "result": result, "asset": asset})
+
         m = re.match(r"^/api/assets/([^/]+)$", parsed.path)
         if m:
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
             notes = body.get("notes") or ""
             self._with_db(update_asset_notes, asset_id=m.group(1), notes=notes)
             return _send(self, 200, {"ok": True})
@@ -1372,6 +1687,39 @@ class ApiHandler(BaseHTTPRequestHandler):
             ensure_schema(db)
             return fn(db, **kwargs)
 
+    def _ensure_chat_catalog_fresh(self) -> Path | None:
+        """Ensure the markdown catalog used by chat is present and up to date with DB changes."""
+        db_path = Path(self.server.db_path).resolve()
+        catalog_dir = Path(getattr(self.server, "catalog_dir", db_path.parent / "catalog")).resolve()
+        index_path = catalog_dir / "_index.md"
+        manifest_path = catalog_dir / "_manifest.json"
+        current_db_mtime = 0.0
+        try:
+            current_db_mtime = float(db_path.stat().st_mtime)
+        except OSError:
+            current_db_mtime = 0.0
+
+        last_built_db_mtime = float(getattr(self.server, "catalog_last_built_db_mtime", 0.0) or 0.0)
+        has_catalog_files = index_path.exists() and manifest_path.exists()
+        needs_build = (not has_catalog_files) or (current_db_mtime > last_built_db_mtime + 1e-6)
+        if not needs_build:
+            self.server.catalog_dir = catalog_dir
+            return catalog_dir
+
+        try:
+            catalog_dir.mkdir(parents=True, exist_ok=True)
+            self._with_db(generate_catalog, catalog_dir=catalog_dir)
+            self.server.catalog_last_built_db_mtime = current_db_mtime
+            self.server.catalog_dir = catalog_dir
+            return catalog_dir
+        except Exception as e:
+            print(f"[chat] catalog refresh failed: {e}", file=sys.stderr)
+            if has_catalog_files:
+                self.server.catalog_dir = catalog_dir
+                return catalog_dir
+            self.server.catalog_dir = None
+            return None
+
     def _apply_ingest_metadata(
         self,
         db: Db,
@@ -1450,9 +1798,10 @@ class ApiHandler(BaseHTTPRequestHandler):
         collection_id: str,
         item_id: str,
         actor_role: str,
+        actor_id: str,
     ) -> dict:
         collection_rows = db.query(
-            "select id, name from collections where id = ? limit 1",
+            "select id, name, coalesce(intent, 'working') as intent, coalesce(shared_actor_id, '') as shared_actor_id from collections where id = ? limit 1",
             (collection_id,),
         )
         if not collection_rows:
@@ -1465,6 +1814,29 @@ class ApiHandler(BaseHTTPRequestHandler):
             }
 
         collection_name = str(collection_rows[0]["name"] or "")
+        collection_intent = str(collection_rows[0]["intent"] or "working").strip().lower()
+        collection_shared_actor_id = str(collection_rows[0]["shared_actor_id"] or "").strip()
+        actor_role_norm = str(actor_role or "").strip().lower()
+        actor_id_norm = str(actor_id or "").strip()
+        if actor_role_norm != "owner":
+            shared_match = False
+            if actor_id_norm and collection_intent == "shared":
+                shared_match = bool(
+                    collection_shared_actor_id == actor_id_norm
+                    or db.query_value(
+                        "select 1 from collection_shares where collection_id = ? and actor_id = ? limit 1",
+                        (collection_id, actor_id_norm),
+                    )
+                )
+            if not shared_match:
+                return {
+                    "ok": True,
+                    "found": False,
+                    "collection_id": collection_id,
+                    "collection_name": collection_name,
+                    "item_id": item_id,
+                    "reason": "collection_not_shared_with_actor",
+                }
         in_collection = db.query_value(
             "select 1 from collection_items where collection_id = ? and asset_id = ? limit 1",
             (collection_id, item_id),
@@ -1495,7 +1867,7 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         triage_status = str(asset_rows[0]["triage_status"] or "")
         is_hidden = triage_status == "hidden"
-        if is_hidden and str(actor_role or "").strip().lower() != "owner":
+        if is_hidden and actor_role_norm != "owner":
             return {
                 "ok": True,
                 "found": False,
@@ -1564,7 +1936,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 short_ids.append(sid)
         return short_ids, None, None
 
-    def _build_catalog_tree(self, catalog_dir: Path) -> list[dict]:
+    def _build_catalog_tree(self, catalog_dir: Path, *, actor: dict | None = None) -> list[dict]:
         """Build a tree structure from the catalog for the sidebar browser."""
         index_path = catalog_dir / "_index.md"
         if not index_path.exists():
@@ -1604,28 +1976,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
             # Collection item: - "Name" (N items, id=...)
             if in_collections and line.startswith("- \"") and "id=" in line:
-                name_match = re.match(r'^- "(.+?)"\s+\((\d+)\s+items?,\s+id=([^)]+)\)', line)
-                if name_match:
-                    cname = name_match.group(1)
-                    ccount = int(name_match.group(2))
-                    cid = name_match.group(3)
-                    if not tree or tree[-1].get("type") != "collections_group":
-                        tree.append({
-                            "id": "collections",
-                            "label": "Collections",
-                            "count": 0,
-                            "type": "collections_group",
-                            "children": [],
-                        })
-                    collections_node = tree[-1]
-                    collections_node["children"].append({
-                        "id": f"collection:{cid}",
-                        "label": cname,
-                        "count": ccount,
-                        "type": "collection",
-                        "collection_id": cid,
-                    })
-                    collections_node["count"] = len(collections_node["children"])
+                # Collections are injected from live DB state below so hide/
+                # restore/delete updates are reflected immediately.
                 continue
 
             # Section header: ## Facebook (1190 items) or ## By Room (5257 item-assignments)
@@ -1691,9 +2043,252 @@ class ApiHandler(BaseHTTPRequestHandler):
                 current_section["children"].append(child)
                 continue
 
+        tree = [
+            node
+            for node in tree
+            if node.get("type") != "dimension" or str(node.get("id") or "").strip().lower() == "dimension:other"
+        ]
+        try:
+            with Db(self.server.db_path) as db:
+                ensure_schema(db)
+                tree.extend(self._build_classification_tree_sections(db))
+        except Exception:
+            pass
+
+        # Replace catalog-file collection section with live DB-backed, visible collections.
+        tree = [node for node in tree if node.get("type") != "collections_group"]
+        try:
+            with Db(self.server.db_path) as db:
+                ensure_schema(db)
+                rows = list_collections(
+                    db,
+                    include_hidden=False,
+                    viewer_role=str((actor or {}).get("role") or ""),
+                    viewer_actor_id=str((actor or {}).get("id") or ""),
+                )
+            if rows:
+                collections_node = {
+                    "id": "collections",
+                    "label": "Collections",
+                    "count": len(rows),
+                    "type": "collections_group",
+                    "children": [],
+                }
+                for row in rows:
+                    data = decorate_collection_record(dict(row))
+                    cid = str(data["id"] or "")
+                    if not cid:
+                        continue
+                    collections_node["children"].append(
+                        {
+                            "id": f"collection:{cid}",
+                            "label": str(data["name"] or ""),
+                            "count": int(data.get("count_visible") or data.get("count") or 0),
+                            "type": "collection",
+                            "collection_id": cid,
+                            "description": str(data.get("description") or ""),
+                            "provenance_kind": str(data.get("provenance_kind") or ""),
+                            "provenance_label": str(data.get("provenance_label") or collection_provenance_label(str(data.get("provenance_kind") or ""))),
+                            "provenance_badge": str(data.get("provenance_badge") or collection_provenance_badge(str(data.get("provenance_kind") or ""))),
+                            "provenance_note": str(data.get("provenance_note") or ""),
+                            "intent": str(data.get("intent") or "working"),
+                            "shared_actor_id": str(data.get("shared_actor_id") or ""),
+                            "shared_actor_name": str(data.get("shared_actor_name") or ""),
+                        }
+                    )
+                if collections_node["children"]:
+                    collections_node["count"] = len(collections_node["children"])
+                    tree.append(collections_node)
+        except Exception:
+            pass
+
         return tree
 
-    def _adjust_tree_counts_for_hidden(self, tree: list[dict]) -> None:
+    def _classification_value_label(self, axis_name: str, axis_value: str) -> str:
+        axis = str(axis_name or "").strip().lower()
+        value = str(axis_value or "").strip().lower()
+        if not value:
+            return ""
+        special = {
+            "style_product_decor": "Style / Decor",
+            "construction_concern": "Construction",
+            "home_maintenance_diy": "Maintenance / DIY",
+            "plans_code_permits": "Plans / Code / Permits",
+            "site_exterior": "Site / Exterior",
+            "non_spatial": "Non-Spatial",
+            "full_space_scene": "Full Space Scene",
+            "single_product": "Single Product",
+            "material_finish": "Material / Finish",
+            "architectural_detail": "Architectural Detail",
+            "plan_drawing": "Plan / Drawing",
+            "vignette_styling": "Vignette / Styling",
+            "lighting_fixture": "Lighting",
+            "laundry_room": "Laundry",
+            "entryway": "Entry",
+            "mep": "MEP",
+            "zip_system": "ZIP System",
+        }
+        if value in special:
+            return special[value]
+        if axis == "product_system_focus" and value.endswith("_system"):
+            return value.replace("_", " ").title()
+        return value.replace("_", " ").title()
+
+    def _build_classification_tree_sections(self, db: Db) -> list[dict]:
+        track_run_id = db.query_value(
+            "select id from classification_runs where run_type='track_gate' order by created_at desc limit 1"
+        )
+        axis_run_id = db.query_value(
+            "select id from classification_runs where run_type='multi_axis_inference' order by created_at desc limit 1"
+        )
+        if not track_run_id and not axis_run_id:
+            return []
+
+        hidden_collection_id = db.query_value("select id from collections where lower(name)='hidden' limit 1")
+        visible_clauses = [
+            "(a.triage_status is null or a.triage_status != 'hidden')",
+        ]
+        visible_params: list[object] = []
+        if hidden_collection_id:
+            visible_clauses.append("a.id not in (select asset_id from collection_items where collection_id = ?)")
+            visible_params.append(hidden_collection_id)
+        visible_sql = " and ".join(visible_clauses)
+        home_visible_sql = f"{visible_sql} and coalesce(a.category, 'home_design') = 'home_design'"
+
+        sections: list[dict] = []
+
+        if track_run_id:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            track_rows = db.query(
+                f"""
+                select coalesce(ato.axis_value, ata.track) as axis_value, count(distinct ata.asset_id) as n
+                from asset_track_assessments ata
+                join assets a on a.id = ata.asset_id
+                left join (
+                  select ao.asset_id, ao.axis_value
+                  from asset_overrides ao
+                  join (
+                    select asset_id, max(created_at) as max_created_at
+                    from asset_overrides
+                    where axis_name='track'
+                      and operation='set'
+                      and (expires_at is null or expires_at > ?)
+                    group by asset_id
+                  ) latest
+                    on latest.asset_id = ao.asset_id
+                   and latest.max_created_at = ao.created_at
+                  where ao.axis_name='track'
+                    and ao.operation='set'
+                    and (ao.expires_at is null or ao.expires_at > ?)
+                ) ato on ato.asset_id = ata.asset_id
+                where ata.run_id = ?
+                  and {visible_sql}
+                group by coalesce(ato.axis_value, ata.track)
+                order by n desc, axis_value asc
+                """,
+                (now_iso, now_iso, str(track_run_id), *visible_params),
+            )
+            if track_rows:
+                total = int(sum(int(row["n"] or 0) for row in track_rows))
+                sections.append(
+                    {
+                        "id": "classification:track",
+                        "label": "Track",
+                        "count": total,
+                        "type": "classification",
+                        "axis_name": "track",
+                        "children": [
+                            {
+                                "id": f"classification_item:track:{str(row['axis_value'] or '').strip()}",
+                                "label": self._classification_value_label("track", str(row["axis_value"] or "")),
+                                "count": int(row["n"] or 0),
+                                "type": "classification_item",
+                                "axis_name": "track",
+                                "axis_value": str(row["axis_value"] or "").strip(),
+                            }
+                            for row in track_rows
+                            if str(row["axis_value"] or "").strip()
+                        ],
+                    }
+                )
+
+        if not axis_run_id:
+            return sections
+
+        axis_specs = [
+            ("space_context", "Space Context", "style_product_decor", 10),
+            ("subject_type", "Subject Type", "style_product_decor", 10),
+            ("room", "Rooms", "style_product_decor", 16),
+            ("product_focus", "Style Product Focus", "style_product_decor", 16),
+            ("concern_domain", "Construction Concerns", "construction_concern", 12),
+            ("product_system_focus", "Construction Systems", "construction_concern", 12),
+        ]
+        for axis_name, label, track_filter, max_children in axis_specs:
+            track_sql = " and aam.track = ?"
+            base_params = [str(axis_run_id), axis_name, *visible_params, track_filter]
+            total = db.query_value(
+                f"""
+                select count(distinct aam.asset_id)
+                from asset_axis_memberships aam
+                join assets a on a.id = aam.asset_id
+                where aam.run_id = ?
+                  and aam.axis_name = ?
+                  and {home_visible_sql}
+                  {track_sql}
+                """,
+                tuple(base_params),
+            )
+            if not total:
+                continue
+            rows = db.query(
+                f"""
+                select aam.axis_value, count(distinct aam.asset_id) as n
+                from asset_axis_memberships aam
+                join assets a on a.id = aam.asset_id
+                where aam.run_id = ?
+                  and aam.axis_name = ?
+                  and {home_visible_sql}
+                  {track_sql}
+                group by aam.axis_value
+                order by n desc, aam.axis_value asc
+                limit ?
+                """,
+                tuple([*base_params, int(max_children)]),
+            )
+            children = [
+                {
+                    "id": f"classification_item:{axis_name}:{str(row['axis_value'] or '').strip()}",
+                    "label": self._classification_value_label(axis_name, str(row["axis_value"] or "")),
+                    "count": int(row["n"] or 0),
+                    "type": "classification_item",
+                    "axis_name": axis_name,
+                    "axis_value": str(row["axis_value"] or "").strip(),
+                }
+                for row in rows
+                if str(row["axis_value"] or "").strip()
+            ]
+            if not children:
+                continue
+            sections.append(
+                {
+                    "id": f"classification:{axis_name}",
+                    "label": label,
+                    "count": int(total or 0),
+                    "type": "classification",
+                    "axis_name": axis_name,
+                    "children": children,
+                }
+            )
+
+        return sections
+
+    def _adjust_tree_counts_for_hidden(
+        self,
+        tree: list[dict],
+        *,
+        home_only: bool = False,
+        exclude_tracks: str = "",
+    ) -> None:
         """Adjust browse-tree counts so they reflect only visible items.
 
         CONTRACT: every tree node with count > 0 must deliver items when
@@ -1703,23 +2298,88 @@ class ApiHandler(BaseHTTPRequestHandler):
         """
         with Db(self.server.db_path) as db:
             ensure_schema(db)
+            hidden_collection_id = db.query_value("select id from collections where lower(name)='hidden' limit 1")
+            visible_clauses = ["(a.triage_status is null or a.triage_status != 'hidden')"]
+            visible_params: list[object] = []
+            join_params: list[object] = []
+            if hidden_collection_id:
+                visible_clauses.append("a.id not in (select asset_id from collection_items where collection_id = ?)")
+                visible_params.append(hidden_collection_id)
+            if home_only:
+                visible_clauses.append("coalesce(a.category, 'home_design') = 'home_design'")
+
+            exclude_track_values = [s.strip() for s in str(exclude_tracks or "").split(",") if s.strip()]
+            joins: list[str] = []
+            if exclude_track_values:
+                track_run_id = db.query_value(
+                    "select id from classification_runs where run_type='track_gate' order by created_at desc limit 1"
+                )
+                if track_run_id:
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    joins.append("left join asset_track_assessments ata on ata.asset_id = a.id and ata.run_id = ?")
+                    join_params.append(str(track_run_id))
+                    joins.append(
+                        """
+                        left join (
+                          select ao.asset_id, ao.axis_value
+                          from asset_overrides ao
+                          join (
+                            select asset_id, max(created_at) as max_created_at
+                            from asset_overrides
+                            where axis_name='track'
+                              and operation='set'
+                              and (expires_at is null or expires_at > ?)
+                            group by asset_id
+                          ) latest
+                            on latest.asset_id = ao.asset_id
+                           and latest.max_created_at = ao.created_at
+                          where ao.axis_name='track'
+                            and ao.operation='set'
+                            and (ao.expires_at is null or ao.expires_at > ?)
+                        ) ato on ato.asset_id = a.id
+                        """
+                    )
+                    join_params.extend([now_iso, now_iso])
+                    visible_clauses.append(
+                        "coalesce(ato.axis_value, ata.track, '') not in (%s)"
+                        % ",".join(["?"] * len(exclude_track_values))
+                    )
+                    visible_params.extend(exclude_track_values)
+            where_sql = " where " + " and ".join(visible_clauses)
+            join_sql = ("\n                " + "\n                ".join(joins)) if joins else ""
+            query_params = tuple([*join_params, *visible_params])
             # Visible (non-hidden) counts per source
             src_rows = db.query(
-                "select lower(source) as src, count(*) as n "
-                "from assets where triage_status is null or triage_status != 'hidden' "
-                "group by 1"
+                f"""
+                select lower(a.source) as src, count(*) as n
+                from assets a
+                {join_sql}
+                {where_sql}
+                group by 1
+                """,
+                query_params,
             )
             # Visible counts per source+board (for boards that exist in DB)
             board_rows = db.query(
-                "select lower(source) as src, lower(coalesce(board,'')) as brd, count(*) as n "
-                "from assets where triage_status is null or triage_status != 'hidden' "
-                "group by 1, 2"
+                f"""
+                select lower(a.source) as src, lower(coalesce(a.board,'')) as brd, count(*) as n
+                from assets a
+                {join_sql}
+                {where_sql}
+                group by 1, 2
+                """,
+                query_params,
             )
             # Visible counts per source+content_kind (for subtype browsing under Clip)
             kind_rows = db.query(
-                "select lower(source) as src, lower(coalesce(content_kind,'')) as kind, count(*) as n "
-                "from assets where triage_status is null or triage_status != 'hidden' "
-                "group by 1, 2"
+                f"""
+                select lower(a.source) as src, lower(coalesce(a.content_kind,'')) as kind, count(*) as n
+                from assets a
+                {join_sql}
+                {where_sql}
+                group by 1, 2
+                """,
+                query_params,
             )
         visible_by_source: dict[str, int] = {r["src"]: r["n"] for r in src_rows}
         visible_by_board: dict[tuple[str, str], int] = {
@@ -1812,9 +2472,9 @@ class ApiHandler(BaseHTTPRequestHandler):
         if rel_l.endswith(".html"):
             return "no-cache"
         if rel_l.endswith((".js", ".mjs", ".css", ".svg", ".woff", ".woff2", ".ttf", ".otf")):
-            q = parse_qs(query)
-            if "v" in q:
-                return "public, max-age=31536000, immutable"
+            # Keep app assets on short cache windows in local/dev workflows.
+            # Query-string versions still help bust caches, but should not lock
+            # clients to stale JS/CSS indefinitely when a version bump is missed.
             return "public, max-age=300"
         return "public, max-age=3600"
 
@@ -1999,7 +2659,11 @@ class ApiHandler(BaseHTTPRequestHandler):
                    a.created_at, a.imported_at, a.image_url, a.stored_path, a.thumb_path,
                    a.triage_status, a.needs_annotation, a.source_url, a.seo_alt_text,
                    a.post_text, a.hashtags, a.engagement_json, a.dominant_color,
-                   a.ai_summary, a.image_width, a.image_height, a.content_kind,
+                   coalesce(
+                     (select ai.summary from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1),
+                     a.ai_summary
+                   ) as ai_summary,
+                   a.image_width, a.image_height, a.content_kind,
                    a.creator_name, a.source_domain, a.source_name, a.notes,
                    a.flagged, a.flagged_by, a.flagged_note,
                    a.tagged, a.tagged_by, a.tagged_note
@@ -2012,6 +2676,9 @@ class ApiHandler(BaseHTTPRequestHandler):
         if not rows:
             return None
         asset = dict(rows[0])
+        enrich_assets_with_title_info(db, [asset])
+        asset["classification_review"] = self._classification_review_payload(db, asset_id=asset_id)
+        asset["source_link_candidate"] = self._source_link_candidate_payload(db, asset_id=asset_id)
         if include_hidden:
             return asset
         if str(asset.get("triage_status") or "").strip().lower() == "hidden":
@@ -2026,6 +2693,283 @@ class ApiHandler(BaseHTTPRequestHandler):
             )
             if in_hidden:
                 return None
+        return asset
+
+    def _classification_review_payload(self, db: Db, *, asset_id: str) -> dict[str, object]:
+        track_row = db.query(
+            """
+            select run_id, track, confidence, is_ambiguous, decision_source, coalesce(reason, '') as reason, created_at
+            from asset_track_assessments
+            where asset_id=?
+            order by created_at desc, id desc
+            limit 1
+            """,
+            (asset_id,),
+        )
+        source_qc_row = db.query(
+            """
+            select run_id, track, inferred_track, verdict, confidence, coalesce(reason, '') as reason, coalesce(fetch_status, '') as fetch_status, created_at
+            from asset_source_link_qc
+            where asset_id=?
+            order by created_at desc, id desc
+            limit 1
+            """,
+            (asset_id,),
+        )
+        now_iso = datetime.now(timezone.utc).isoformat()
+        override_row = db.query(
+            """
+            select axis_value, actor, coalesce(note, '') as note, created_at
+            from asset_overrides
+            where asset_id=?
+              and axis_name='track'
+              and operation='set'
+              and (expires_at is null or expires_at > ?)
+            order by created_at desc, id desc
+            limit 1
+            """,
+            (asset_id, now_iso),
+        )
+        focus_row = db.query(
+            """
+            select axis_value, actor, created_at
+            from asset_overrides
+            where asset_id=?
+              and axis_name='review_focus'
+              and operation='set'
+              and (expires_at is null or expires_at > ?)
+            order by created_at desc, id desc
+            limit 1
+            """,
+            (asset_id, now_iso),
+        )
+        media_row = db.query(
+            """
+            select axis_value, actor, created_at
+            from asset_overrides
+            where asset_id=?
+              and axis_name='media_reliability'
+              and operation='set'
+              and (expires_at is null or expires_at > ?)
+            order by created_at desc, id desc
+            limit 1
+            """,
+            (asset_id, now_iso),
+        )
+        current = dict(track_row[0]) if track_row else {}
+        source_qc = dict(source_qc_row[0]) if source_qc_row else {}
+        override = dict(override_row[0]) if override_row else {}
+        focus = dict(focus_row[0]) if focus_row else {}
+        media = dict(media_row[0]) if media_row else {}
+        return {
+            "current_track": str(current.get("track") or "").strip(),
+            "current_confidence": current.get("confidence"),
+            "current_is_ambiguous": int(current.get("is_ambiguous") or 0),
+            "current_decision_source": str(current.get("decision_source") or "").strip(),
+            "current_reason": str(current.get("reason") or "").strip(),
+            "current_run_id": str(current.get("run_id") or "").strip(),
+            "source_qc_track": str(source_qc.get("track") or "").strip(),
+            "source_qc_inferred_track": str(source_qc.get("inferred_track") or "").strip(),
+            "source_qc_verdict": str(source_qc.get("verdict") or "").strip(),
+            "source_qc_confidence": source_qc.get("confidence"),
+            "source_qc_reason": str(source_qc.get("reason") or "").strip(),
+            "source_qc_fetch_status": str(source_qc.get("fetch_status") or "").strip(),
+            "source_qc_run_id": str(source_qc.get("run_id") or "").strip(),
+            "active_override_track": str(override.get("axis_value") or "").strip(),
+            "active_override_actor": str(override.get("actor") or "").strip(),
+            "active_override_note": str(override.get("note") or "").strip(),
+            "active_override_created_at": str(override.get("created_at") or "").strip(),
+            "active_review_focus": str(focus.get("axis_value") or "").strip(),
+            "active_review_focus_actor": str(focus.get("actor") or "").strip(),
+            "active_review_focus_created_at": str(focus.get("created_at") or "").strip(),
+            "active_media_reliability": str(media.get("axis_value") or "").strip(),
+            "active_media_reliability_actor": str(media.get("actor") or "").strip(),
+            "active_media_reliability_created_at": str(media.get("created_at") or "").strip(),
+        }
+
+    def _source_link_candidate_payload(self, db: Db, *, asset_id: str) -> dict[str, object]:
+        row = latest_source_link_enrichment_for_asset(db, asset_id=asset_id)
+        if not row:
+            return {}
+        return {
+            "run_id": str(row.get("run_id") or "").strip(),
+            "input_url": str(row.get("input_url") or "").strip(),
+            "final_url": str(row.get("final_url") or "").strip(),
+            "final_domain": str(row.get("final_domain") or "").strip(),
+            "page_title": str(row.get("page_title") or "").strip(),
+            "text_excerpt": str(row.get("text_excerpt") or "").strip(),
+            "hero_image_url": str(row.get("hero_image_url") or "").strip(),
+            "hero_image_alt": str(row.get("hero_image_alt") or "").strip(),
+            "hero_text_excerpt": str(row.get("hero_text_excerpt") or "").strip(),
+            "fetch_status": str(row.get("fetch_status") or "").strip(),
+            "error": str(row.get("error") or "").strip(),
+            "created_at": str(row.get("created_at") or "").strip(),
+        }
+
+    def _apply_modal_classification_review(
+        self,
+        db: Db,
+        *,
+        asset_id: str,
+        track: str,
+        note: str,
+        review_focus: str,
+        media_reliability: str,
+        actor_name: str,
+    ) -> dict:
+        existing = db.query_value("select 1 from assets where id=? limit 1", (asset_id,))
+        if not existing:
+            raise FileNotFoundError("asset not found")
+        created_at = datetime.now(timezone.utc).isoformat()
+        current_track = str((self._classification_review_payload(db, asset_id=asset_id) or {}).get("current_track") or "").strip()
+        if not note:
+            if current_track and track == current_track:
+                note = "keep current track (modal review)"
+            else:
+                note = f"move to {track} (modal review)"
+        db.exec(
+            """
+            update asset_overrides
+            set expires_at=?
+            where asset_id=?
+              and axis_name='track'
+              and operation='set'
+              and expires_at is null
+            """,
+            (created_at, asset_id),
+        )
+        db.exec(
+            """
+            update asset_overrides
+            set expires_at=?
+            where asset_id=?
+              and axis_name='review_focus'
+              and operation='set'
+              and expires_at is null
+            """,
+            (created_at, asset_id),
+        )
+        db.exec(
+            """
+            update asset_overrides
+            set expires_at=?
+            where asset_id=?
+              and axis_name='media_reliability'
+              and operation='set'
+              and expires_at is null
+            """,
+            (created_at, asset_id),
+        )
+        db.exec(
+            """
+            insert into asset_overrides
+              (id, asset_id, track, axis_name, axis_value, operation, actor, note, created_at, expires_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                asset_id,
+                track,
+                "track",
+                track,
+                "set",
+                actor_name,
+                note,
+                created_at,
+                None,
+            ),
+        )
+        if review_focus:
+            db.exec(
+                """
+                insert into asset_overrides
+                  (id, asset_id, track, axis_name, axis_value, operation, actor, note, created_at, expires_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    asset_id,
+                    track,
+                    "review_focus",
+                    review_focus,
+                    "set",
+                    actor_name,
+                    "",
+                    created_at,
+                    None,
+                ),
+            )
+        if media_reliability:
+            db.exec(
+                """
+                insert into asset_overrides
+                  (id, asset_id, track, axis_name, axis_value, operation, actor, note, created_at, expires_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    asset_id,
+                    track,
+                    "media_reliability",
+                    media_reliability,
+                    "set",
+                    actor_name,
+                    "",
+                    created_at,
+                    None,
+                ),
+            )
+        asset = self._get_asset_for_modal(db, asset_id=asset_id, include_hidden=True)
+        if not asset:
+            raise FileNotFoundError("asset not found")
+        return asset
+
+    def _clear_modal_classification_review(
+        self,
+        db: Db,
+        *,
+        asset_id: str,
+    ) -> dict:
+        existing = db.query_value("select 1 from assets where id=? limit 1", (asset_id,))
+        if not existing:
+            raise FileNotFoundError("asset not found")
+        cleared_at = datetime.now(timezone.utc).isoformat()
+        db.exec(
+            """
+            update asset_overrides
+            set expires_at=?
+            where asset_id=?
+              and axis_name='track'
+              and operation='set'
+              and expires_at is null
+            """,
+            (cleared_at, asset_id),
+        )
+        db.exec(
+            """
+            update asset_overrides
+            set expires_at=?
+            where asset_id=?
+              and axis_name='review_focus'
+              and operation='set'
+              and expires_at is null
+            """,
+            (cleared_at, asset_id),
+        )
+        db.exec(
+            """
+            update asset_overrides
+            set expires_at=?
+            where asset_id=?
+              and axis_name='media_reliability'
+              and operation='set'
+              and expires_at is null
+            """,
+            (cleared_at, asset_id),
+        )
+        asset = self._get_asset_for_modal(db, asset_id=asset_id, include_hidden=True)
+        if not asset:
+            raise FileNotFoundError("asset not found")
         return asset
 
     def _scan_pdf_path_from_source_ref(self, source_ref: str | None) -> Path | None:
@@ -2245,6 +3189,11 @@ class InspirationsHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
+def _server_log(message: str) -> None:
+    stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    print(f"[review-server {stamp}] {message}", flush=True)
+
+
 def run_server(*, host: str, port: int, db_path: Path, app_dir: Path, store_dir: Path) -> None:
     server = InspirationsHTTPServer((host, port), ApiHandler)
     server.db_path = db_path
@@ -2253,18 +3202,64 @@ def run_server(*, host: str, port: int, db_path: Path, app_dir: Path, store_dir:
     server.imports_dir = app_dir.resolve().parent / "imports"
     server.admin_tokens = {}
 
-    # Catalog directory — look next to the database
+    # Catalog directory for chat "dictionary" data (auto-refreshed on chat requests).
     catalog_dir = Path(db_path).resolve().parent / "catalog"
-    if catalog_dir.is_dir() and (catalog_dir / "_index.md").exists():
-        server.catalog_dir = catalog_dir
-        print(f"Catalog loaded from {catalog_dir}")
+    server.catalog_dir = catalog_dir
+    server.catalog_last_built_db_mtime = 0.0
+    index_path = catalog_dir / "_index.md"
+    manifest_path = catalog_dir / "_manifest.json"
+    try:
+        db_mtime = float(Path(db_path).resolve().stat().st_mtime)
+    except OSError:
+        db_mtime = 0.0
+    if index_path.exists() and manifest_path.exists():
+        newest_catalog_mtime = max(float(index_path.stat().st_mtime), float(manifest_path.stat().st_mtime))
+        if newest_catalog_mtime >= db_mtime:
+            server.catalog_last_built_db_mtime = db_mtime
+        _server_log(f"Catalog ready at {catalog_dir} (auto-refresh enabled)")
     else:
-        server.catalog_dir = None
-        print("No catalog found — chat will use routing-only mode")
+        _server_log("No catalog found yet — chat will build one on first use")
 
     # Seed default actors (Jim + Leslie) and print magic link URLs
-    print("\nMagic link URLs:")
+    print("\nMagic link URLs:", flush=True)
     _seed_default_actors(db_path, host, port)
 
-    print(f"\nServing on http://{host}:{port}")
-    server.serve_forever()
+    stopping = {"requested": False}
+    previous_handlers: dict[int, object] = {}
+
+    def _handle_terminate(signum: int, _frame: object) -> None:
+        if stopping["requested"]:
+            return
+        stopping["requested"] = True
+        try:
+            signal_name = signal.Signals(signum).name
+        except Exception:
+            signal_name = str(signum)
+        _server_log(f"Received {signal_name}; shutting down")
+        threading.Thread(target=server.shutdown, daemon=True, name="review-server-shutdown").start()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            previous_handlers[sig] = signal.getsignal(sig)
+            signal.signal(sig, _handle_terminate)
+        except Exception:
+            continue
+
+    _server_log(f"Serving on http://{host}:{port}")
+    try:
+        server.serve_forever(poll_interval=0.5)
+    except KeyboardInterrupt:
+        _server_log("KeyboardInterrupt; shutting down")
+    except BaseException as exc:
+        _server_log(f"Fatal server exception: {exc!r}")
+        raise
+    finally:
+        for sig, handler in previous_handlers.items():
+            try:
+                signal.signal(sig, handler)
+            except Exception:
+                continue
+        try:
+            server.server_close()
+        finally:
+            _server_log("Stopped")

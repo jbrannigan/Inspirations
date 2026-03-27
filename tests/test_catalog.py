@@ -144,6 +144,23 @@ class TestCatalogGeneration(unittest.TestCase):
             self.assertIn("Scan", index)
             self.assertIn("kitchen", index.lower())
 
+    def test_hidden_collections_excluded_from_index(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            catalog_dir = Path(td) / "catalog"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                _seed_db(db)
+                db.exec(
+                    "insert into collections (id, name, hidden, created_at, updated_at) values (?, ?, 1, datetime('now'), datetime('now'))",
+                    ("col_hidden", "Hidden Collection"),
+                )
+                generate_catalog(db, catalog_dir)
+
+            index = load_catalog_index(catalog_dir) or ""
+            self.assertIn("Test Kitchen", index)
+            self.assertNotIn("Hidden Collection", index)
+
     def test_manifest_id_map(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "t.sqlite"

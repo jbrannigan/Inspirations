@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import hashlib
 import math
 import re
@@ -19,6 +20,7 @@ PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".heif"
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".mpeg", ".mpg", ".wmv", ".3gp"}
 _WS_BYTES = b" \t\r\n"
 _PAGE_NUM_RE = re.compile(r"-(\d+)\.[^.]+$")
+_SCAN_DOC_SUFFIX_RE = re.compile(r"\s+- doc \d+(?: p\d+)?\s*$", re.IGNORECASE)
 
 
 def _now_iso() -> str:
@@ -127,7 +129,7 @@ def _next_pgm_token(data: bytes, start: int) -> tuple[bytes, int]:
     return data[token_start:idx], idx
 
 
-def _pgm_blank_metrics(path: Path) -> tuple[float, float] | None:
+def _pgm_blank_metrics(path: Path) -> tuple[float, float, float] | None:
     data = path.read_bytes()
     if not data.startswith(b"P5"):
         return None
@@ -168,7 +170,29 @@ def _pgm_blank_metrics(path: Path) -> tuple[float, float] | None:
         diff = px - mean
         variance += diff * diff
     stddev = math.sqrt(variance / total)
-    return (dark / total, stddev)
+    row_step = max(1, height // 300)
+    col_step = max(1, width // 300)
+    horiz_total = 0.0
+    horiz_count = 0
+    vert_total = 0.0
+    vert_count = 0
+    prev_row_sampled: bytes | None = None
+    for row_idx in range(0, height, row_step):
+        row = pixels[row_idx * width : (row_idx + 1) * width]
+        sampled_row = row[::col_step]
+        if len(sampled_row) >= 2:
+            for left, right in zip(sampled_row, sampled_row[1:]):
+                horiz_total += abs(left - right)
+                horiz_count += 1
+        if prev_row_sampled is not None:
+            for top, bottom in zip(prev_row_sampled, sampled_row):
+                vert_total += abs(top - bottom)
+                vert_count += 1
+        prev_row_sampled = sampled_row
+    horiz_mean = horiz_total / horiz_count if horiz_count else 0.0
+    vert_mean = vert_total / vert_count if vert_count else 0.0
+    edge_mean = (horiz_mean + vert_mean) / 2.0
+    return (dark / total, stddev, edge_mean)
 
 
 def _median(values: list[float]) -> float:
@@ -182,28 +206,58 @@ def _median(values: list[float]) -> float:
     return (vals[m - 1] + vals[m]) / 2.0
 
 
-def _delimiter_candidates_from_metrics(metrics: list[tuple[int, float, float]]) -> set[int]:
+def _delimiter_candidates_from_metrics(metrics: list[tuple[int, ...]]) -> set[int]:
     if len(metrics) < 3:
         return set()
-    inks = [m[1] for m in metrics]
-    stds = [m[2] for m in metrics]
+    normalized: list[tuple[int, float, float, float]] = []
+    for metric in metrics:
+        if len(metric) >= 4:
+            page_idx, ink_ratio, stddev, edge_mean = metric[:4]
+        elif len(metric) == 3:
+            page_idx, ink_ratio, stddev = metric
+            edge_mean = float("inf")
+        else:
+            continue
+        normalized.append((int(page_idx), float(ink_ratio), float(stddev), float(edge_mean)))
+    if len(normalized) < 3:
+        return set()
+    inks = [m[1] for m in normalized]
+    stds = [m[2] for m in normalized]
+    edges = [m[3] for m in normalized if math.isfinite(m[3])]
     median_ink = _median(inks)
     median_std = _median(stds)
+    median_edge = _median(edges) if edges else 0.0
     abs_ink = 0.018
     abs_std = 16.0
     rel_ink = median_ink * 0.35 if median_ink > 0 else 0.0
     rel_std = median_std * 0.60 if median_std > 0 else 0.0
     ink_threshold = min(abs_ink, rel_ink) if rel_ink else abs_ink
     std_threshold = min(abs_std, rel_std) if rel_std else abs_std
-    candidates = {
+    white_candidates = {
         page_idx
-        for page_idx, ink_ratio, stddev in metrics
+        for page_idx, ink_ratio, stddev, _edge_mean in normalized
         if ink_ratio <= ink_threshold and stddev <= std_threshold
     }
-    if not candidates:
-        candidates = {
-            page_idx for page_idx, ink_ratio, stddev in metrics if ink_ratio <= abs_ink and stddev <= abs_std
+    if not white_candidates:
+        white_candidates = {
+            page_idx
+            for page_idx, ink_ratio, stddev, _edge_mean in normalized
+            if ink_ratio <= abs_ink and stddev <= abs_std
         }
+    # Some scan separator sheets are not white; they show up as nearly uniform gray pages
+    # with very low edge energy. Detect that shape separately so missed divider pages do not
+    # get imported as standalone clips.
+    uniform_ink_threshold = max(0.9985, min(0.9997, median_ink + 0.003))
+    uniform_std_threshold = max(28.0, min(32.0, median_std * 0.62)) if median_std > 0 else 32.0
+    uniform_edge_threshold = max(1.2, min(1.75, median_edge * 0.25)) if median_edge > 0 else 1.75
+    uniform_candidates = {
+        page_idx
+        for page_idx, ink_ratio, stddev, edge_mean in normalized
+        if ink_ratio >= uniform_ink_threshold
+        and stddev <= uniform_std_threshold
+        and edge_mean <= uniform_edge_threshold
+    }
+    candidates = white_candidates | uniform_candidates
     if len(candidates) > int(len(metrics) * 0.60):
         return set()
     return candidates
@@ -216,15 +270,72 @@ def _detect_pdf_delimiter_pages(*, pdf_path: Path, max_pages: int, renderer: str
             probe_files = _render_pdf_probe_pages(
                 pdf_path=pdf_path, out_dir=probe_dir, max_pages=max_pages, renderer=renderer
             )
-            metrics: list[tuple[int, float, float]] = []
+            metrics: list[tuple[int, float, float, float]] = []
             for idx, probe_file in enumerate(probe_files, start=1):
                 probe = _pgm_blank_metrics(probe_file)
                 if not probe:
                     continue
-                metrics.append((idx, probe[0], probe[1]))
+                metrics.append((idx, probe[0], probe[1], probe[2]))
             return _delimiter_candidates_from_metrics(metrics)
     except Exception:
         return set()
+
+
+def _video_poster_tool() -> str | None:
+    if shutil.which("ffmpeg"):
+        return "ffmpeg"
+    return None
+
+
+def _extract_video_poster_ffmpeg(*, video_path: Path, poster_path: Path) -> None:
+    poster_path.parent.mkdir(parents=True, exist_ok=True)
+    attempts = [
+        [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            "00:00:00.500",
+            "-i",
+            str(video_path),
+            "-frames:v",
+            "1",
+            "-q:v",
+            "2",
+            str(poster_path),
+        ],
+        [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(video_path),
+            "-frames:v",
+            "1",
+            "-q:v",
+            "2",
+            str(poster_path),
+        ],
+    ]
+    last_error: Exception | None = None
+    for args in attempts:
+        try:
+            subprocess.run(
+                args,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if poster_path.exists() and poster_path.stat().st_size > 0:
+                return
+            raise RuntimeError("poster file not created")
+        except Exception as e:
+            last_error = e
+    raise RuntimeError(f"poster extraction failed: {last_error}")
 
 
 def _split_pages_into_documents(total_pages: int, delimiter_pages: set[int]) -> tuple[dict[int, tuple[int, int, int]], int]:
@@ -248,6 +359,234 @@ def _split_pages_into_documents(total_pages: int, delimiter_pages: set[int]) -> 
         for doc_page, page_idx in enumerate(doc_pages, start=1):
             page_map[page_idx] = (doc_idx, doc_page, doc_len)
     return (page_map, len(docs))
+
+
+def _scan_page_number_from_source_ref(source_ref: str) -> int | None:
+    m = re.search(r"#p(\d+)$", str(source_ref or ""))
+    if not m:
+        return None
+    return int(m.group(1))
+
+
+def _strip_scan_doc_suffix(title: str) -> str:
+    return _SCAN_DOC_SUFFIX_RE.sub("", str(title or "").strip()).strip()
+
+
+def _choose_regroup_base_title(
+    rows: list[dict[str, Any]],
+    *,
+    generic_bases: set[str],
+) -> str:
+    bases = [_strip_scan_doc_suffix(str(row.get("title") or "")) for row in rows]
+    for base in bases:
+        if base and base not in generic_bases:
+            return base
+    for base in bases:
+        if base:
+            return base
+    return "Scanned document"
+
+
+def _split_asset_pages_for_regrouping(
+    page_numbers: list[int],
+    *,
+    delimiter_pages: set[int],
+    excluded_pages: set[int],
+) -> list[list[int]]:
+    docs: list[list[int]] = []
+    current: list[int] = []
+    prev_page: int | None = None
+    for page in sorted(page_numbers):
+        if page in delimiter_pages or page in excluded_pages:
+            if current:
+                docs.append(current)
+            current = []
+            prev_page = None
+            continue
+        if prev_page is None or page == prev_page + 1:
+            current.append(page)
+        else:
+            if current:
+                docs.append(current)
+            current = [page]
+        prev_page = page
+    if current:
+        docs.append(current)
+    return docs
+
+
+def repair_scan_document_grouping(
+    db: Db,
+    store_dir: Path,
+    *,
+    pdf_sha256: str,
+    renderer: str = "auto",
+    max_pages: int = 0,
+    apply: bool = False,
+    actor: str = "scan_group_repair",
+) -> dict[str, Any]:
+    sha = str(pdf_sha256 or "").strip().lower()
+    if not re.fullmatch(r"[a-f0-9]{64}", sha):
+        raise ValueError("pdf_sha256 must be a 64-character hex SHA-256")
+    store = store_dir.expanduser().resolve()
+    renderer = _select_pdf_renderer(renderer)
+    if renderer is None:
+        raise RuntimeError("No PDF renderer available (install poppler or mupdf)")
+    pdf_path = store / "originals" / "scan" / f"{sha}.pdf"
+    if not pdf_path.exists():
+        raise FileNotFoundError(f"Stored scan PDF not found: {pdf_path}")
+
+    rows = [dict(r) for r in db.query(
+        """
+        select id, source_ref, title
+        from assets
+        where source='scan' and source_ref like ?
+        order by cast(substr(source_ref, instr(source_ref, '#p') + 2) as integer)
+        """,
+        (f"scan://{sha}#p%",),
+    )]
+    if not rows:
+        return {
+            "pdf_sha256": sha,
+            "pdf_path": str(pdf_path),
+            "apply": bool(apply),
+            "pages_found": 0,
+            "message": "No scan page assets found for PDF SHA.",
+            "documents": [],
+            "updates": [],
+        }
+
+    delimiter_pages = set(_detect_pdf_delimiter_pages(pdf_path=pdf_path, max_pages=max_pages, renderer=renderer))
+    historical_irrelevant_rows = db.query(
+        """
+        select distinct ao.asset_id,
+               max(case when ao.expires_at is null then 1 else 0 end) as is_active
+        from asset_overrides ao
+        where ao.axis_name='track'
+          and ao.operation='set'
+          and ao.axis_value='irrelevant'
+          and ao.asset_id in (
+            select id from assets where source='scan' and source_ref like ?
+          )
+        group by ao.asset_id
+        """,
+        (f"scan://{sha}#p%",),
+    )
+    excluded_asset_ids = {str(r["asset_id"]) for r in historical_irrelevant_rows}
+    active_excluded_asset_ids = {
+        str(r["asset_id"])
+        for r in historical_irrelevant_rows
+        if int(r["is_active"] or 0) == 1
+    }
+
+    row_by_page: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        page_num = _scan_page_number_from_source_ref(str(row.get("source_ref") or ""))
+        if page_num is None:
+            continue
+        row_by_page[page_num] = row
+
+    excluded_pages = {
+        page
+        for page, row in row_by_page.items()
+        if str(row.get("id") or "") in excluded_asset_ids
+    }
+    page_numbers = sorted(row_by_page.keys())
+    doc_pages = _split_asset_pages_for_regrouping(
+        page_numbers,
+        delimiter_pages=delimiter_pages,
+        excluded_pages=excluded_pages,
+    )
+
+    base_counts = Counter(
+        _strip_scan_doc_suffix(str(row.get("title") or ""))
+        for row in rows
+        if _strip_scan_doc_suffix(str(row.get("title") or ""))
+    )
+    generic_bases = {base for base, count in base_counts.items() if count >= 3}
+
+    documents: list[dict[str, Any]] = []
+    updates: list[tuple[str, str]] = []
+    update_preview: list[dict[str, Any]] = []
+    for doc_index, pages in enumerate(doc_pages, start=1):
+        doc_rows = [row_by_page[p] for p in pages if p in row_by_page]
+        if not doc_rows:
+            continue
+        base_title = _choose_regroup_base_title(doc_rows, generic_bases=generic_bases)
+        documents.append(
+            {
+                "doc_index": doc_index,
+                "pages": pages,
+                "page_count": len(pages),
+                "base_title": base_title,
+                "asset_ids": [str(row.get("id") or "") for row in doc_rows],
+            }
+        )
+        doc_len = len(pages)
+        for doc_page, row in enumerate(doc_rows, start=1):
+            if doc_len <= 1:
+                new_title = f"{base_title} - doc {doc_index}"
+            else:
+                new_title = f"{base_title} - doc {doc_index} p{doc_page}"
+            asset_id = str(row.get("id") or "")
+            old_title = str(row.get("title") or "")
+            if old_title == new_title:
+                continue
+            updates.append((new_title, asset_id))
+            update_preview.append(
+                {
+                    "asset_id": asset_id,
+                    "source_ref": str(row.get("source_ref") or ""),
+                    "old_title": old_title,
+                    "new_title": new_title,
+                }
+            )
+
+    reactivated_irrelevant_asset_ids = sorted(excluded_asset_ids - active_excluded_asset_ids)
+    if apply:
+        if updates:
+            db.executemany("update assets set title=? where id=?", updates)
+        if reactivated_irrelevant_asset_ids:
+            created_at = _now_iso()
+            db.executemany(
+                """
+                insert into asset_overrides
+                  (id, asset_id, track, axis_name, axis_value, operation, actor, note, created_at, expires_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        str(uuid.uuid4()),
+                        asset_id,
+                        "irrelevant",
+                        "track",
+                        "irrelevant",
+                        "set",
+                        actor,
+                        "restored during scan regrouping repair",
+                        created_at,
+                        None,
+                    )
+                    for asset_id in reactivated_irrelevant_asset_ids
+                ],
+            )
+
+    return {
+        "pdf_sha256": sha,
+        "pdf_path": str(pdf_path),
+        "apply": bool(apply),
+        "renderer": renderer,
+        "pages_found": len(rows),
+        "delimiter_pages": sorted(delimiter_pages),
+        "excluded_pages": sorted(excluded_pages),
+        "excluded_asset_ids": sorted(excluded_asset_ids),
+        "active_excluded_asset_ids": sorted(active_excluded_asset_ids),
+        "reactivated_irrelevant_asset_ids": reactivated_irrelevant_asset_ids,
+        "documents": documents,
+        "title_updates": len(updates),
+        "updates": update_preview[:250],
+        "note": "Updates truncated to 250 in output.",
+    }
 
 
 def import_scans_inbox(
@@ -428,6 +767,266 @@ def import_scans_inbox(
     }
 
 
+def audit_scan_separator_pages(
+    db: Db,
+    store_dir: Path,
+    *,
+    renderer: str = "auto",
+    max_pages: int = 0,
+    limit: int = 0,
+    pdf_sha256s: list[str] | None = None,
+    apply: bool = False,
+    actor: str = "scan_separator_audit",
+    note: str = "auto-detected blank/separator scan page",
+) -> dict[str, Any]:
+    store = store_dir.expanduser().resolve()
+    renderer = _select_pdf_renderer(renderer)
+    if renderer is None:
+        raise RuntimeError("No PDF renderer available (install poppler or mupdf)")
+    pdf_dir = store / "originals" / "scan"
+    pdfs = sorted(pdf_dir.glob("*.pdf"))
+    requested_shas = {
+        str(value or "").strip().lower()
+        for value in (pdf_sha256s or [])
+        if re.fullmatch(r"[a-f0-9]{64}", str(value or "").strip().lower())
+    }
+    if requested_shas:
+        pdfs = [pdf for pdf in pdfs if pdf.stem.strip().lower() in requested_shas]
+    if limit:
+        pdfs = pdfs[:limit]
+    created_at = _now_iso()
+    pdfs_with_candidates = 0
+    candidate_count = 0
+    applied_count = 0
+    skipped_existing_override = 0
+    errors: list[dict[str, str]] = []
+    candidates: list[dict[str, Any]] = []
+    for pdf in pdfs:
+        sha = pdf.stem.strip().lower()
+        if not re.fullmatch(r"[a-f0-9]{64}", sha):
+            continue
+        try:
+            delimiter_pages = sorted(
+                _detect_pdf_delimiter_pages(pdf_path=pdf, max_pages=max_pages, renderer=renderer)
+            )
+        except Exception as exc:
+            errors.append({"pdf": str(pdf), "error": str(exc)})
+            continue
+        if not delimiter_pages:
+            continue
+        pdfs_with_candidates += 1
+        rows = db.query(
+            """
+            select id, source_ref, title
+            from assets
+            where source='scan'
+              and source_ref like ?
+            order by source_ref asc
+            """,
+            (f"scan://{sha}#p%",),
+        )
+        page_to_asset: dict[int, dict[str, Any]] = {}
+        for row in rows:
+            m = re.search(r"#p(\d+)$", str(row["source_ref"] or ""))
+            if not m:
+                continue
+            page_to_asset[int(m.group(1))] = dict(row)
+        for page_idx in delimiter_pages:
+            item: dict[str, Any] = {
+                "pdf_sha256": sha,
+                "pdf_path": str(pdf),
+                "page": int(page_idx),
+            }
+            asset = page_to_asset.get(int(page_idx))
+            if asset:
+                item["asset_id"] = str(asset.get("id") or "")
+                item["source_ref"] = str(asset.get("source_ref") or "")
+                item["title"] = str(asset.get("title") or "")
+            candidates.append(item)
+            candidate_count += 1
+            if not apply or not asset:
+                continue
+            active_override = db.query(
+                """
+                select id, axis_value, actor, note
+                from asset_overrides
+                where asset_id=?
+                  and axis_name='track'
+                  and operation='set'
+                  and expires_at is null
+                order by created_at desc
+                limit 1
+                """,
+                (str(asset["id"]),),
+            )
+            if active_override:
+                skipped_existing_override += 1
+                item["apply_status"] = "skipped_existing_override"
+                item["active_override_track"] = str(active_override[0]["axis_value"] or "")
+                continue
+            db.exec(
+                """
+                insert into asset_overrides
+                  (id, asset_id, track, axis_name, axis_value, operation, actor, note, created_at, expires_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    str(asset["id"]),
+                    "irrelevant",
+                    "track",
+                    "irrelevant",
+                    "set",
+                    actor,
+                    note,
+                    created_at,
+                    None,
+                ),
+            )
+            applied_count += 1
+            item["apply_status"] = "applied_irrelevant_override"
+    return {
+        "pdfs_scanned": len(pdfs),
+        "pdfs_with_candidates": pdfs_with_candidates,
+        "candidate_pages": candidate_count,
+        "applied_irrelevant_overrides": applied_count,
+        "skipped_existing_override": skipped_existing_override,
+        "apply": bool(apply),
+        "requested_pdf_sha256s": sorted(requested_shas),
+        "renderer": renderer,
+        "candidates": candidates[:250],
+        "errors": errors[:50],
+        "note": "Candidates/errors truncated in output.",
+    }
+
+
+def _safe_unlink_within(root: Path, candidate: str) -> bool:
+    text = str(candidate or "").strip()
+    if not text:
+        return False
+    try:
+        root_resolved = root.expanduser().resolve()
+        path = Path(text).expanduser().resolve()
+    except Exception:
+        return False
+    try:
+        path.relative_to(root_resolved)
+    except Exception:
+        return False
+    if not path.exists() or not path.is_file():
+        return False
+    path.unlink()
+    return True
+
+
+def purge_scan_separator_pages(
+    db: Db,
+    store_dir: Path,
+    *,
+    renderer: str = "auto",
+    max_pages: int = 0,
+    limit: int = 0,
+    pdf_sha256s: list[str] | None = None,
+    apply: bool = False,
+) -> dict[str, Any]:
+    store = store_dir.expanduser().resolve()
+    renderer = _select_pdf_renderer(renderer)
+    if renderer is None:
+        raise RuntimeError("No PDF renderer available (install poppler or mupdf)")
+    pdf_dir = store / "originals" / "scan"
+    pdfs = sorted(pdf_dir.glob("*.pdf"))
+    requested_shas = {
+        str(value or "").strip().lower()
+        for value in (pdf_sha256s or [])
+        if re.fullmatch(r"[a-f0-9]{64}", str(value or "").strip().lower())
+    }
+    if requested_shas:
+        pdfs = [pdf for pdf in pdfs if pdf.stem.strip().lower() in requested_shas]
+    if limit:
+        pdfs = pdfs[:limit]
+
+    pdfs_with_candidates = 0
+    candidate_count = 0
+    deleted_assets = 0
+    deleted_files = 0
+    errors: list[dict[str, str]] = []
+    candidates: list[dict[str, Any]] = []
+    for pdf in pdfs:
+        sha = pdf.stem.strip().lower()
+        if not re.fullmatch(r"[a-f0-9]{64}", sha):
+            continue
+        try:
+            delimiter_pages = sorted(
+                _detect_pdf_delimiter_pages(pdf_path=pdf, max_pages=max_pages, renderer=renderer)
+            )
+        except Exception as exc:
+            errors.append({"pdf": str(pdf), "error": str(exc)})
+            continue
+        if not delimiter_pages:
+            continue
+        pdfs_with_candidates += 1
+        rows = db.query(
+            """
+            select id, source_ref, title, stored_path, thumb_path
+            from assets
+            where source='scan'
+              and source_ref like ?
+            order by source_ref asc
+            """,
+            (f"scan://{sha}#p%",),
+        )
+        page_to_asset: dict[int, dict[str, Any]] = {}
+        for row in rows:
+            m = re.search(r"#p(\d+)$", str(row["source_ref"] or ""))
+            if not m:
+                continue
+            page_to_asset[int(m.group(1))] = dict(row)
+        purge_ids: list[str] = []
+        file_targets: list[str] = []
+        for page_idx in delimiter_pages:
+            item: dict[str, Any] = {
+                "pdf_sha256": sha,
+                "pdf_path": str(pdf),
+                "page": int(page_idx),
+            }
+            asset = page_to_asset.get(int(page_idx))
+            if asset:
+                item["asset_id"] = str(asset.get("id") or "")
+                item["source_ref"] = str(asset.get("source_ref") or "")
+                item["title"] = str(asset.get("title") or "")
+                stored_path = str(asset.get("stored_path") or "")
+                thumb_path = str(asset.get("thumb_path") or "")
+                if stored_path:
+                    file_targets.append(stored_path)
+                if thumb_path and thumb_path != stored_path:
+                    file_targets.append(thumb_path)
+                purge_ids.append(str(asset.get("id") or ""))
+            candidates.append(item)
+            candidate_count += 1
+        purge_ids = [asset_id for asset_id in purge_ids if asset_id]
+        if apply and purge_ids:
+            placeholders = ",".join(["?"] * len(purge_ids))
+            db.exec(f"delete from assets where id in ({placeholders})", tuple(purge_ids))
+            deleted_assets += len(purge_ids)
+            for target in file_targets:
+                if _safe_unlink_within(store, target):
+                    deleted_files += 1
+
+    return {
+        "pdfs_scanned": len(pdfs),
+        "pdfs_with_candidates": pdfs_with_candidates,
+        "candidate_pages": candidate_count,
+        "deleted_assets": deleted_assets,
+        "deleted_files": deleted_files,
+        "apply": bool(apply),
+        "requested_pdf_sha256s": sorted(requested_shas),
+        "renderer": renderer,
+        "candidates": candidates[:250],
+        "errors": errors[:50],
+        "note": "Candidates/errors truncated in output.",
+    }
+
+
 def import_photos_inbox(
     db: Db,
     inbox_dir: Path,
@@ -553,6 +1152,9 @@ def import_videos_inbox(
     unsupported_files = 0
     errors: list[dict[str, str]] = []
     imported_at = _now_iso()
+    poster_tool = _video_poster_tool()
+    poster_generated = 0
+    poster_errors: list[dict[str, str]] = []
 
     existing_refs = {str(r["source_ref"]) for r in db.query("select source_ref from assets where source=?", (source,))}
     pending_refs: set[str] = set()
@@ -569,6 +1171,7 @@ def import_videos_inbox(
             skipped += 1
             continue
         try:
+            asset_id = str(uuid.uuid4())
             sha = _sha256_file(path)
             source_ref = f"{source_ref_scheme}://{sha}"
             if source_ref in existing_refs or source_ref in pending_refs:
@@ -580,10 +1183,21 @@ def import_videos_inbox(
             out_path = dest / f"{sha}{suffix}"
             if not out_path.exists():
                 shutil.copy2(path, out_path)
+
+            thumb_path = ""
+            if poster_tool == "ffmpeg":
+                poster_path = store / "thumbs" / "video" / f"{asset_id}.jpg"
+                try:
+                    _extract_video_poster_ffmpeg(video_path=out_path, poster_path=poster_path)
+                    thumb_path = str(poster_path)
+                    poster_generated += 1
+                except Exception as e:
+                    poster_errors.append({"file": str(path), "error": str(e)})
+
             pending_refs.add(source_ref)
             rows.append(
                 (
-                    str(uuid.uuid4()),
+                    asset_id,
                     source,
                     source_ref,
                     path.stem,
@@ -592,6 +1206,7 @@ def import_videos_inbox(
                     None,
                     imported_at,
                     None,
+                    thumb_path or None,
                     str(out_path),
                     sha,
                     "video",
@@ -607,9 +1222,9 @@ def import_videos_inbox(
         insert or ignore into assets
           (
             id, source, source_ref, title, description, board, created_at, imported_at, image_url,
-            stored_path, sha256, media_status, content_kind, stored_video_path
+            thumb_path, stored_path, sha256, media_status, content_kind, stored_video_path
           )
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """,
         rows,
     )
@@ -631,5 +1246,11 @@ def import_videos_inbox(
         "duplicates_skipped": duplicates_skipped,
         "unsupported_files": unsupported_files,
         "errors": errors[:25],
+        "poster": {
+            "tool": poster_tool or "",
+            "generated": poster_generated,
+            "errors": poster_errors[:25],
+            "note": "Poster generation errors are truncated to 25 in output.",
+        },
         "note": "Errors are truncated to 25 in output.",
     }

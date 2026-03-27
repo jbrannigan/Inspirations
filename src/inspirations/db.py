@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -58,6 +60,41 @@ def _ensure_columns(db: Db, table: str, columns: dict[str, str]) -> None:
 
 
 _IMAGE_REF_RE = re.compile(r"\.(jpg|jpeg|png|webp|gif|bmp|svg)(?:\?.*)?$", re.IGNORECASE)
+_SCAN_AUTOGEN_TITLE_RE = re.compile(r"\s-\sdoc\s+\d+(?:\s+p\d+)?\s*$", re.IGNORECASE)
+_CB_DESCRIPTION_PREFIX = "AI-derived representative set from high-confidence descriptions/tagging."
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def infer_collection_provenance(name: str) -> tuple[str, str | None, str | None]:
+    text = (name or "").strip()
+    lower = text.lower()
+    if lower == "hidden":
+        return ("system_hidden", "system", "System collection for globally hidden items.")
+    if lower.startswith("review:"):
+        return ("workflow_review", "workflow", "Workflow review collection created during curation and cleanup.")
+    if lower.startswith("cohort:"):
+        return ("workflow_cohort", "workflow", "Workflow cohort collection created to review or track a specific subset.")
+    if lower.startswith("pins:"):
+        return ("source_mirror", "source_import", "Mirrored source board collection.")
+    if lower.startswith("cb:"):
+        return (
+            "ai_derived_representative",
+            "claude_code_session",
+            "AI-derived representative set from high-confidence descriptions/tagging. Not a human-curated final selection.",
+        )
+    return ("human_curated", "human", None)
+
+
+def _normalize_cb_description(description: str) -> str:
+    text = (description or "").strip()
+    if not text:
+        return _CB_DESCRIPTION_PREFIX
+    if text.startswith(_CB_DESCRIPTION_PREFIX):
+        return text
+    return f"{_CB_DESCRIPTION_PREFIX} {text}"
 
 
 def _looks_like_image_ref(value: str) -> bool:
@@ -80,6 +117,13 @@ def _extract_domain(value: str) -> str:
     if host.startswith("www."):
         host = host[4:]
     return host
+
+
+def _looks_like_scan_autogen_title(title: str) -> bool:
+    text = (title or "").strip()
+    if not text:
+        return True
+    return bool(_SCAN_AUTOGEN_TITLE_RE.search(text))
 
 
 def _infer_media_status(row: sqlite3.Row) -> str:
@@ -131,6 +175,205 @@ def _backfill_assets_metadata(db: Db) -> None:
         )
     if updates:
         db.executemany("update assets set media_status=?, source_domain=?, content_kind=? where id=?", updates)
+
+
+def _latest_title_audit_applied(db: Db) -> dict[str, sqlite3.Row]:
+    rows = db.query(
+        """
+        select ta.asset_id, ta.batch_id, ta.old_title, ta.new_title, ta.applied_at, tb.actor
+        from title_audit_applied ta
+        left join title_audit_batches tb on tb.id = ta.batch_id
+        where ta.undone_at is null
+          and ta.applied_at = (
+            select max(ta2.applied_at)
+            from title_audit_applied ta2
+            where ta2.asset_id = ta.asset_id
+              and ta2.undone_at is null
+          )
+        """
+    )
+    return {str(r["asset_id"]): r for r in rows if str(r["asset_id"] or "").strip()}
+
+
+def _latest_gemini_asset_ai(db: Db) -> dict[str, sqlite3.Row]:
+    rows = db.query(
+        """
+        select ai.id, ai.asset_id, ai.provider, ai.model, ai.created_at
+        from asset_ai ai
+        where ai.provider = 'gemini'
+          and ai.created_at = (
+            select max(ai2.created_at)
+            from asset_ai ai2
+            where ai2.asset_id = ai.asset_id
+              and ai2.provider = 'gemini'
+          )
+        """
+    )
+    return {str(r["asset_id"]): r for r in rows if str(r["asset_id"] or "").strip()}
+
+
+def _infer_title_provenance(
+    *,
+    asset: sqlite3.Row,
+    title_audit_row: sqlite3.Row | None,
+    gemini_row: sqlite3.Row | None,
+) -> tuple[str, str, str, float, str]:
+    asset_id = str(asset["id"])
+    source = str(asset["source"] or "").strip().lower()
+    source_ref = str(asset["source_ref"] or "").strip()
+    title = str(asset["title"] or "").strip()
+    imported_at = str(asset["imported_at"] or "").strip() or _now_iso()
+
+    if title_audit_row and str(title_audit_row["new_title"] or "").strip() == title:
+        created_at = str(title_audit_row["applied_at"] or "").strip() or imported_at
+        actor = str(title_audit_row["actor"] or "").strip() or "title_audit"
+        return ("title_audit", str(title_audit_row["batch_id"] or ""), actor, 0.98, created_at)
+
+    if source == "scan":
+        if gemini_row and not _looks_like_scan_autogen_title(title):
+            created_at = str(gemini_row["created_at"] or "").strip() or imported_at
+            model = str(gemini_row["model"] or "").strip()
+            origin_ref = f"asset_ai:{str(gemini_row['id'])}" if str(gemini_row["id"] or "").strip() else "asset_ai:gemini"
+            actor = f"gemini:{model}" if model else "gemini"
+            return ("ai_suggested", origin_ref, actor, 0.7, created_at)
+        if _looks_like_scan_autogen_title(title):
+            return ("imported", source_ref, "scan_importer", 0.95, imported_at)
+        return ("derived", source_ref, "migration_backfill", 0.45, imported_at)
+
+    if source == "pinterest":
+        return ("source_native", source_ref, "pinterest_importer", 0.9, imported_at)
+    if source == "houzz":
+        return ("source_native", source_ref, "houzz_importer", 0.9, imported_at)
+    if source == "facebook":
+        return ("imported", source_ref, "facebook_importer", 0.85, imported_at)
+    if source:
+        return ("imported", source_ref, f"{source}_importer", 0.8, imported_at)
+    return ("derived", f"asset:{asset_id}", "migration_backfill", 0.4, imported_at)
+
+
+def _backfill_title_field_provenance(db: Db) -> None:
+    title_audit_by_asset = _latest_title_audit_applied(db)
+    gemini_by_asset = _latest_gemini_asset_ai(db)
+    rows = db.query(
+        """
+        select a.id, a.source, a.source_ref, a.title, a.imported_at,
+               p.id as provenance_id, p.field_value as provenance_value
+        from assets a
+        left join asset_field_provenance p
+          on p.asset_id = a.id
+         and p.field_name = 'title'
+         and p.is_current = 1
+        where coalesce(a.title, '') != ''
+        """
+    )
+    inserts: list[tuple[str, str, str, str, str, str | None, str | None, float, str, None, int]] = []
+    supersede: list[tuple[str, str]] = []
+    for row in rows:
+        asset_id = str(row["id"])
+        current_value = str(row["provenance_value"] or "").strip()
+        title = str(row["title"] or "").strip()
+        provenance_id = str(row["provenance_id"] or "").strip()
+        if provenance_id and current_value == title:
+            continue
+        origin_type, origin_ref, actor, confidence, created_at = _infer_title_provenance(
+            asset=row,
+            title_audit_row=title_audit_by_asset.get(asset_id),
+            gemini_row=gemini_by_asset.get(asset_id),
+        )
+        if provenance_id:
+            supersede.append((_now_iso(), provenance_id))
+        inserts.append(
+            (
+                str(uuid.uuid4()),
+                asset_id,
+                "title",
+                title,
+                origin_type,
+                origin_ref or None,
+                actor or None,
+                float(confidence),
+                created_at,
+                None,
+                1,
+            )
+        )
+    if supersede:
+        db.executemany(
+            "update asset_field_provenance set superseded_at=?, is_current=0 where id=? and is_current=1",
+            supersede,
+        )
+    if inserts:
+        db.executemany(
+            """
+            insert into asset_field_provenance
+              (id, asset_id, field_name, field_value, origin_type, origin_ref, actor,
+               confidence, created_at, superseded_at, is_current)
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            inserts,
+        )
+
+
+def _backfill_collection_metadata(db: Db) -> None:
+    rows = db.query(
+        """
+        select id, name, description,
+               coalesce(provenance_kind, '') as provenance_kind,
+               coalesce(provenance_note, '') as provenance_note,
+               coalesce(curator, '') as curator
+        from collections
+        """
+    )
+    updates: list[tuple[str | None, str | None, str | None, str | None, str]] = []
+    for row in rows:
+        name = str(row["name"] or "")
+        current_kind = str(row["provenance_kind"] or "").strip()
+        current_note = str(row["provenance_note"] or "").strip()
+        current_curator = str(row["curator"] or "").strip()
+        current_description = str(row["description"] or "").strip()
+        inferred_kind, inferred_curator, inferred_note = infer_collection_provenance(name)
+
+        special_named = (
+            name.strip().lower() == "hidden"
+            or name.lower().startswith("review:")
+            or name.lower().startswith("cohort:")
+            or name.lower().startswith("pins:")
+            or name.lower().startswith("cb:")
+        )
+
+        next_kind = inferred_kind if (special_named or not current_kind) else current_kind
+        next_curator = (inferred_curator or "") if (special_named or not current_curator) else current_curator
+        next_note = (inferred_note or "") if (special_named or (not current_note and inferred_note)) else current_note
+        next_description = _normalize_cb_description(current_description) if name.lower().startswith("cb:") else current_description
+
+        if (
+            next_kind != current_kind
+            or next_curator != current_curator
+            or next_note != current_note
+            or next_description != current_description
+        ):
+            updates.append(
+                (
+                    next_kind or None,
+                    next_note or None,
+                    next_curator or None,
+                    next_description or None,
+                    str(row["id"] or ""),
+                )
+            )
+
+    if updates:
+        db.executemany(
+            """
+            update collections
+            set provenance_kind=?,
+                provenance_note=?,
+                curator=?,
+                description=?
+            where id=?
+            """,
+            updates,
+        )
 
 
 def ensure_schema(db: Db) -> None:
@@ -213,6 +456,24 @@ def ensure_schema(db: Db) -> None:
         );
         """
     )
+    _ensure_columns(
+        db,
+        "collections",
+        {
+            "hidden": "integer default 0",
+            "hidden_at": "text",
+            "provenance_kind": "text",
+            "provenance_note": "text",
+            "curator": "text",
+            "intent": "text default 'working'",
+            "shared_actor_id": "text",
+        },
+    )
+    db.exec("update collections set intent='working' where intent is null or trim(intent)=''")
+    db.exec("create index if not exists ix_collections_hidden on collections(hidden);")
+    db.exec("create index if not exists ix_collections_provenance_kind on collections(provenance_kind);")
+    db.exec("create index if not exists ix_collections_intent on collections(intent);")
+    db.exec("create index if not exists ix_collections_shared_actor_id on collections(shared_actor_id);")
     db.exec(
         """
         create table if not exists collection_items (
@@ -369,6 +630,41 @@ def ensure_schema(db: Db) -> None:
     )
     db.exec("create unique index if not exists ux_actors_token on actors(token);")
 
+    db.exec(
+        """
+        create table if not exists collection_shares (
+          id text primary key,
+          collection_id text not null,
+          actor_id text not null,
+          created_at text not null,
+          foreign key(collection_id) references collections(id) on delete cascade,
+          foreign key(actor_id) references actors(id) on delete cascade
+        );
+        """
+    )
+    db.exec(
+        """
+        create unique index if not exists ux_collection_shares_collection_actor
+        on collection_shares(collection_id, actor_id);
+        """
+    )
+    db.exec("create index if not exists ix_collection_shares_collection on collection_shares(collection_id);")
+    db.exec("create index if not exists ix_collection_shares_actor on collection_shares(actor_id);")
+    db.exec(
+        """
+        insert into collection_shares (id, collection_id, actor_id, created_at)
+        select lower(hex(randomblob(16))), c.id, c.shared_actor_id, c.updated_at
+        from collections c
+        where coalesce(c.shared_actor_id, '') != ''
+          and exists (select 1 from actors a where a.id = c.shared_actor_id)
+          and not exists (
+            select 1 from collection_shares cs
+            where cs.collection_id = c.id
+              and cs.actor_id = c.shared_actor_id
+          )
+        """
+    )
+
     # Add attribution + question columns to annotations
     _ensure_columns(
         db,
@@ -478,4 +774,258 @@ def ensure_schema(db: Db) -> None:
     db.exec("create index if not exists ix_title_audit_applied_batch on title_audit_applied(batch_id);")
     db.exec("create index if not exists ix_title_audit_applied_undone on title_audit_applied(batch_id, undone_at);")
 
+    # Provenance-aware v2 classification layer. These tables preserve evidence
+    # and human overrides without overwriting the legacy curation outputs.
+    db.exec(
+        """
+        create table if not exists classification_runs (
+          id text primary key,
+          schema_version text not null,
+          run_type text not null,
+          model_provider text,
+          model_name text,
+          prompt_version text,
+          config_json text,
+          created_at text not null,
+          notes text
+        );
+        """
+    )
+    db.exec("create index if not exists ix_classification_runs_type on classification_runs(run_type);")
+    db.exec("create index if not exists ix_classification_runs_created on classification_runs(created_at);")
+
+    db.exec(
+        """
+        create table if not exists asset_field_provenance (
+          id text primary key,
+          asset_id text not null,
+          field_name text not null,
+          field_value text,
+          origin_type text not null,
+          origin_ref text,
+          actor text,
+          confidence real,
+          created_at text not null,
+          superseded_at text,
+          is_current integer not null default 1,
+          foreign key(asset_id) references assets(id) on delete cascade
+        );
+        """
+    )
+    db.exec(
+        """
+        create index if not exists ix_asset_field_provenance_asset_field
+        on asset_field_provenance(asset_id, field_name);
+        """
+    )
+    db.exec(
+        """
+        create index if not exists ix_asset_field_provenance_current
+        on asset_field_provenance(field_name, is_current);
+        """
+    )
+    db.exec(
+        """
+        create unique index if not exists ux_asset_field_provenance_current
+        on asset_field_provenance(asset_id, field_name)
+        where is_current = 1;
+        """
+    )
+
+    db.exec(
+        """
+        create table if not exists asset_track_assessments (
+          id text primary key,
+          run_id text not null,
+          asset_id text not null,
+          track text not null,
+          confidence real,
+          is_ambiguous integer not null default 0,
+          decision_source text not null,
+          reason text,
+          created_at text not null,
+          foreign key(run_id) references classification_runs(id) on delete cascade,
+          foreign key(asset_id) references assets(id) on delete cascade
+        );
+        """
+    )
+    db.exec(
+        """
+        create unique index if not exists ux_asset_track_assessments_run_asset
+        on asset_track_assessments(run_id, asset_id);
+        """
+    )
+    db.exec("create index if not exists ix_asset_track_assessments_asset on asset_track_assessments(asset_id);")
+    db.exec("create index if not exists ix_asset_track_assessments_track on asset_track_assessments(track);")
+
+    db.exec(
+        """
+        create table if not exists asset_axis_memberships (
+          id text primary key,
+          run_id text not null,
+          asset_id text not null,
+          track text,
+          axis_name text not null,
+          axis_value text not null,
+          confidence real,
+          rank integer,
+          is_primary integer not null default 0,
+          is_ambiguous integer not null default 0,
+          created_at text not null,
+          foreign key(run_id) references classification_runs(id) on delete cascade,
+          foreign key(asset_id) references assets(id) on delete cascade
+        );
+        """
+    )
+    db.exec(
+        """
+        create unique index if not exists ux_asset_axis_memberships_run_asset_axis_value
+        on asset_axis_memberships(run_id, asset_id, axis_name, axis_value);
+        """
+    )
+    db.exec("create index if not exists ix_asset_axis_memberships_asset on asset_axis_memberships(asset_id);")
+    db.exec("create index if not exists ix_asset_axis_memberships_axis on asset_axis_memberships(axis_name, axis_value);")
+
+    db.exec(
+        """
+        create table if not exists asset_axis_evidence (
+          id text primary key,
+          run_id text,
+          asset_id text not null,
+          track text,
+          axis_name text not null,
+          axis_value text,
+          evidence_type text not null,
+          evidence_ref text,
+          weight real,
+          confidence real,
+          note text,
+          created_at text not null,
+          foreign key(run_id) references classification_runs(id) on delete cascade,
+          foreign key(asset_id) references assets(id) on delete cascade
+        );
+        """
+    )
+    db.exec("create index if not exists ix_asset_axis_evidence_asset on asset_axis_evidence(asset_id);")
+    db.exec("create index if not exists ix_asset_axis_evidence_axis on asset_axis_evidence(axis_name, axis_value);")
+
+    db.exec(
+        """
+        create table if not exists asset_overrides (
+          id text primary key,
+          asset_id text not null,
+          track text,
+          axis_name text not null,
+          axis_value text,
+          operation text not null,
+          actor text,
+          note text,
+          created_at text not null,
+          expires_at text,
+          foreign key(asset_id) references assets(id) on delete cascade
+        );
+        """
+    )
+    db.exec("create index if not exists ix_asset_overrides_asset on asset_overrides(asset_id);")
+    db.exec("create index if not exists ix_asset_overrides_axis on asset_overrides(axis_name, axis_value);")
+
+    db.exec(
+        """
+        create table if not exists asset_source_link_enrichment (
+          id text primary key,
+          run_id text not null,
+          asset_id text not null,
+          input_url text,
+          final_url text,
+          final_domain text,
+          canonical_url text,
+          og_image_url text,
+          page_title text,
+          og_title text,
+          meta_description text,
+          og_description text,
+          text_excerpt text,
+          hero_image_url text,
+          hero_image_alt text,
+          hero_text_excerpt text,
+          content_type text,
+          http_status integer,
+          redirect_count integer not null default 0,
+          truncated integer not null default 0,
+          fetch_status text not null,
+          error text,
+          content_hash text,
+          created_at text not null,
+          foreign key(run_id) references classification_runs(id) on delete cascade,
+          foreign key(asset_id) references assets(id) on delete cascade
+        );
+        """
+    )
+    db.exec(
+        """
+        create unique index if not exists ux_asset_source_link_enrichment_run_asset
+        on asset_source_link_enrichment(run_id, asset_id);
+        """
+    )
+    db.exec(
+        """
+        create index if not exists ix_asset_source_link_enrichment_asset
+        on asset_source_link_enrichment(asset_id);
+        """
+    )
+    db.exec(
+        """
+        create index if not exists ix_asset_source_link_enrichment_status
+        on asset_source_link_enrichment(fetch_status);
+        """
+    )
+    _ensure_columns(
+        db,
+        "asset_source_link_enrichment",
+        {
+            "hero_image_url": "text",
+            "hero_image_alt": "text",
+            "hero_text_excerpt": "text",
+        },
+    )
+
+    db.exec(
+        """
+        create table if not exists asset_source_link_qc (
+          id text primary key,
+          run_id text not null,
+          asset_id text not null,
+          track text,
+          inferred_track text,
+          verdict text not null,
+          confidence real,
+          reason text,
+          fetch_status text,
+          created_at text not null,
+          foreign key(run_id) references classification_runs(id) on delete cascade,
+          foreign key(asset_id) references assets(id) on delete cascade
+        );
+        """
+    )
+    db.exec(
+        """
+        create unique index if not exists ux_asset_source_link_qc_run_asset
+        on asset_source_link_qc(run_id, asset_id);
+        """
+    )
+    db.exec(
+        """
+        create index if not exists ix_asset_source_link_qc_asset
+        on asset_source_link_qc(asset_id);
+        """
+    )
+    db.exec(
+        """
+        create index if not exists ix_asset_source_link_qc_verdict
+        on asset_source_link_qc(verdict);
+        """
+    )
+
     _backfill_assets_metadata(db)
+    _backfill_title_field_provenance(db)
+    _backfill_collection_metadata(db)

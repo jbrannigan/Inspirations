@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inspirations!</title>
-    <link rel="stylesheet" href="/app/styles.css?v=5" />
+    <link rel="stylesheet" href="/app/styles.css?v=45" />
     <script type="importmap">
       {
         "imports": {
@@ -101,9 +101,10 @@
           <a href="/app/admin.html" class="header-btn adminLink">Admin</a>
         </div>
       <!-- Canvas review action bar (inside header so it sticks with topbar) -->
-      <div id="canvasActionBar" class="canvas-action-bar" hidden>
+        <div id="canvasActionBar" class="canvas-action-bar" hidden>
         <div class="canvas-action-bar-inner">
           <span id="reviewScopeChip" class="canvas-scope-chip">Scope: Entire library</span>
+          <span id="reviewActorChipCanvas" class="canvas-reviewer-chip">Reviewer: Not signed in</span>
           <span id="canvasSelectionCount" class="canvas-selection-count">0 selected</span>
           <span id="reviewSelectionToolChip" class="canvas-selection-tool-chip" hidden>Selection: Click</span>
           <div class="canvas-action-buttons">
@@ -111,7 +112,6 @@
             <button id="canvasHideLocal" class="canvas-action-btn canvas-action-hide-local" type="button" disabled>↘ Hide in this collection</button>
             <button id="canvasHideGlobal" class="canvas-action-btn canvas-action-hide-global" type="button" disabled>✗ Hide globally</button>
             <button id="canvasFlag" class="canvas-action-btn canvas-action-flag" type="button" disabled>🚩 Flag</button>
-            <button id="canvasTag" class="canvas-action-btn canvas-action-tag" type="button" disabled>🏷️ Tag</button>
             <button id="canvasClear" class="canvas-action-btn" type="button">Clear</button>
           </div>
           <div class="canvas-mode-toggle">
@@ -123,17 +123,20 @@
     </header>
 
     <div id="chatResponse" class="chat-response-bar" hidden></div>
-    <div id="filterIndicator" class="filter-indicator" hidden>
-      <span class="filter-indicator-arrow">↳</span>
-      <span id="filterIndicatorText"></span>
-      <button id="clearFilterIndicator" class="filter-indicator-clear" type="button">&times; Clear</button>
-    </div>
 
     <div class="layout">
-      <button id="sidebarExpandHandle" class="sidebar-handle sidebar-expand-handle" type="button" title="Show side panel" aria-label="Show side panel" hidden>&#9656;</button>
+      <button id="sidebarExpandHandle" class="sidebar-handle sidebar-expand-handle" type="button" title="Expand sidebar" aria-label="Expand sidebar" hidden>
+        <svg class="sidebar-handle-icon" width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+          <path d="M7 5L11 9L7 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
       <!-- Left sidebar -->
       <aside class="sidebar">
-        <button id="sidebarCollapseHandle" class="sidebar-handle sidebar-collapse-handle" type="button" title="Hide side panel" aria-label="Hide side panel">&#9666;</button>
+        <button id="sidebarCollapseHandle" class="sidebar-handle sidebar-collapse-handle" type="button" title="Collapse sidebar" aria-label="Collapse sidebar">
+          <svg class="sidebar-handle-icon" width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+            <path d="M11 5L7 9L11 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
         <div class="sidebar-section">
           <h3 class="sidebar-heading">Status</h3>
           <div id="statusChips" class="chip-group">
@@ -142,10 +145,16 @@
             <button class="filter-chip" data-triage="keeper">Keepers</button>
             <button class="filter-chip" data-triage="hidden">Hidden</button>
             <button class="filter-chip" data-triage="needs-comment">Needs comment</button>
-            <button class="filter-chip" data-triage="flagged" id="flaggedChip" hidden>🚩 Flagged</button>
+            <button class="filter-chip" data-triage="flagged" id="flaggedChip" hidden>Flagged</button>
           </div>
         </div>
-        <div class="sidebar-section sidebar-tree-section">
+        <div class="sidebar-section sidebar-collections-section" id="collectionSidebarSection">
+          <h3 class="sidebar-heading">Collections</h3>
+          <div id="collectionTree" class="catalog-tree">
+            <div class="muted sidebar-loading">Loading…</div>
+          </div>
+        </div>
+        <div class="sidebar-section sidebar-tree-section" id="browseSidebarSection">
           <h3 class="sidebar-heading">Browse</h3>
           <div id="catalogTree" class="catalog-tree">
             <div class="muted sidebar-loading">Loading…</div>
@@ -157,14 +166,22 @@
         </div>
         <div class="sidebar-section">
           <button id="newCollection" class="new-item-btn" type="button">+ New Collection</button>
+          <button id="shareCollections" class="new-item-btn new-item-btn-secondary" type="button">Share Collections</button>
+          <button id="manageCollectionVisibility" class="new-item-btn new-item-btn-secondary" type="button">Manage Visibility</button>
         </div>
       </aside>
+      <div id="sidebarResizeHandle" class="sidebar-resize-handle" title="Resize sidebar" aria-hidden="true"></div>
 
       <!-- Main content -->
       <main class="content">
         <div class="stats-bar">
           <span id="stats" class="stats-count">Loading…</span>
+          <span id="actorContextChip" class="actor-context-chip" hidden></span>
           <span id="canvasNarrative" class="stats-narrative"></span>
+          <span id="filterSummary" class="stats-filter" hidden>
+            <span id="filterSummaryText"></span>
+            <button id="clearFilterSummary" class="stats-filter-clear" type="button">Clear filters</button>
+          </span>
         </div>
         <div id="contextLinkBanner" class="context-link-banner" hidden role="status" aria-live="polite"></div>
 
@@ -192,6 +209,7 @@
           <div class="review-header">
             <button id="reviewBack" class="review-back-btn" type="button">← Back to browsing</button>
             <span id="reviewCounter" class="review-counter"></span>
+            <span id="reviewActorChip" class="review-actor-chip">Reviewer: Not signed in</span>
             <div class="review-progress-track">
               <div id="reviewProgressBar" class="review-progress-bar"></div>
             </div>
@@ -199,38 +217,92 @@
 
           <div id="reviewCard" class="review-card">
             <div class="review-image">
+              <div id="reviewMediaOverlay" class="media-reliability-overlay" hidden></div>
               <img id="reviewImg" alt="" />
             </div>
             <div class="review-info">
               <h2 id="reviewTitle" class="review-title"></h2>
               <p id="reviewMeta" class="review-meta"></p>
+              <p id="reviewAssetId" class="review-asset-id"></p>
               <p id="reviewDesc" class="review-desc"></p>
               <a id="reviewSourceLink" href="#" target="_blank" rel="noopener" class="review-source-link">View on source ↗</a>
+              <div id="reviewClassificationPanel" class="modal-classification-panel review-track-panel" hidden>
+                <div class="sectionTitle">Track Review</div>
+                <div id="reviewClassificationStatus" class="modal-classification-status muted" hidden></div>
+                <div class="modal-classification-rows">
+                  <div class="modal-classification-row">
+                    <div class="modal-classification-label">Current track</div>
+                    <div id="reviewClassificationCurrent" class="modal-classification-value"></div>
+                  </div>
+                  <div id="reviewClassificationSourceRow" class="modal-classification-row" hidden>
+                    <div class="modal-classification-label">Suggested track</div>
+                    <div class="modal-classification-value-wrap">
+                      <div id="reviewClassificationSource" class="modal-classification-value"></div>
+                      <div id="reviewClassificationSourceReason" class="modal-title-note muted" hidden></div>
+                    </div>
+                  </div>
+                  <div id="reviewClassificationOverrideRow" class="modal-classification-row" hidden>
+                    <div class="modal-classification-label">Human review</div>
+                    <div class="modal-classification-value-wrap">
+                      <div id="reviewClassificationOverride" class="modal-classification-value"></div>
+                      <div id="reviewClassificationOverrideMeta" class="modal-title-note muted" hidden></div>
+                    </div>
+                  </div>
+                  <div id="reviewClassificationFocusRow" class="modal-classification-row" hidden>
+                    <div class="modal-classification-label">Review focus</div>
+                    <div id="reviewClassificationFocus" class="modal-classification-value"></div>
+                  </div>
+                  <div id="reviewClassificationMediaRow" class="modal-classification-row" hidden>
+                    <div class="modal-classification-label">Media issue</div>
+                    <div id="reviewClassificationMedia" class="modal-classification-value"></div>
+                  </div>
+                </div>
+                <div id="reviewClassificationEditor" class="modal-title-editor" hidden>
+                  <label for="reviewClassificationMoveTo" class="modal-title-edit-label">Set track to</label>
+                  <select id="reviewClassificationMoveTo" class="modal-classification-select">
+                    <option value="style_product_decor">Style / Decor</option>
+                    <option value="construction_concern">Construction</option>
+                    <option value="home_maintenance_diy">Maintenance / DIY</option>
+                  </select>
+                  <label for="reviewClassificationFocusSelect" class="modal-title-edit-label">Review focus (optional)</label>
+                  <select id="reviewClassificationFocusSelect" class="modal-classification-select">
+                    <option value="">None</option>
+                    <option value="landscaping">Landscaping</option>
+                    <option value="inspection">Inspection</option>
+                  </select>
+                  <label for="reviewClassificationMediaSelect" class="modal-title-edit-label">Media issue (optional)</label>
+                  <select id="reviewClassificationMediaSelect" class="modal-classification-select">
+                    <option value="">None</option>
+                    <option value="trust_title_source">Trust title / source</option>
+                    <option value="thumbnail_placeholder">Thumbnail is placeholder</option>
+                    <option value="thumbnail_mismatch">Thumbnail mismatches content</option>
+                  </select>
+                  <label for="reviewClassificationComment" class="modal-title-edit-label">Reason (optional)</label>
+                  <textarea id="reviewClassificationComment" class="modal-classification-comment" placeholder="Optional reason for this choice…"></textarea>
+                  <div class="modal-title-actions">
+                    <button id="reviewClassificationKeepBtn" class="header-btn modal-utility-btn" type="button">Keep current</button>
+                    <button id="reviewClassificationSaveBtn" class="header-btn modal-utility-btn" type="button">Move</button>
+                    <button id="reviewClassificationIrrelevantBtn" class="header-btn modal-utility-btn" type="button">Mark irrelevant</button>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
           <div class="review-actions">
-            <button id="reviewHideBtn" class="review-btn review-btn-hide" type="button" title="Hide (← or S)">
-              <span class="review-btn-icon">✗</span>
-              <span class="review-btn-label">Hide</span>
+            <button id="reviewPrevBtn" class="review-btn review-btn-prev" type="button" title="Go back (Z)" disabled>
+              <span class="review-btn-icon">↩</span>
+              <span class="review-btn-label">Go back</span>
             </button>
             <button id="reviewSkipBtn" class="review-btn review-btn-skip" type="button" title="Skip (Space or ↓)">
               <span class="review-btn-icon">→</span>
-              <span class="review-btn-label">Skip</span>
+              <span class="review-btn-label">Skip for now</span>
             </button>
-            <div class="review-keep-wrap">
-              <button id="reviewKeepBtn" class="review-btn review-btn-keep" type="button" title="Keep (→ or K)">
-                <span class="review-btn-icon">♥</span>
-                <span class="review-btn-label">Love it</span>
-              </button>
-              <label class="comment-later-label">
-                <input type="checkbox" id="commentLater" />
-                Comment later
-              </label>
-            </div>
+            <button id="reviewUndo" class="review-btn review-btn-prev" type="button" title="Undo (Z)" disabled>
+              <span class="review-btn-icon">↺</span>
+              <span class="review-btn-label">Undo</span>
+            </button>
           </div>
-
-          <button id="reviewUndo" class="review-undo-btn" type="button" title="Undo (Z)">↩ Undo</button>
 
           <!-- Review complete -->
           <div id="reviewComplete" class="review-complete" hidden>
@@ -252,64 +324,303 @@
           <div class="modalHeader">
             <div class="modal-title-block">
               <span id="modalBadge" class="content-kind-badge" hidden></span>
-              <span id="modalKeeperStar" class="modal-keeper-star" hidden>★</span>
               <div id="modalTitle" class="modalTitle"></div>
               <span id="modalTitleQuality" class="title-quality-badge modal-title-quality" hidden></span>
               <div id="modalMeta" class="muted"></div>
-              <div id="modalAssetIdRow" class="modal-asset-id-row">
-                <button id="copyAssetIdBtn" class="iconBtn" type="button" title="Copy item ID">Copy ID</button>
+              <div id="modalActorChip" class="actor-context-chip modal-actor-chip" hidden></div>
+              <div id="modalAssetIdRow" class="modal-asset-id-row" hidden>
+                <span class="modal-asset-id-label">Item ID</span>
+                <span id="modalAssetIdText" class="modal-asset-id"></span>
               </div>
               <div id="modalCreator" class="muted" hidden></div>
+              <div id="modalSourceLinks" class="modal-source-links" hidden>
+                <a id="sourceLink" href="#" target="_blank" rel="noopener">Open original</a>
+                <span id="sourceSiteRow" hidden>
+                  <a id="sourceSiteLink" href="#" target="_blank" rel="noopener" class="source-site-link">Original site ↗</a>
+                </span>
+              </div>
             </div>
             <div class="modal-header-actions">
-              <div id="modalReviewGroup" class="modal-action-group modal-review-group">
-                <span class="modal-action-group-label modal-review-label">Review</span>
-                <span id="modalReviewScope" class="modal-review-scope-chip">Scope: Entire library</span>
-                <button id="modalFlagBtn" class="modal-triage-btn modal-flag-btn" type="button" title="Flag for review — wrong thumbnail or needs attention">🚩 Flag</button>
-                <button id="modalTagBtn" class="modal-triage-btn" type="button" title="Tag for diagnosis">🏷️ Tag</button>
-                <button id="modalKeepBtn" class="modal-triage-btn modal-keep-btn" type="button">✓ Keep</button>
-                <button id="modalHideLocalBtn" class="modal-triage-btn modal-hide-local-btn" type="button" title="Remove from active collection scope">↘ Hide in this collection</button>
-                <button id="modalHideGlobalBtn" class="modal-triage-btn modal-hide-btn" type="button">✗ Hide globally</button>
+              <div id="modalNavGroup" class="modal-action-group modal-nav-group" hidden>
+                <button id="modalPrevBtn" class="header-btn modal-utility-btn" type="button">Prev</button>
+                <span id="modalNavStatus" class="modal-action-group-label">1 of 1</span>
+                <button id="modalNextBtn" class="header-btn modal-utility-btn" type="button">Next</button>
               </div>
               <div id="modalShareGroup" class="modal-action-group modal-share-group">
-                <span class="modal-action-group-label">Share</span>
-                <button id="modalShareLinkBtn" class="header-btn modal-utility-btn" type="button">Copy Link</button>
-                <button id="modalShareEmailBtn" class="header-btn modal-utility-btn" type="button">Email</button>
-                <button id="modalShareMessageBtn" class="header-btn modal-utility-btn" type="button">Message</button>
+                <button id="modalSharePrimaryBtn" class="header-btn modal-utility-btn modal-share-primary" type="button">Copy Link</button>
                 <button id="printAssetBtn" class="header-btn modal-utility-btn" type="button">Print</button>
               </div>
             </div>
           <button id="closeModal" class="modalCloseX" type="button" aria-label="Close">&times;</button>
         </div>
         <div class="modalBody">
-          <div class="imageStage" id="imageStage">
+          <div class="imageStageWrap">
+            <div id="modalStagePrompt" class="modal-stage-prompt" hidden></div>
+            <div class="imageStage" id="imageStage">
+            <div id="modalMediaOverlay" class="media-reliability-overlay" hidden></div>
+            <div id="modalMediaStatus" class="modal-media-status" hidden></div>
             <img id="modalImage" alt="" />
             <video id="modalVideo" controls playsinline preload="metadata" hidden></video>
             <div id="floatingNote" class="floatingNote hidden">
               <textarea id="floatingText" placeholder="Type note…"></textarea>
             </div>
+            </div>
           </div>
-          <div class="notes">
+          <div id="modalNotesColumn" class="notes">
+            <div id="modalTitlePanel" class="modal-title-panel" hidden>
+              <div class="sectionTitle">Title</div>
+              <div class="modal-title-rows">
+                <div class="modal-title-row">
+                  <div class="modal-title-label">Working</div>
+                  <div class="modal-title-value-wrap">
+                    <div id="modalWorkingTitleValue" class="modal-title-value"></div>
+                    <div id="modalWorkingTitleMeta" class="modal-title-note muted" hidden></div>
+                  </div>
+                </div>
+                <div id="modalSuggestedTitleRow" class="modal-title-row" hidden>
+                  <div class="modal-title-label">Suggested</div>
+                  <div class="modal-title-value-wrap">
+                    <div id="modalSuggestedTitleValue" class="modal-title-value"></div>
+                    <div id="modalSuggestedTitleMeta" class="modal-title-note muted" hidden></div>
+                  </div>
+                </div>
+                <div id="modalOriginalTitleRow" class="modal-title-row" hidden>
+                  <div class="modal-title-label">Best original</div>
+                  <div class="modal-title-value-wrap">
+                    <div id="modalOriginalTitleValue" class="modal-title-value"></div>
+                    <div id="modalOriginalTitleMeta" class="modal-title-note muted" hidden></div>
+                  </div>
+                </div>
+              </div>
+              <div id="modalTitleEditor" class="modal-title-editor" hidden>
+                <label for="modalWorkingTitleInput" class="modal-title-edit-label">Edit working title</label>
+                <input id="modalWorkingTitleInput" class="modal-title-input" type="text" maxlength="200" />
+                <div class="modal-title-actions">
+                  <button id="modalTitleSaveBtn" class="header-btn modal-utility-btn" type="button">Save title</button>
+                  <button id="modalTitleUseSuggestedBtn" class="header-btn modal-utility-btn" type="button">Use suggested</button>
+                </div>
+              </div>
+            </div>
+            <div id="modalClassificationPanel" class="modal-classification-panel" hidden>
+              <div class="sectionTitle">Track Review</div>
+              <div id="modalClassificationStatus" class="modal-classification-status muted" hidden></div>
+              <div class="modal-classification-rows">
+                <div class="modal-classification-row">
+                  <div class="modal-classification-label">Current track</div>
+                  <div id="modalClassificationCurrent" class="modal-classification-value"></div>
+                </div>
+                <div id="modalClassificationSourceRow" class="modal-classification-row" hidden>
+                  <div class="modal-classification-label">Suggested track</div>
+                  <div class="modal-classification-value-wrap">
+                    <div id="modalClassificationSource" class="modal-classification-value"></div>
+                    <div id="modalClassificationSourceReason" class="modal-title-note muted" hidden></div>
+                  </div>
+                </div>
+                <div id="modalClassificationOverrideRow" class="modal-classification-row" hidden>
+                  <div class="modal-classification-label">Human review</div>
+                  <div class="modal-classification-value-wrap">
+                    <div id="modalClassificationOverride" class="modal-classification-value"></div>
+                    <div id="modalClassificationOverrideMeta" class="modal-title-note muted" hidden></div>
+                  </div>
+                </div>
+                <div id="modalClassificationFocusRow" class="modal-classification-row" hidden>
+                  <div class="modal-classification-label">Review focus</div>
+                  <div id="modalClassificationFocus" class="modal-classification-value"></div>
+                </div>
+                <div id="modalClassificationMediaRow" class="modal-classification-row" hidden>
+                  <div class="modal-classification-label">Media issue</div>
+                  <div id="modalClassificationMedia" class="modal-classification-value"></div>
+                </div>
+              </div>
+              <div id="modalClassificationEditor" class="modal-title-editor" hidden>
+                <label for="modalClassificationMoveTo" class="modal-title-edit-label">Set track to</label>
+                <select id="modalClassificationMoveTo" class="modal-classification-select">
+                  <option value="style_product_decor">Style / Decor</option>
+                  <option value="construction_concern">Construction</option>
+                  <option value="home_maintenance_diy">Maintenance / DIY</option>
+                </select>
+                <label for="modalClassificationFocusSelect" class="modal-title-edit-label">Review focus (optional)</label>
+                <select id="modalClassificationFocusSelect" class="modal-classification-select">
+                  <option value="">None</option>
+                  <option value="landscaping">Landscaping</option>
+                  <option value="inspection">Inspection</option>
+                </select>
+                <label for="modalClassificationMediaSelect" class="modal-title-edit-label">Media issue (optional)</label>
+                <select id="modalClassificationMediaSelect" class="modal-classification-select">
+                  <option value="">None</option>
+                  <option value="trust_title_source">Trust title / source</option>
+                  <option value="thumbnail_placeholder">Thumbnail is placeholder</option>
+                  <option value="thumbnail_mismatch">Thumbnail mismatches content</option>
+                </select>
+                <label for="modalClassificationComment" class="modal-title-edit-label">Reason (optional)</label>
+                <textarea id="modalClassificationComment" class="modal-classification-comment" placeholder="Optional reason for this choice…"></textarea>
+                <div class="modal-title-actions">
+                  <button id="modalClassificationKeepBtn" class="header-btn modal-utility-btn" type="button">Keep current</button>
+                  <button id="modalClassificationSaveBtn" class="header-btn modal-utility-btn" type="button">Move</button>
+                  <button id="modalClassificationIrrelevantBtn" class="header-btn modal-utility-btn" type="button">Mark irrelevant</button>
+                </div>
+              </div>
+            </div>
+            <div id="modalSourceCandidatePanel" class="modal-classification-panel" hidden>
+              <div class="sectionTitle">Source Candidate</div>
+              <div id="modalSourceCandidateStatus" class="modal-classification-status muted" hidden></div>
+              <div id="modalSourceCandidateImageWrap" class="modal-source-candidate-image-wrap" hidden>
+                <img id="modalSourceCandidateImage" class="modal-source-candidate-image" alt="" />
+              </div>
+              <div class="modal-classification-rows">
+                <div id="modalSourceCandidateTitleRow" class="modal-classification-row" hidden>
+                  <div class="modal-classification-label">Page title</div>
+                  <div id="modalSourceCandidateTitle" class="modal-classification-value"></div>
+                </div>
+                <div id="modalSourceCandidateHeroTextRow" class="modal-classification-row" hidden>
+                  <div class="modal-classification-label">Hero text</div>
+                  <div id="modalSourceCandidateHeroText" class="modal-classification-value"></div>
+                </div>
+                <div id="modalSourceCandidateTextRow" class="modal-classification-row" hidden>
+                  <div class="modal-classification-label">Page excerpt</div>
+                  <div id="modalSourceCandidateText" class="modal-classification-value"></div>
+                </div>
+              </div>
+              <div class="modal-title-actions">
+                <button id="modalSourceCandidateCaptureBtn" class="header-btn modal-utility-btn" type="button">Capture candidate</button>
+                <button id="modalSourceCandidatePromoteBtn" class="header-btn modal-utility-btn" type="button">Use candidate image</button>
+              </div>
+            </div>
             <div id="modalDescription" class="modal-description" hidden></div>
             <div id="modalHashtags" class="modal-hashtags" hidden></div>
-            <div id="modalLabels" class="modal-labels" hidden></div>
+            <section id="modalAnnotationsSection" class="modal-side-section">
+              <div id="modalAnnotationsTitle" class="sectionTitle">Annotations</div>
+              <div id="annList" class="list"></div>
+              <div class="muted ann-hint-row">
+                <span id="annHintText">Click on the image to add a note.</span>
+                <label id="annQuestionLabel" class="ann-question-label"><input type="checkbox" id="annQuestionToggle"> Question</label>
+              </div>
+            </section>
+            <section id="modalNotesSection" class="modal-side-section">
+              <div id="modalNotesTitle" class="sectionTitle">Notes</div>
+              <div id="assetNotesHint" class="muted ann-readonly-note" hidden></div>
+              <textarea id="assetNotes" placeholder="General notes about this image…"></textarea>
+            </section>
+            <section id="modalLabelsSection" class="modal-side-section" hidden>
+              <div id="modalLabelsTitle" class="sectionTitle" hidden>Labels</div>
+              <div id="modalLabels" class="modal-labels" hidden></div>
+            </section>
             <div id="modalEngagement" class="modal-engagement muted" hidden></div>
             <div id="modalDimensions" class="modal-dimensions muted" hidden></div>
-            <div class="sectionTitle">Annotations</div>
-            <div id="annList" class="list"></div>
-            <div class="muted ann-hint-row">
-              Click on the image to add a note.
-              <label class="ann-question-label"><input type="checkbox" id="annQuestionToggle"> Question</label>
-            </div>
-            <div class="sectionTitle mt-3">Notes</div>
-            <textarea id="assetNotes" placeholder="General notes about this image…"></textarea>
-            <div class="muted mt-2">
-              Source: <a id="sourceLink" href="#" target="_blank" rel="noopener">Open original</a>
-            </div>
-            <div class="mt-2" id="sourceSiteRow" hidden>
-              <a id="sourceSiteLink" href="#" target="_blank" rel="noopener" class="source-site-link">Original site ↗</a>
-            </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Collection share modal -->
+    <div id="collectionShareModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="collectionShareTitle">
+      <div class="modalContent collectionShareContent">
+        <div class="modalHeader">
+          <div>
+            <div id="collectionShareTitle" class="modalTitle">Share Collections</div>
+            <div class="muted">Choose a collection, set intent, assign collaborators, and generate collaborator-specific links.</div>
+          </div>
+          <button id="closeCollectionShare" type="button">Close</button>
+        </div>
+        <div class="collectionShareBody">
+          <section class="collectionShareListSection">
+            <div class="collectionBulkSectionHeader">
+              <h3>Collections</h3>
+              <span id="collectionShareCount" class="muted">0 collections</span>
+            </div>
+            <div class="collectionShareFilters" id="collectionShareFilters">
+              <button id="collectionShareFilterAll" class="collectionShareFilter is-active" type="button">All</button>
+              <button id="collectionShareFilterWorking" class="collectionShareFilter" type="button">Working</button>
+              <button id="collectionShareFilterShared" class="collectionShareFilter" type="button">Shared</button>
+            </div>
+            <div id="collectionShareList" class="collectionBulkList"></div>
+          </section>
+          <section class="collectionBulkDetailSection">
+            <div class="collectionBulkSectionHeader">
+              <h3>Collection Details</h3>
+              <span id="collectionShareDetailStatus" class="muted">Select a collection to edit sharing.</span>
+            </div>
+            <div id="collectionShareDetailEmpty" class="muted">Choose an active collection to edit its intent and sharing.</div>
+            <div id="collectionShareDetailForm" class="collectionDetailForm" hidden>
+              <div id="collectionDetailSummary" class="collectionDetailSummary">
+                <div class="collectionDetailSummaryTop">
+                  <div id="collectionDetailSummaryName" class="collectionDetailSummaryName">Collection</div>
+                  <span id="collectionDetailSummaryIntentBadge" class="collectionDetailSummaryBadge">Working</span>
+                </div>
+                <div id="collectionDetailSummaryMeta" class="collectionDetailSummaryMeta muted"></div>
+                <div id="collectionDetailSummaryDescription" class="collectionDetailSummaryDescription" hidden></div>
+              </div>
+              <label class="collectionDetailField">
+                <span>Name</span>
+                <input id="collectionDetailName" type="text" maxlength="160" />
+              </label>
+              <label class="collectionDetailField">
+                <span>Description</span>
+                <textarea id="collectionDetailDescription" rows="2" maxlength="500"></textarea>
+              </label>
+              <label class="collectionDetailField">
+                <span>Intent</span>
+                <select id="collectionDetailIntent">
+                  <option value="working">Working</option>
+                  <option value="shared">Shared</option>
+                </select>
+              </label>
+              <div id="collectionDetailCollaboratorsWrap" class="collectionDetailField" hidden>
+                <span>People</span>
+                <div id="collectionDetailCollaboratorsHint" class="muted">Choose the named people who should receive this collection.</div>
+                <div id="collectionDetailCollaborators" class="collectionDetailCollaborators"></div>
+                <div id="collectionDetailCollaboratorsSummary" class="collectionDetailInlineSummary" hidden></div>
+                <div class="muted">Shared collections require at least one named collaborator. Questions are always enabled.</div>
+              </div>
+              <div id="collectionDetailLinksWrap" class="collectionDetailField">
+                <span>Collection links</span>
+                <div id="collectionDetailLinksHint" class="muted">Links are generated from the last saved shared state.</div>
+                <div id="collectionDetailLinks" class="collectionDetailLinks"></div>
+              </div>
+              <div class="collectionDetailActions">
+                <span id="collectionDetailSaveStatus" class="muted"></span>
+                <button id="collectionDetailSaveBtn" type="button">Save changes</button>
+              </div>
+            </div>
+          </section>
+        </div>
+        <div class="collectionBulkActions">
+          <button id="cancelCollectionShare" type="button">Done</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Collection visibility modal -->
+    <div id="collectionBulkModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="collectionBulkTitle">
+      <div class="modalContent collectionBulkContent">
+        <div class="modalHeader">
+          <div>
+            <div id="collectionBulkTitle" class="modalTitle">Manage Visibility</div>
+            <div class="muted">Hide active collections, restore hidden ones, or permanently delete hidden collections.</div>
+          </div>
+          <button id="closeCollectionBulk" type="button">Close</button>
+        </div>
+        <div class="collectionBulkBody">
+          <section class="collectionBulkSection">
+            <div class="collectionBulkSectionHeader">
+              <h3>Active Collections</h3>
+              <span id="collectionBulkActiveCount" class="muted">0 collections</span>
+            </div>
+            <div id="collectionBulkActiveList" class="collectionBulkList"></div>
+          </section>
+          <section class="collectionBulkSection">
+            <div class="collectionBulkSectionHeader">
+              <h3>Hidden Collections</h3>
+              <span id="collectionBulkHiddenCount" class="muted">0 collections</span>
+            </div>
+            <div id="collectionBulkHiddenList" class="collectionBulkList"></div>
+          </section>
+        </div>
+        <div class="collectionBulkActions">
+          <button id="collectionBulkHideBtn" type="button">Hide selected</button>
+          <button id="collectionBulkRestoreBtn" type="button">Restore selected</button>
+          <button id="collectionBulkDeleteBtn" type="button">Delete hidden</button>
+          <button id="cancelCollectionBulk" type="button">Done</button>
         </div>
       </div>
     </div>
@@ -450,9 +761,9 @@
 
     <div id="toastContainer" class="toast-container" aria-live="polite"></div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
-    <script src="/app/shared.js?v=1"></script>
-    <script src="/app/explorer.js?v=1"></script>
-    <script src="/app/attractor-explorer.js?v=1"></script>
-    <script src="/app/app.js?v=17"></script>
+    <script src="/app/shared.js?v=3"></script>
+    <script src="/app/explorer.js?v=2"></script>
+    <script src="/app/attractor-explorer.js?v=3"></script>
+    <script src="/app/app.js?v=86"></script>
   </body>
 </html>

@@ -47,7 +47,22 @@ PYTHONPATH=src python3 -m inspirations import facebook-scrape --dir data/scrape/
 PYTHONPATH=src python3 -m inspirations thumbs --size 512
 ```
 
-4. Start the app:
+4. Configure Dave chat key (Anthropic):
+```sh
+security add-generic-password -U \
+  -a "$USER" \
+  -s inspirations_anthropic_api_key \
+  -w 'sk-ant-REPLACE_WITH_REAL_KEY'
+```
+
+Or for a one-off shell session:
+```sh
+export ANTHROPIC_API_KEY='sk-ant-REPLACE_WITH_REAL_KEY'
+```
+
+See `docs/LOCAL_DAVE_API_KEY.md` for verification and troubleshooting.
+
+5. Start the app:
 ```sh
 PYTHONPATH=src python3 -m inspirations serve --host 127.0.0.1 --port 8000
 ```

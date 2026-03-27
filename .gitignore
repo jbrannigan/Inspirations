@@ -21,6 +21,10 @@ venv/
 .env
 .env.*
 admin_password.txt
+CONTEXT.md
+context.md
 
 # Generated / scratch
 tools/cluster_data.json
+.playwright-cli/
+.claude/worktrees/

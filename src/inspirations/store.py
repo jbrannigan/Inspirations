@@ -6,7 +6,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from .db import Db
+from .db import Db, infer_collection_provenance
+from .title_workflow import enrich_assets_with_title_info
 
 _SCAN_REF_RE = re.compile(r"^scan://([a-f0-9]{64})(?:#p(\d+))?$", re.IGNORECASE)
 _SCAN_DOC_RE = re.compile(r"\s-\sdoc\s+(\d+)(?:\s+p(\d+))?$", re.IGNORECASE)
@@ -66,10 +67,151 @@ _SCAN_AUTOGEN_TOKENS = {
     "untitled",
 }
 _MAX_SCAN_DOC_COLLAPSE_PAGES = 6
+_COLLECTION_PROVENANCE_LABELS = {
+    "human_curated": "Human-curated",
+    "source_mirror": "Mirrored source",
+    "ai_derived_representative": "AI-derived representative",
+    "workflow_review": "Workflow review",
+    "workflow_cohort": "Workflow cohort",
+    "system_hidden": "System",
+}
+_COLLECTION_PROVENANCE_BADGES = {
+    "source_mirror": "Mirror",
+    "ai_derived_representative": "AI set",
+    "workflow_review": "Review",
+    "workflow_cohort": "Workflow",
+    "system_hidden": "System",
+}
+_COLLECTION_INTENTS = {"working", "shared"}
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def collection_provenance_label(kind: str) -> str:
+    key = str(kind or "").strip()
+    return _COLLECTION_PROVENANCE_LABELS.get(key, "Collection")
+
+
+def collection_provenance_badge(kind: str) -> str:
+    key = str(kind or "").strip()
+    return _COLLECTION_PROVENANCE_BADGES.get(key, "")
+
+
+def _collection_workflow_variant(record: dict[str, Any]) -> tuple[str, str, str]:
+    kind = str(record.get("provenance_kind") or "").strip()
+    name = str(record.get("name") or "").strip()
+    if kind != "workflow_cohort":
+        return (
+            collection_provenance_label(kind),
+            collection_provenance_badge(kind),
+            str(record.get("provenance_note") or "").strip(),
+        )
+    lower = name.lower()
+    if lower.endswith("(cleaned)"):
+        return (
+            "Working cohort",
+            "Working",
+            "Cleaned working subset kept for active use.",
+        )
+    if lower.endswith("(excluded)"):
+        return (
+            "Excluded cohort",
+            "Excluded",
+            "Excluded provenance subset preserved for reversibility.",
+        )
+    return (
+        "Imported cohort",
+        "Raw",
+        "Raw imported batch preserved for provenance.",
+    )
+
+
+def decorate_collection_record(record: dict[str, Any]) -> dict[str, Any]:
+    kind = str(record.get("provenance_kind") or "").strip() or "human_curated"
+    record["provenance_kind"] = kind
+    record["provenance_note"] = str(record.get("provenance_note") or "").strip()
+    label, badge, note = _collection_workflow_variant(record)
+    record["provenance_label"] = label
+    record["provenance_badge"] = badge
+    if note:
+        record["provenance_note"] = note
+    record["curator"] = str(record.get("curator") or "").strip()
+    intent = str(record.get("intent") or "").strip().lower()
+    if intent not in _COLLECTION_INTENTS:
+        intent = "working"
+    record["intent"] = intent
+    record["shared_actor_id"] = str(record.get("shared_actor_id") or "").strip()
+    record["shared_actor_name"] = str(record.get("shared_actor_name") or "").strip()
+    shared_actor_ids = record.get("shared_actor_ids") or []
+    if not isinstance(shared_actor_ids, list):
+        shared_actor_ids = []
+    shared_actor_names = record.get("shared_actor_names") or []
+    if not isinstance(shared_actor_names, list):
+        shared_actor_names = []
+    record["shared_actor_ids"] = [str(v).strip() for v in shared_actor_ids if str(v).strip()]
+    record["shared_actor_names"] = [str(v).strip() for v in shared_actor_names if str(v).strip()]
+    return record
+
+
+def _normalize_collection_intent(intent: str) -> str:
+    text = str(intent or "").strip().lower()
+    return text if text in _COLLECTION_INTENTS else "working"
+
+
+def _normalize_shared_actor_ids(shared_actor_id: str = "", shared_actor_ids: list[str] | tuple[str, ...] | None = None) -> list[str]:
+    values: list[str] = []
+    first = str(shared_actor_id or "").strip()
+    if first:
+        values.append(first)
+    for raw in list(shared_actor_ids or []):
+        text = str(raw or "").strip()
+        if text:
+            values.append(text)
+    out: list[str] = []
+    seen: set[str] = set()
+    for actor_id in values:
+        if actor_id in seen:
+            continue
+        seen.add(actor_id)
+        out.append(actor_id)
+    return out
+
+
+def _validate_shared_collection_actor_ids(db: Db, actor_ids: list[str]) -> list[dict[str, Any]]:
+    ids = [str(v).strip() for v in actor_ids if str(v).strip()]
+    if not ids:
+        return []
+    placeholders = ",".join(["?"] * len(ids))
+    rows = db.query(
+        f"select id, name, role from actors where id in ({placeholders})",
+        tuple(ids),
+    )
+    by_id = {str(r["id"]): dict(r) for r in rows}
+    missing = [actor_id for actor_id in ids if actor_id not in by_id]
+    if missing:
+        raise ValueError("shared collaborator not found")
+    ordered = [by_id[actor_id] for actor_id in ids]
+    if any(str(row.get("role") or "").strip().lower() == "owner" for row in ordered):
+        raise ValueError("shared collaborator must not be an owner")
+    return ordered
+
+
+def _replace_collection_shares(db: Db, *, collection_id: str, actor_ids: list[str]) -> None:
+    db.exec("delete from collection_shares where collection_id=?", (collection_id,))
+    rows = [
+        (str(uuid.uuid4()), collection_id, actor_id, _now_iso())
+        for actor_id in actor_ids
+    ]
+    if rows:
+        db.executemany(
+            """
+            insert into collection_shares (id, collection_id, actor_id, created_at)
+            values (?, ?, ?, ?)
+            """,
+            rows,
+        )
 
 
 def _csv_values(raw: str) -> list[str]:
@@ -108,6 +250,22 @@ def _scan_doc_page_from_values(source_ref: str, title: str) -> int:
     ref = _scan_ref_parts(source_ref)
     ref_page = ref[1] if ref else None
     return int(title_page or ref_page or 1)
+
+
+def _scan_doc_group_has_explicit_pages(rows: list[dict[str, Any]] | list[Any]) -> bool:
+    if len(rows) <= 1:
+        return False
+    pages: list[int] = []
+    for row in rows:
+        title = str(row.get("title") or "") if isinstance(row, dict) else str(row["title"] or "")
+        _doc_idx, doc_page = _scan_doc_parts(title)
+        if doc_page is None:
+            return False
+        pages.append(int(doc_page))
+    if len(set(pages)) != len(rows):
+        return False
+    ordered = sorted(pages)
+    return ordered == list(range(1, len(rows) + 1))
 
 
 def _scan_doc_display_title(title: str) -> str:
@@ -212,8 +370,19 @@ def _expand_scan_asset_ids(db: Db, asset_ids: list[str]) -> list[str]:
                 members = [aid]
             elif len(members) > _MAX_SCAN_DOC_COLLAPSE_PAGES:
                 # Large inferred scan-doc groups are ambiguous in this dataset;
-                # keep item-level behavior instead of expanding to the whole group.
-                members = [aid]
+                # keep item-level behavior instead of expanding to the whole group,
+                # unless the stored titles explicitly encode page membership.
+                member_rows = [
+                    {
+                        "id": str(c["id"]),
+                        "source_ref": str(c["source_ref"] or ""),
+                        "title": str(c["title"] or ""),
+                    }
+                    for c in candidates
+                    if _scan_doc_key_from_values(str(c["source_ref"] or ""), str(c["title"] or "")) == key
+                ]
+                if not _scan_doc_group_has_explicit_pages(member_rows):
+                    members = [aid]
             scan_member_cache[key] = members
 
         for member_id in members:
@@ -261,7 +430,7 @@ def _collapse_scan_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             ),
         )
         member_ids = _unique_ids([str(r.get("id") or "") for r in sorted_rows])
-        if len(member_ids) > _MAX_SCAN_DOC_COLLAPSE_PAGES:
+        if len(member_ids) > _MAX_SCAN_DOC_COLLAPSE_PAGES and not _scan_doc_group_has_explicit_pages(sorted_rows):
             # Avoid over-collapsing very large inferred groups; expose items individually.
             for row in sorted_rows:
                 item = dict(row)
@@ -301,6 +470,16 @@ def _collapse_scan_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _latest_classification_run_id(db: Db, run_type: str) -> str:
+    return str(
+        db.query_value(
+            "select id from classification_runs where run_type=? order by created_at desc limit 1",
+            (str(run_type or "").strip(),),
+        )
+        or ""
+    ).strip()
+
+
 def _build_asset_filter(
     db: Db,
     *,
@@ -320,10 +499,16 @@ def _build_asset_filter(
     flagged_only: bool = False,
     tagged_only: bool = False,
     include_hidden: bool = False,
+    classification_axis: str = "",
+    classification_value: str = "",
+    exclude_tracks: str = "",
+    viewer_role: str = "",
+    viewer_actor_id: str = "",
 ) -> tuple[str, str, list]:
     """Build WHERE and JOIN clauses for asset queries. Returns (join_sql, where, params)."""
     clauses: list[str] = []
     params: list[Any] = []
+    join_params: list[Any] = []
     joins: list[str] = []
     if ids:
         id_list = [s.strip() for s in ids.split(",") if s.strip()]
@@ -429,6 +614,103 @@ def _build_asset_filter(
         joins.append("join collection_items ci on ci.asset_id = a.id")
         clauses.append("ci.collection_id in (%s)" % ",".join(["?"] * len(collection_ids)))
         params.extend(collection_ids)
+        role = str(viewer_role or "").strip().lower()
+        actor_id = str(viewer_actor_id or "").strip()
+        if role != "owner":
+            joins.append("join collections cfilter on cfilter.id = ci.collection_id")
+            clauses.append("coalesce(cfilter.intent, 'working') = 'shared'")
+            if actor_id:
+                clauses.append(
+                    "("
+                    "coalesce(cfilter.shared_actor_id, '') = ? "
+                    "or exists (select 1 from collection_shares csv where csv.collection_id = cfilter.id and csv.actor_id = ?)"
+                    ")"
+                )
+                params.extend([actor_id, actor_id])
+            else:
+                clauses.append("1 = 0")
+    axis_name = str(classification_axis or "").strip().lower()
+    axis_values = [s.strip() for s in str(classification_value or "").split(",") if s.strip()]
+    exclude_track_values = [s.strip() for s in str(exclude_tracks or "").split(",") if s.strip()]
+    if axis_name:
+        if axis_name == "track":
+            run_id = _latest_classification_run_id(db, "track_gate")
+            if not run_id:
+                clauses.append("1 = 0")
+            else:
+                now_iso = datetime.now(timezone.utc).isoformat()
+                joins.append("join asset_track_assessments ata on ata.asset_id = a.id and ata.run_id = ?")
+                join_params.append(run_id)
+                joins.append(
+                    """
+                    left join (
+                      select ao.asset_id, ao.axis_value
+                      from asset_overrides ao
+                      join (
+                        select asset_id, max(created_at) as max_created_at
+                        from asset_overrides
+                        where axis_name='track'
+                          and operation='set'
+                          and (expires_at is null or expires_at > ?)
+                        group by asset_id
+                      ) latest
+                        on latest.asset_id = ao.asset_id
+                       and latest.max_created_at = ao.created_at
+                      where ao.axis_name='track'
+                        and ao.operation='set'
+                        and (ao.expires_at is null or ao.expires_at > ?)
+                    ) ato on ato.asset_id = a.id
+                    """
+                )
+                join_params.extend([now_iso, now_iso])
+                if axis_values:
+                    clauses.append("coalesce(ato.axis_value, ata.track) in (%s)" % ",".join(["?"] * len(axis_values)))
+                    params.extend(axis_values)
+        else:
+            run_id = _latest_classification_run_id(db, "multi_axis_inference")
+            if not run_id:
+                clauses.append("1 = 0")
+            else:
+                joins.append(
+                    "join asset_axis_memberships aam on aam.asset_id = a.id and aam.run_id = ? and aam.axis_name = ?"
+                )
+                join_params.extend([run_id, axis_name])
+                if axis_values:
+                    clauses.append("aam.axis_value in (%s)" % ",".join(["?"] * len(axis_values)))
+                    params.extend(axis_values)
+    if exclude_track_values:
+        run_id = _latest_classification_run_id(db, "track_gate")
+        if run_id:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            joins.append("left join asset_track_assessments atx on atx.asset_id = a.id and atx.run_id = ?")
+            join_params.append(run_id)
+            joins.append(
+                """
+                left join (
+                  select ao.asset_id, ao.axis_value
+                  from asset_overrides ao
+                  join (
+                    select asset_id, max(created_at) as max_created_at
+                    from asset_overrides
+                    where axis_name='track'
+                      and operation='set'
+                      and (expires_at is null or expires_at > ?)
+                    group by asset_id
+                  ) latest
+                    on latest.asset_id = ao.asset_id
+                   and latest.max_created_at = ao.created_at
+                  where ao.axis_name='track'
+                    and ao.operation='set'
+                    and (ao.expires_at is null or ao.expires_at > ?)
+                ) otx on otx.asset_id = a.id
+                """
+            )
+            join_params.extend([now_iso, now_iso])
+            clauses.append(
+                "coalesce(otx.axis_value, atx.track, '') not in (%s)"
+                % ",".join(["?"] * len(exclude_track_values))
+            )
+            params.extend(exclude_track_values)
     if triage_status:
         statuses = [s.strip() for s in triage_status.split(",") if s.strip()]
         if "pending" in statuses:
@@ -460,7 +742,7 @@ def _build_asset_filter(
         params.append(hidden_collection_id)
     where = "where " + " and ".join(clauses) if clauses else ""
     join_sql = "\n    " + "\n    ".join(joins) if joins else ""
-    return join_sql, where, params
+    return join_sql, where, [*join_params, *params]
 
 
 def list_asset_ids(db: Db, **kwargs) -> list[str]:
@@ -489,6 +771,11 @@ def list_assets(
     flagged_only: bool = False,
     tagged_only: bool = False,
     include_hidden: bool = False,
+    classification_axis: str = "",
+    classification_value: str = "",
+    exclude_tracks: str = "",
+    viewer_role: str = "",
+    viewer_actor_id: str = "",
     limit: int = 200,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
@@ -498,6 +785,8 @@ def list_assets(
         creator=creator, collection_id=collection_id, triage_status=triage_status,
         category=category, needs_annotation=needs_annotation, flagged_only=flagged_only,
         tagged_only=tagged_only, include_hidden=include_hidden,
+        classification_axis=classification_axis, classification_value=classification_value,
+        exclude_tracks=exclude_tracks, viewer_role=viewer_role, viewer_actor_id=viewer_actor_id,
     )
 
     # Total count (same filters, no limit/offset)
@@ -511,10 +800,6 @@ def list_assets(
              (select ai.summary from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1),
              a.ai_summary
            ) as ai_summary,
-           (select ai.json from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_json,
-           (select ai.model from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_model,
-           (select ai.provider from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_provider,
-           (select ai.created_at from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1) as ai_created_at,
            a.created_at, a.imported_at, a.image_url, a.stored_path, a.thumb_path,
            a.triage_status, a.needs_annotation, a.source_url, a.seo_alt_text,
            a.post_text, a.hashtags, a.engagement_json, a.dominant_color,
@@ -553,6 +838,7 @@ def list_assets(
     """
     params += [limit, offset]
     rows = [dict(r) for r in db.query(sql, tuple(params))]
+    enrich_assets_with_title_info(db, rows)
     collapsed = _collapse_scan_rows(rows)
     # Expose the pre-collapse row count so callers can correctly determine
     # has_more when scan rows get collapsed into document groups.
@@ -904,27 +1190,244 @@ def triage_stats(db: Db) -> dict[str, Any]:
     return {"overall": overall, "boards": boards}
 
 
-def list_collections(db: Db) -> list[dict[str, Any]]:
-    rows = db.query(
-        "select id, name, description, created_at, updated_at from collections order by updated_at desc"
+def list_collections(
+    db: Db,
+    *,
+    include_hidden: bool = False,
+    viewer_role: str = "",
+    viewer_actor_id: str = "",
+) -> list[dict[str, Any]]:
+    hidden_collection_id = str(
+        db.query_value("select id from collections where lower(name)='hidden' limit 1") or ""
     )
+    params: list[Any] = [hidden_collection_id]
+    where: list[str] = []
+    role = str(viewer_role or "").strip().lower()
+    actor_id = str(viewer_actor_id or "").strip()
+    if not include_hidden:
+        where.append("coalesce(hidden, 0) = 0")
+    if role != "owner":
+        where.append("coalesce(c.intent, 'working') = 'shared'")
+        if actor_id:
+            where.append(
+                "("
+                "coalesce(c.shared_actor_id, '') = ? "
+                "or exists (select 1 from collection_shares csv where csv.collection_id = c.id and csv.actor_id = ?)"
+                ")"
+            )
+            params.extend([actor_id, actor_id])
+        else:
+            where.append("1 = 0")
+    sql = """
+        select
+            c.id,
+            c.name,
+            c.description,
+            c.created_at,
+            c.updated_at,
+            c.provenance_kind,
+            c.provenance_note,
+            c.curator,
+            coalesce(c.intent, 'working') as intent,
+            c.shared_actor_id,
+            coalesce(c.hidden, 0) as hidden,
+            c.hidden_at,
+            (
+                select count(*)
+                from collection_items ci
+                where ci.collection_id = c.id
+            ) as count_total,
+            (
+                select count(*)
+                from collection_items ci
+                join assets a on a.id = ci.asset_id
+                where ci.collection_id = c.id
+                  and (a.triage_status is null or a.triage_status != 'hidden')
+                  and a.id not in (
+                    select h.asset_id
+                    from collection_items h
+                    where h.collection_id = ?
+                  )
+            ) as count_visible
+        from collections c
+    """
+    if where:
+        sql += " where " + " and ".join(where)
+    sql += " order by c.name collate nocase asc, c.updated_at desc"
+    rows = db.query(sql, tuple(params))
+    collection_ids = [str(r["id"] or "").strip() for r in rows if str(r["id"] or "").strip()]
+    shares_by_collection: dict[str, list[tuple[str, str]]] = {}
+    if collection_ids:
+        share_rows = db.query(
+            f"""
+            select cs.collection_id, cs.actor_id, a.name
+            from collection_shares cs
+            join actors a on a.id = cs.actor_id
+            where cs.collection_id in ({",".join(["?"] * len(collection_ids))})
+            order by a.name collate nocase asc, cs.actor_id asc
+            """,
+            tuple(collection_ids),
+        )
+        for row in share_rows:
+            cid = str(row["collection_id"] or "").strip()
+            if not cid:
+                continue
+            shares_by_collection.setdefault(cid, []).append(
+                (str(row["actor_id"] or "").strip(), str(row["name"] or "").strip())
+            )
     out = []
     for r in rows:
-        count = db.query_value("select count(*) from collection_items where collection_id=?", (r["id"],))
-        d = dict(r)
-        d["count"] = count
+        d = decorate_collection_record(dict(r))
+        shares = shares_by_collection.get(str(d.get("id") or ""), [])
+        if shares:
+            d["shared_actor_ids"] = [actor_id for actor_id, _ in shares if actor_id]
+            d["shared_actor_names"] = [name for _, name in shares if name]
+            if not d.get("shared_actor_id"):
+                d["shared_actor_id"] = d["shared_actor_ids"][0] if d["shared_actor_ids"] else ""
+            if not d.get("shared_actor_name"):
+                d["shared_actor_name"] = d["shared_actor_names"][0] if d["shared_actor_names"] else ""
+        d["count_total"] = int(d.get("count_total") or 0)
+        d["count_visible"] = int(d.get("count_visible") or 0)
+        d["count"] = d["count_visible"]
+        d["hidden"] = int(d.get("hidden") or 0)
         out.append(d)
     return out
 
 
-def create_collection(db: Db, *, name: str, description: str = "") -> dict[str, Any]:
+def create_collection(
+    db: Db,
+    *,
+    name: str,
+    description: str = "",
+    intent: str = "working",
+    shared_actor_id: str = "",
+    shared_actor_ids: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
     cid = str(uuid.uuid4())
     now = _now_iso()
+    provenance_kind, curator, provenance_note = infer_collection_provenance(name)
+    normalized_intent = _normalize_collection_intent(intent)
+    normalized_shared_actor_ids = _normalize_shared_actor_ids(shared_actor_id, shared_actor_ids)
+    shared_id = ""
+    shared_actor_name = ""
+    shared_actor_names: list[str] = []
+    if normalized_intent == "shared":
+        if not normalized_shared_actor_ids:
+            raise ValueError("shared collections require shared_actor_id")
+        shared_rows = _validate_shared_collection_actor_ids(db, normalized_shared_actor_ids)
+        shared_id = str(shared_rows[0].get("id") or "").strip()
+        shared_actor_name = str(shared_rows[0].get("name") or "").strip()
+        shared_actor_names = [str(row.get("name") or "").strip() for row in shared_rows if str(row.get("name") or "").strip()]
+    else:
+        normalized_shared_actor_ids = []
     db.exec(
-        "insert into collections (id, name, description, created_at, updated_at) values (?, ?, ?, ?, ?)",
-        (cid, name, description or None, now, now),
+        """
+        insert into collections
+          (
+            id, name, description, created_at, updated_at,
+            provenance_kind, provenance_note, curator,
+            intent, shared_actor_id
+          )
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            cid,
+            name,
+            description or None,
+            now,
+            now,
+            provenance_kind,
+            provenance_note,
+            curator,
+            normalized_intent,
+            shared_id or None,
+        ),
     )
-    return {"id": cid, "name": name, "description": description or "", "created_at": now, "updated_at": now, "count": 0}
+    if normalized_shared_actor_ids:
+        _replace_collection_shares(db, collection_id=cid, actor_ids=normalized_shared_actor_ids)
+    return decorate_collection_record(
+        {
+            "id": cid,
+            "name": name,
+            "description": description or "",
+            "created_at": now,
+            "updated_at": now,
+            "count": 0,
+            "count_total": 0,
+            "count_visible": 0,
+            "hidden": 0,
+            "hidden_at": None,
+            "provenance_kind": provenance_kind,
+            "provenance_note": provenance_note,
+            "curator": curator,
+            "intent": normalized_intent,
+            "shared_actor_id": shared_id,
+            "shared_actor_name": shared_actor_name,
+            "shared_actor_ids": normalized_shared_actor_ids,
+            "shared_actor_names": shared_actor_names,
+        }
+    )
+
+
+def update_collection(
+    db: Db,
+    *,
+    collection_id: str,
+    name: str | None = None,
+    description: str | None = None,
+    intent: str | None = None,
+    shared_actor_id: str = "",
+    shared_actor_ids: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    rows = db.query("select * from collections where id=?", (collection_id,))
+    if not rows:
+        raise FileNotFoundError("collection not found")
+    current = dict(rows[0])
+    next_name = str(name if name is not None else current.get("name") or "").strip()
+    if not next_name:
+        raise ValueError("name required")
+    next_description = str(description if description is not None else current.get("description") or "").strip()
+    next_intent = _normalize_collection_intent(intent if intent is not None else str(current.get("intent") or "working"))
+    normalized_shared_actor_ids = _normalize_shared_actor_ids(shared_actor_id, shared_actor_ids)
+    shared_id = ""
+    shared_actor_name = ""
+    shared_actor_names: list[str] = []
+    if next_intent == "shared":
+        if not normalized_shared_actor_ids:
+            raise ValueError("shared collections require shared_actor_id")
+        shared_rows = _validate_shared_collection_actor_ids(db, normalized_shared_actor_ids)
+        shared_id = str(shared_rows[0].get("id") or "").strip()
+        shared_actor_name = str(shared_rows[0].get("name") or "").strip()
+        shared_actor_names = [str(row.get("name") or "").strip() for row in shared_rows if str(row.get("name") or "").strip()]
+    else:
+        normalized_shared_actor_ids = []
+
+    now = _now_iso()
+    db.exec(
+        """
+        update collections
+        set name=?, description=?, intent=?, shared_actor_id=?, updated_at=?
+        where id=?
+        """,
+        (
+            next_name,
+            next_description or None,
+            next_intent,
+            shared_id or None,
+            now,
+            collection_id,
+        ),
+    )
+    _replace_collection_shares(db, collection_id=collection_id, actor_ids=normalized_shared_actor_ids)
+    updated = dict(db.query("select * from collections where id=?", (collection_id,))[0])
+    updated["count_total"] = int(current.get("count_total") or 0)
+    updated["count_visible"] = int(current.get("count_visible") or current.get("count") or 0)
+    updated["count"] = updated["count_visible"]
+    updated["shared_actor_id"] = shared_id
+    updated["shared_actor_name"] = shared_actor_name
+    updated["shared_actor_ids"] = normalized_shared_actor_ids
+    updated["shared_actor_names"] = shared_actor_names
+    return decorate_collection_record(updated)
 
 
 def add_items_to_collection(db: Db, *, collection_id: str, asset_ids: list[str]) -> int:
@@ -984,6 +1487,63 @@ def remove_item_from_collection(db: Db, *, collection_id: str, asset_id: str) ->
 
 def delete_collection(db: Db, *, collection_id: str) -> None:
     db.exec("delete from collections where id=?", (collection_id,))
+
+
+def set_collections_hidden(db: Db, *, collection_ids: list[str], hidden: bool) -> int:
+    ids = _unique_ids(collection_ids)
+    if not ids:
+        return 0
+    placeholders = ",".join(["?"] * len(ids))
+    target_hidden = 1 if hidden else 0
+    params = [*ids, target_hidden]
+    changed = db.query_value(
+        (
+            "select count(*) from collections "
+            f"where id in ({placeholders}) and lower(name) != 'hidden' and coalesce(hidden, 0) != ?"
+        ),
+        tuple(params),
+    )
+    if not changed:
+        return 0
+    now = _now_iso()
+    if hidden:
+        db.exec(
+            (
+                "update collections set hidden=1, hidden_at=?, updated_at=? "
+                f"where id in ({placeholders}) and lower(name) != 'hidden'"
+            ),
+            (now, now, *ids),
+        )
+    else:
+        db.exec(
+            (
+                "update collections set hidden=0, hidden_at=null, updated_at=? "
+                f"where id in ({placeholders}) and lower(name) != 'hidden'"
+            ),
+            (now, *ids),
+        )
+    return int(changed or 0)
+
+
+def delete_hidden_collections(db: Db, *, collection_ids: list[str]) -> dict[str, int]:
+    ids = _unique_ids(collection_ids)
+    if not ids:
+        return {"deleted": 0, "skipped": 0}
+    placeholders = ",".join(["?"] * len(ids))
+    rows = db.query(
+        (
+            "select id from collections "
+            f"where id in ({placeholders}) and lower(name) != 'hidden' and coalesce(hidden, 0) = 1"
+        ),
+        tuple(ids),
+    )
+    deletable_ids = [str(r["id"]) for r in rows]
+    if deletable_ids:
+        del_placeholders = ",".join(["?"] * len(deletable_ids))
+        db.exec(f"delete from collections where id in ({del_placeholders})", tuple(deletable_ids))
+    deleted = len(deletable_ids)
+    skipped = len(ids) - deleted
+    return {"deleted": deleted, "skipped": skipped}
 
 
 def delete_assets(db: Db, *, asset_ids: list[str]) -> dict[str, Any]:
@@ -1056,8 +1616,23 @@ def clear_tray(db: Db) -> None:
     db.exec("delete from tray_items")
 
 
-def create_collection_from_tray(db: Db, *, name: str, description: str = "") -> dict[str, Any]:
-    col = create_collection(db, name=name, description=description)
+def create_collection_from_tray(
+    db: Db,
+    *,
+    name: str,
+    description: str = "",
+    intent: str = "working",
+    shared_actor_id: str = "",
+    shared_actor_ids: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    col = create_collection(
+        db,
+        name=name,
+        description=description,
+        intent=intent,
+        shared_actor_id=shared_actor_id,
+        shared_actor_ids=shared_actor_ids,
+    )
     items = db.query("select asset_id from tray_items order by added_at asc")
     asset_ids = [r["asset_id"] for r in items]
     add_items_to_collection(db, collection_id=col["id"], asset_ids=asset_ids)

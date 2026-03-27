@@ -81,12 +81,20 @@ class TestBuildRoutingPrompt(unittest.TestCase):
     def test_prompt_contains_action_list(self):
         prompt = _build_routing_prompt("(empty)")
         self.assertIn("filter", prompt)
+        self.assertIn("content_kind", prompt)
         self.assertIn("search", prompt)
         self.assertIn("create_collection", prompt)
         self.assertIn("show_sidebar", prompt)
         self.assertIn("enter_review", prompt)
         self.assertIn("clear_filters", prompt)
         self.assertIn("bulk_triage", prompt)
+
+    def test_prompt_describes_cb_collections_as_ai_derived(self):
+        prompt = _build_routing_prompt("(empty)")
+        self.assertIn('"CB:" prefix = AI-derived', prompt)
+        self.assertIn("not deliberate human-curated highest-intent selections", prompt)
+        self.assertNotIn("Human-curated groupings", prompt)
+        self.assertNotIn("most refined, intentional selections", prompt)
 
 
 class TestProcessChatMessage(unittest.TestCase):
@@ -210,13 +218,52 @@ class TestProcessChatMessage(unittest.TestCase):
 
         self.assertEqual(result["action"], "message")
 
-    def test_empty_api_key_raises(self):
+    def test_empty_api_key_uses_local_fallback(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "t.sqlite"
             with Db(db_path) as db:
                 ensure_schema(db)
-                with self.assertRaises(ValueError):
-                    process_chat_message(db, api_key="", user_message="hello")
+                result = process_chat_message(db, api_key="", user_message="show collections")
+        self.assertEqual(result["action"], "show_sidebar")
+        self.assertEqual((result.get("params") or {}).get("type"), "collections")
+
+    def test_timeout_falls_back_to_local_router(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                _seed_db(db)
+                with patch("inspirations.chat.urllib.request.urlopen", side_effect=TimeoutError("read operation timed out")):
+                    result = process_chat_message(db, api_key="test-key", user_message="show collections")
+        self.assertEqual(result["action"], "show_sidebar")
+        self.assertEqual((result.get("params") or {}).get("type"), "collections")
+
+    def test_top_reflect_query_fallback_clears_filters(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                _seed_db(db)
+                result = process_chat_message(
+                    db,
+                    api_key="",
+                    user_message="Show the top 50 items that best reflect the corpus and the database",
+                )
+        self.assertEqual(result["action"], "clear_filters")
+
+    def test_keywordless_fallback_returns_message_not_empty_search(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                _seed_db(db)
+                result = process_chat_message(
+                    db,
+                    api_key="",
+                    user_message="Please show the corpus and database",
+                )
+        self.assertEqual(result["action"], "message")
+        self.assertIn("could not extract useful keywords", result.get("message", "").lower())
 
     def test_empty_message_raises(self):
         with tempfile.TemporaryDirectory() as td:
