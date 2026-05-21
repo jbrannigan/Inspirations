@@ -29,6 +29,14 @@ Keep momentum on planned Sprint 1 scope, then execute a dedicated stabilization 
 3. Existing clip/photo import paths remain functional.
 4. PR notes include clear “agenda complete” handoff into bug-fix sprint.
 
+## Status Update (May 21, 2026)
+
+- Review UX unification is partially closed down:
+  - Owner sidebar IA uses `Status`, `Collections`, and `All Items` as peer roots.
+  - Collaborator sidebar IA hides `Status`, keeps `Collections` as the primary surface, and leaves `All Items` as a peer corpus-browse section.
+  - Owner review actions are unified between Grid review and one-by-one review.
+  - Hidden owner collections appear under a `Hidden` branch within `Collections`.
+
 ## Status Update (Mar 2, 2026)
 
 - `Add Media` agenda item is implemented:

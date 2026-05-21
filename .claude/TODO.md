@@ -21,8 +21,8 @@ Active scope/acceptance doc: `docs/SPRINT1_AGENDA_NEXT.md`
   - [x] Root 2: `Collections` (peer root).
   - [x] Root 3: `All Items` (peer root for corpus browsing facets/sources).
 - Information architecture target (collaborator view):
-  - Hide entire `Status` block.
-  - `Collections` first, `All Items` as peer. Default `Collections` expanded.
+  - [x] Hide entire `Status` block.
+  - [x] `Collections` first, `All Items` as peer. Default `Collections` expanded / `All Items` collapsed for named collaborators.
 - [x] Collection lifecycle: hidden collections move under a `Hidden` branch within `Collections` for owners.
 - [ ] Collection lifecycle polish: owner hide/restore/delete actions exist in Manage Visibility; decide whether to add per-collection inline actions in the sidebar.
 - Scope hierarchy copy: `Hide in this collection` vs. `Hide globally` vs. `Keep` (corpus-level).
