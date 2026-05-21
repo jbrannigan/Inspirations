@@ -194,8 +194,12 @@ Inspirations-specific details.
 GitHub Actions runs on every push and PR with a Python version matrix (`3.11`, `3.12`, `3.13`), runs `ruff check src tests`, then runs the full unittest suite. All required checks must pass before merge.
 
 ## DevLauncher
-This project is registered in `/Users/minime/Projects/Agent Manager/config/projects.json`.
+This project is registered in `/Users/minime/Projects/DevLauncher/config/projects.json`.
 If the dev server command, port, or startup requirements change, update that config file too.
+
+For public sharing, DevLauncher is only the local-dev launcher. Reboot-safe
+hosting should use `launchd` plus the shared Cloudflare runbook:
+`/Users/minime/Projects/DevLauncher/docs/launchd-cloudflared-standard.md`.
 
 ## Working Style
 

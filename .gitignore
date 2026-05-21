@@ -34,6 +34,7 @@ tools/cluster_data.json
 # Derived doc formats (source is .md or .mmd)
 docs/**/*.pdf
 docs/**/*.html
+!docs/MODAL_SHARE_REDESIGN_MOCKUP_2026-03-21.html
 *.docx
 
 # Rendered diagrams (regeneratable from .mmd)
