@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inspirations!</title>
-    <link rel="stylesheet" href="/app/styles.css?v=45" />
+    <link rel="stylesheet" href="/app/styles.css?v=46" />
     <script type="importmap">
       {
         "imports": {
@@ -155,7 +155,7 @@
           </div>
         </div>
         <div class="sidebar-section sidebar-tree-section" id="browseSidebarSection">
-          <h3 class="sidebar-heading">Browse</h3>
+          <h3 class="sidebar-heading">All Items</h3>
           <div id="catalogTree" class="catalog-tree">
             <div class="muted sidebar-loading">Loading…</div>
           </div>
@@ -290,6 +290,26 @@
           </div>
 
           <div class="review-actions">
+            <button id="reviewKeepBtn" class="review-btn review-btn-keep" type="button" title="Keep this item">
+              <span class="review-btn-icon">★</span>
+              <span class="review-btn-label">Keep</span>
+            </button>
+            <button id="reviewHideLocalBtn" class="review-btn review-btn-hide-local" type="button" title="Remove from this collection">
+              <span class="review-btn-icon">↘</span>
+              <span class="review-btn-label">Hide in collection</span>
+            </button>
+            <button id="reviewHideGlobalBtn" class="review-btn review-btn-hide-global" type="button" title="Hide globally">
+              <span class="review-btn-icon">✗</span>
+              <span class="review-btn-label">Hide globally</span>
+            </button>
+            <button id="reviewFlagBtn" class="review-btn review-btn-flag" type="button" title="Flag for follow-up">
+              <span class="review-btn-icon">⚑</span>
+              <span class="review-btn-label">Flag</span>
+            </button>
+            <button id="reviewClearBtn" class="review-btn review-btn-clear" type="button" title="Clear status and flag">
+              <span class="review-btn-icon">○</span>
+              <span class="review-btn-label">Clear</span>
+            </button>
             <button id="reviewPrevBtn" class="review-btn review-btn-prev" type="button" title="Go back (Z)" disabled>
               <span class="review-btn-icon">↩</span>
               <span class="review-btn-label">Go back</span>
@@ -764,6 +784,6 @@
     <script src="/app/shared.js?v=3"></script>
     <script src="/app/explorer.js?v=2"></script>
     <script src="/app/attractor-explorer.js?v=3"></script>
-    <script src="/app/app.js?v=86"></script>
+    <script src="/app/app.js?v=89"></script>
   </body>
 </html>

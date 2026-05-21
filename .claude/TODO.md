@@ -24,6 +24,7 @@ Active scope/acceptance doc: `docs/SPRINT1_AGENDA_NEXT.md`
   - `Collections` first, `All Items` as peer. Default `Collections` expanded.
 - Collection lifecycle: Add `Hide collection` and `Delete collection` (owner). Hidden collections move under a `Hidden` branch within `Collections`.
 - Scope hierarchy copy: `Hide in this collection` vs. `Hide globally` vs. `Keep` (corpus-level).
+- Follow-up note: switching out of one-by-one review should feel like moving between review modes rather than exiting the workflow. Implemented in current UX unification slice: one-by-one now returns to Grid review when launched from Grid review.
 
 ### P1 — Dave replacement (full rebuild within Inspirations)
 
