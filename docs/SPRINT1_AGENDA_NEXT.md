@@ -36,6 +36,7 @@ Keep momentum on planned Sprint 1 scope, then execute a dedicated stabilization 
   - Collaborator sidebar IA hides `Status`, keeps `Collections` as the primary surface, and leaves `All Items` as a peer corpus-browse section.
   - Owner review actions are unified between Grid review and one-by-one review.
   - Hidden owner collections appear under a `Hidden` branch within `Collections`.
+  - Collection hide/restore/delete actions remain centralized in `Manage Visibility`; the sidebar stays browse-first.
 
 ## Status Update (Mar 2, 2026)
 
