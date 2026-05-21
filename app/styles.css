@@ -1849,6 +1849,15 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .review-btn-label { font-size: var(--fs-sm); font-weight: 500; }
 .review-btn-skip:hover:not(:disabled) { border-color: var(--border-hover); }
 .review-btn-prev:hover:not(:disabled) { border-color: var(--accent); background: rgba(184,134,11,0.08); }
+.review-btn-keep { border-color: rgba(34,197,94,0.28); background: rgba(34,197,94,0.08); color: #15803d; }
+.review-btn-keep:hover:not(:disabled) { border-color: rgba(34,197,94,0.48); background: rgba(34,197,94,0.14); }
+.review-btn-hide-local { border-color: rgba(217,119,6,0.28); background: rgba(217,119,6,0.08); color: #a16207; }
+.review-btn-hide-local:hover:not(:disabled) { border-color: rgba(217,119,6,0.44); background: rgba(217,119,6,0.14); }
+.review-btn-hide-global { border-color: rgba(239,68,68,0.28); background: rgba(239,68,68,0.07); color: #b91c1c; }
+.review-btn-hide-global:hover:not(:disabled) { border-color: rgba(239,68,68,0.44); background: rgba(239,68,68,0.12); }
+.review-btn-flag { border-color: rgba(245,158,11,0.28); background: rgba(245,158,11,0.08); color: #a16207; }
+.review-btn-flag:hover:not(:disabled) { border-color: rgba(245,158,11,0.46); background: rgba(245,158,11,0.14); }
+.review-btn-clear { border-color: rgba(44,40,37,0.16); background: rgba(44,40,37,0.04); color: var(--text-secondary); }
 .review-complete {
   text-align: center;
   padding: 40px 20px;

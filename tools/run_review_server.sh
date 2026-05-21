@@ -16,7 +16,13 @@ function keychain_read() {
 
 cd "${ROOT_DIR}"
 
-export PYTHONPATH="${PYTHONPATH:-src}"
+# Always prepend this repo's src so imports work even when launched from a
+# parent process that sets its own PYTHONPATH (e.g. DevLauncher).
+if [[ -n "${PYTHONPATH:-}" ]]; then
+  export PYTHONPATH="${ROOT_DIR}/src:${PYTHONPATH}"
+else
+  export PYTHONPATH="${ROOT_DIR}/src"
+fi
 export GEMINI_API_KEY="${GEMINI_API_KEY:-$(keychain_read inspirations_gemini_api_key)}"
 export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-$(keychain_read inspirations_anthropic_api_key)}"
 

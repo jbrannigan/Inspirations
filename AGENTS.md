@@ -44,6 +44,9 @@
   not like a developer tool.
 - **Port coordination:** Inspirations runs on `8001`. Do not stop services on other
   project ports (notably `8003`) unless explicitly requested and verified.
+- **Public hosting standard:** if Inspirations is exposed beyond the LAN, the app
+  service should be `launchd`-managed and share the machine's Cloudflare tunnel,
+  rather than depending on DevLauncher for uptime.
 
 ## Scan Corpus Semantics
 
@@ -105,4 +108,4 @@ Use this section when Jim asks for print-ready or formatted output (PDF/HTML/scr
 - Do not create top-level files without user approval.
 
 ---
-*Last updated: 2026-03-06*
+*Last updated: 2026-04-23*

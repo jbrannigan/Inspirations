@@ -1982,8 +1982,8 @@ function renderCatalogTree() {
   // "All items" node (root order differs for collaborator view)
   const allBtn = document.createElement("button");
   allBtn.className = `tree-toggle tree-toggle-root${allItemsActive ? " active" : ""}${!collapseRest ? " expanded" : ""}`;
-  allBtn.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label">All Items</span>`;
-  allBtn.title = "All Items";
+  allBtn.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label">Everything</span>`;
+  allBtn.title = "Show all items";
   allBtn.onclick = () => {
     if (shouldIgnorePostBrowseUnlockTreeClick()) return;
     const wasAllItemsActive = isAllItemsScopeActive();
@@ -2460,6 +2460,88 @@ function buildClassificationNode(node) {
   return el;
 }
 
+function buildCollectionLeaf(child, selectedCollectionIds) {
+  const leaf = document.createElement("button");
+  const isActive = selectedCollectionIds.length === 1 && selectedCollectionIds[0] === child.collection_id;
+  const badge = child.provenance_badge
+    ? `<span class="tree-collection-badge" title="${escapeHtml(child.provenance_label || "")}">${escapeHtml(child.provenance_badge)}</span>`
+    : "";
+  const sharedNames = Array.isArray(child.shared_actor_names) ? child.shared_actor_names.filter(Boolean) : [];
+  const shareSummary = _sharedWithSummary(sharedNames);
+  const shareBadge = String(child.intent || "").trim().toLowerCase() === "shared"
+    ? `<span class="tree-collection-badge tree-collection-share-badge" title="${escapeHtml(shareSummary || "Shared collection")}">Shared</span>`
+    : "";
+  const hiddenBadge = Number(child.hidden || 0) === 1
+    ? `<span class="tree-collection-badge" title="Hidden collection">Hidden</span>`
+    : "";
+  const titleBits = [String(child.label || "")];
+  if (shareSummary) titleBits.push(shareSummary);
+  if (child.provenance_label) titleBits.push(String(child.provenance_label));
+  if (child.provenance_note) titleBits.push(String(child.provenance_note));
+  leaf.className = `tree-leaf${isActive ? " active" : ""}`;
+  leaf.title = titleBits.join(" — ");
+  leaf.innerHTML = `<span class="tree-leaf-main"><span class="tree-leaf-text">${escapeHtml(child.label)}</span>${shareBadge}${badge}${hiddenBadge}</span><span class="tree-count">${child.count}</span>`;
+  leaf.onclick = () => {
+    resetTriageFilter();
+    state.currentSource = null;
+    state.currentBoard = null;
+    state.currentContentKind = null;
+    clearCatalogFilter();
+    clearClassificationFilter();
+    setCollectionFilterIds([child.collection_id], { label: child.label, nodeId: child.id });
+    state.offset = 0;
+    renderCatalogTree();
+    loadAssets();
+  };
+  const _colId = child.collection_id;
+  addTreeHideToggle(leaf, () => ({ collection_id: _colId }));
+  return leaf;
+}
+
+function buildCollectionBranchNode(node, selectedCollectionIds) {
+  const el = document.createElement("div");
+  el.className = "tree-node";
+  const nodeKey = String(node.id || node.label || "collection-branch");
+  const selectedCollectionSet = new Set(selectedCollectionIds);
+  const visibleChildren = Array.isArray(node.children) ? node.children : [];
+  const hasActiveChild = visibleChildren.some((child) => (
+    (child.collection_id && selectedCollectionSet.has(child.collection_id))
+    || _treeNodeContainsActiveSelection(child)
+  ));
+  if (hasActiveChild) state.expandedTreeNodes.add(nodeKey);
+
+  const toggle = document.createElement("button");
+  toggle.className = `tree-toggle${hasActiveChild ? " active" : ""}`;
+  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label">${escapeHtml(node.label || "Collections")}</span><span class="tree-count">${Number(node.count || visibleChildren.length || 0)}</span>`;
+  toggle.title = node.label || "Collections";
+
+  const children = document.createElement("div");
+  children.className = "tree-children";
+  _setTreeNodeExpanded(nodeKey, toggle, children, state.expandedTreeNodes.has(nodeKey));
+  _wireTreeArrowToggle(toggle, nodeKey, children);
+  toggle.onclick = () => {
+    resetTriageFilter();
+    state.currentSource = null;
+    state.currentBoard = null;
+    state.currentContentKind = null;
+    clearCatalogFilter();
+    clearClassificationFilter();
+    setCollectionFilterIds(collectDescendantCollectionIds(node), { label: node.label || "Collections", nodeId: node.id });
+    state.offset = 0;
+    renderCatalogTree();
+    loadAssets();
+  };
+
+  for (const child of visibleChildren) {
+    if (Array.isArray(child.children)) children.appendChild(buildCollectionBranchNode(child, selectedCollectionIds));
+    else children.appendChild(buildCollectionLeaf(child, selectedCollectionIds));
+  }
+
+  el.appendChild(toggle);
+  el.appendChild(children);
+  return el;
+}
+
 function buildCollectionsGroupNode(node) {
   const el = document.createElement("div");
   el.className = "tree-node";
@@ -2508,39 +2590,8 @@ function buildCollectionsGroupNode(node) {
   };
 
   for (const child of visibleChildren) {
-    const leaf = document.createElement("button");
-    const isActive = selectedCollectionIds.length === 1 && selectedCollectionIds[0] === child.collection_id;
-    const badge = child.provenance_badge
-      ? `<span class="tree-collection-badge" title="${escapeHtml(child.provenance_label || "")}">${escapeHtml(child.provenance_badge)}</span>`
-      : "";
-    const sharedNames = Array.isArray(child.shared_actor_names) ? child.shared_actor_names.filter(Boolean) : [];
-    const shareSummary = _sharedWithSummary(sharedNames);
-    const shareBadge = String(child.intent || "").trim().toLowerCase() === "shared"
-      ? `<span class="tree-collection-badge tree-collection-share-badge" title="${escapeHtml(shareSummary || "Shared collection")}">Shared</span>`
-      : "";
-    const titleBits = [String(child.label || "")];
-    if (shareSummary) titleBits.push(shareSummary);
-    if (child.provenance_label) titleBits.push(String(child.provenance_label));
-    if (child.provenance_note) titleBits.push(String(child.provenance_note));
-    leaf.className = `tree-leaf${isActive ? " active" : ""}`;
-    leaf.title = titleBits.join(" — ");
-    leaf.innerHTML = `<span class="tree-leaf-main"><span class="tree-leaf-text">${escapeHtml(child.label)}</span>${shareBadge}${badge}</span><span class="tree-count">${child.count}</span>`;
-    leaf.onclick = () => {
-      resetTriageFilter();
-      state.currentSource = null;
-      state.currentBoard = null;
-      state.currentContentKind = null;
-      clearCatalogFilter();
-      clearClassificationFilter();
-      setCollectionFilterIds([child.collection_id], { label: child.label, nodeId: child.id });
-      state.offset = 0;
-      renderCatalogTree();
-      loadAssets();
-    };
-    // Context menu for bulk triage on collections (owner-only)
-    const _colId = child.collection_id;
-    addTreeHideToggle(leaf, () => ({ collection_id: _colId }));
-    children.appendChild(leaf);
+    if (Array.isArray(child.children)) children.appendChild(buildCollectionBranchNode(child, selectedCollectionIds));
+    else children.appendChild(buildCollectionLeaf(child, selectedCollectionIds));
   }
 
   el.appendChild(toggle);
@@ -5576,19 +5627,30 @@ async function renderReviewCard() {
   if (prevBtn) prevBtn.disabled = state.reviewHistory.length === 0;
   const undoBtn = $("#reviewUndo");
   if (undoBtn) undoBtn.disabled = state.reviewHistory.length === 0;
+  const scope = getReviewScopeInfo();
+  const keepBtn = $("#reviewKeepBtn");
+  if (keepBtn) keepBtn.disabled = !isOwner();
+  const hideLocalBtn = $("#reviewHideLocalBtn");
+  if (hideLocalBtn) hideLocalBtn.disabled = !(isOwner() && scope.hasCollectionScope);
+  const hideGlobalBtn = $("#reviewHideGlobalBtn");
+  if (hideGlobalBtn) hideGlobalBtn.disabled = !isOwner();
+  const flagBtn = $("#reviewFlagBtn");
+  if (flagBtn) flagBtn.disabled = !canUseFlag();
+  const clearBtn = $("#reviewClearBtn");
+  if (clearBtn) clearBtn.disabled = !isOwner();
 }
 
 function _incrementReviewDecisionCounter(kind) {
-  if (kind === "keep_current") state.reviewKept += 1;
-  else if (kind === "move") state.reviewMoved += 1;
-  else if (kind === "irrelevant") state.reviewHidden += 1;
+  if (kind === "keep_current" || kind === "keep") state.reviewKept += 1;
+  else if (kind === "move" || kind === "flag" || kind === "clear") state.reviewMoved += 1;
+  else if (kind === "irrelevant" || kind === "hide_global" || kind === "hide_local") state.reviewHidden += 1;
   else if (kind === "skip") state.reviewSkipped += 1;
 }
 
 function _decrementReviewDecisionCounter(kind) {
-  if (kind === "keep_current") state.reviewKept = Math.max(0, state.reviewKept - 1);
-  else if (kind === "move") state.reviewMoved = Math.max(0, state.reviewMoved - 1);
-  else if (kind === "irrelevant") state.reviewHidden = Math.max(0, state.reviewHidden - 1);
+  if (kind === "keep_current" || kind === "keep") state.reviewKept = Math.max(0, state.reviewKept - 1);
+  else if (kind === "move" || kind === "flag" || kind === "clear") state.reviewMoved = Math.max(0, state.reviewMoved - 1);
+  else if (kind === "irrelevant" || kind === "hide_global" || kind === "hide_local") state.reviewHidden = Math.max(0, state.reviewHidden - 1);
   else if (kind === "skip") state.reviewSkipped = Math.max(0, state.reviewSkipped - 1);
 }
 
@@ -5696,6 +5758,140 @@ async function reviewAction(action) {
   await _advanceReviewAfterDecision();
 }
 
+function _replaceReviewItem(updated) {
+  if (!updated || !updated.id) return;
+  const idx = state.reviewItems.findIndex((item) => item && item.id === updated.id);
+  if (idx >= 0) state.reviewItems[idx] = updated;
+  replaceAssetInState(updated);
+  if (state.modalAsset?.id === updated.id) state.modalAsset = updated;
+}
+
+async function _reviewSetTriage(item, status, decisionKind, toastText) {
+  const previousStatus = Object.prototype.hasOwnProperty.call(item, "triage_status") ? item.triage_status : null;
+  const previousNeedsAnnotation = Object.prototype.hasOwnProperty.call(item, "needs_annotation") ? item.needs_annotation : null;
+  await api(`/api/assets/${encodeURIComponent(item.id)}/triage`, {
+    method: "POST",
+    body: JSON.stringify({ status, reason: `review ${decisionKind}` }),
+  });
+  const updated = { ...item, triage_status: status };
+  _replaceReviewItem(updated);
+  state.reviewHistory.push({
+    kind: "triage",
+    decisionKind,
+    id: item.id,
+    index: state.reviewIndex,
+    previousStatus,
+    previousNeedsAnnotation,
+    appliedStatus: status,
+  });
+  _incrementReviewDecisionCounter(decisionKind);
+  Shared.showToast(toastText, { type: "success", duration: 1800 });
+  await _advanceReviewAfterDecision();
+}
+
+async function reviewPrimaryAction(action) {
+  const item = state.reviewItems[state.reviewIndex];
+  if (!item || !item.id) return;
+  if (!isOwner()) {
+    Shared.showToast("Review actions are owner-only.", { type: "info" });
+    return;
+  }
+
+  try {
+    if (action === "keep") {
+      await _reviewSetTriage(item, "keeper", "keep", "Marked as keeper.");
+      return;
+    }
+    if (action === "hide_global") {
+      if (!confirmGlobalHideBulk(1)) {
+        Shared.showToast("Global hide canceled.", { type: "info" });
+        return;
+      }
+      await _reviewSetTriage(item, "hidden", "hide_global", "Hidden globally.");
+      return;
+    }
+    if (action === "hide_local") {
+      const scope = getReviewScopeInfo();
+      if (!scope.hasCollectionScope) {
+        Shared.showToast("No active collection scope. Use Hide globally for library-wide hide.", { type: "info" });
+        return;
+      }
+      const results = await removeAssetsFromCollections([item.id], scope.collectionIds);
+      const removed = results.reduce((sum, r) => sum + Number(r.removed || 0), 0);
+      if (!removed) {
+        Shared.showToast("This item is not in the active collection scope.", { type: "info" });
+        return;
+      }
+      state.reviewHistory.push({
+        kind: "collection_remove",
+        decisionKind: "hide_local",
+        id: item.id,
+        index: state.reviewIndex,
+        collectionIds: scope.collectionIds,
+      });
+      _incrementReviewDecisionCounter("hide_local");
+      Shared.showToast("Removed from this collection.", { type: "success", duration: 1800 });
+      await _advanceReviewAfterDecision();
+      return;
+    }
+    if (action === "flag") {
+      if (!canUseFlag()) {
+        Shared.showToast("Flagging is owner-only.", { type: "info" });
+        return;
+      }
+      const previousFlagged = item.flagged;
+      await api(`/api/assets/${encodeURIComponent(item.id)}/flag`, {
+        method: "POST",
+        body: JSON.stringify({ flagged: 1 }),
+      });
+      const updated = { ...item, flagged: 1 };
+      _replaceReviewItem(updated);
+      state.reviewHistory.push({
+        kind: "flag",
+        decisionKind: "flag",
+        id: item.id,
+        index: state.reviewIndex,
+        previousFlagged,
+      });
+      _incrementReviewDecisionCounter("flag");
+      Shared.showToast("Flagged for follow-up.", { type: "success", duration: 1800 });
+      await _advanceReviewAfterDecision();
+      return;
+    }
+    if (action === "clear") {
+      const previousStatus = Object.prototype.hasOwnProperty.call(item, "triage_status") ? item.triage_status : null;
+      const previousNeedsAnnotation = Object.prototype.hasOwnProperty.call(item, "needs_annotation") ? item.needs_annotation : null;
+      const previousFlagged = item.flagged;
+      await api(`/api/assets/${encodeURIComponent(item.id)}/triage`, {
+        method: "POST",
+        body: JSON.stringify({ status: null, reason: "review clear" }),
+      });
+      if (previousFlagged) {
+        await api(`/api/assets/${encodeURIComponent(item.id)}/flag`, {
+          method: "POST",
+          body: JSON.stringify({ flagged: 0 }),
+        });
+      }
+      const updated = { ...item, triage_status: null, flagged: 0 };
+      _replaceReviewItem(updated);
+      state.reviewHistory.push({
+        kind: "clear_status",
+        decisionKind: "clear",
+        id: item.id,
+        index: state.reviewIndex,
+        previousStatus,
+        previousNeedsAnnotation,
+        previousFlagged,
+      });
+      _incrementReviewDecisionCounter("clear");
+      Shared.showToast("Status cleared.", { type: "success", duration: 1800 });
+      await _advanceReviewAfterDecision();
+    }
+  } catch (e) {
+    Shared.showToast(`Review action failed: ${formatApiError(e)}`, { type: "error" });
+  }
+}
+
 async function undoReview() {
   const last = state.reviewHistory.pop();
   if (!last) return;
@@ -5731,6 +5927,48 @@ async function undoReview() {
           note: String(last.appliedNote || ""),
         };
       }
+    } else if (last.kind === "triage") {
+      await api(`/api/assets/${encodeURIComponent(last.id)}/triage`, {
+        method: "POST",
+        body: JSON.stringify({
+          status: last.previousStatus ?? null,
+          needs_annotation: last.previousNeedsAnnotation,
+          reason: "review undo",
+        }),
+      });
+      const existing = state.reviewItems.find((item) => item && item.id === last.id) || { id: last.id };
+      _replaceReviewItem({ ...existing, triage_status: last.previousStatus ?? null, needs_annotation: last.previousNeedsAnnotation });
+    } else if (last.kind === "collection_remove") {
+      await addAssetsToCollections([last.id], last.collectionIds || []);
+    } else if (last.kind === "flag") {
+      await api(`/api/assets/${encodeURIComponent(last.id)}/flag`, {
+        method: "POST",
+        body: JSON.stringify({ flagged: last.previousFlagged ? 1 : 0 }),
+      });
+      const existing = state.reviewItems.find((item) => item && item.id === last.id) || { id: last.id };
+      _replaceReviewItem({ ...existing, flagged: last.previousFlagged ? 1 : 0 });
+    } else if (last.kind === "clear_status") {
+      await api(`/api/assets/${encodeURIComponent(last.id)}/triage`, {
+        method: "POST",
+        body: JSON.stringify({
+          status: last.previousStatus ?? null,
+          needs_annotation: last.previousNeedsAnnotation,
+          reason: "review undo clear",
+        }),
+      });
+      if (last.previousFlagged) {
+        await api(`/api/assets/${encodeURIComponent(last.id)}/flag`, {
+          method: "POST",
+          body: JSON.stringify({ flagged: 1 }),
+        });
+      }
+      const existing = state.reviewItems.find((item) => item && item.id === last.id) || { id: last.id };
+      _replaceReviewItem({
+        ...existing,
+        triage_status: last.previousStatus ?? null,
+        needs_annotation: last.previousNeedsAnnotation,
+        flagged: last.previousFlagged ? 1 : 0,
+      });
     }
   } catch (e) {
     Shared.showToast(`Undo failed: ${formatApiError(e)}`, { type: "error" });
@@ -5770,9 +6008,9 @@ function showReviewComplete() {
     const statsEl = $("#reviewCompleteStats");
     if (statsEl) {
       statsEl.innerHTML = `
-        <span class="review-stat keeper">${state.reviewKept} kept current</span>
-        <span class="review-stat moved">${state.reviewMoved} moved</span>
-        <span class="review-stat hidden-s">${state.reviewHidden} irrelevant</span>
+        <span class="review-stat keeper">${state.reviewKept} kept</span>
+        <span class="review-stat moved">${state.reviewMoved} updated</span>
+        <span class="review-stat hidden-s">${state.reviewHidden} hidden</span>
         <span class="review-stat skipped">${state.reviewSkipped} skipped</span>
       `;
     }
@@ -6023,7 +6261,7 @@ const canvasClearBtn = $("#canvasClear");
 if (canvasClearBtn) canvasClearBtn.addEventListener("click", clearCanvasSelection);
 const canvasToOneByOneBtn = $("#canvasToOneByOne");
 if (canvasToOneByOneBtn) canvasToOneByOneBtn.addEventListener("click", () => {
-  exitCanvasReview();
+  clearCanvasSelection();
   enterReview();
 });
 const canvasExitReviewBtn = $("#canvasExitReview");
@@ -6038,6 +6276,21 @@ if (reviewBackBtn) reviewBackBtn.addEventListener("click", exitReview);
 
 const reviewSkipBtn = $("#reviewSkipBtn");
 if (reviewSkipBtn) reviewSkipBtn.addEventListener("click", () => reviewAction("skip"));
+
+const reviewKeepBtn = $("#reviewKeepBtn");
+if (reviewKeepBtn) reviewKeepBtn.addEventListener("click", () => reviewPrimaryAction("keep"));
+
+const reviewHideLocalBtn = $("#reviewHideLocalBtn");
+if (reviewHideLocalBtn) reviewHideLocalBtn.addEventListener("click", () => reviewPrimaryAction("hide_local"));
+
+const reviewHideGlobalBtn = $("#reviewHideGlobalBtn");
+if (reviewHideGlobalBtn) reviewHideGlobalBtn.addEventListener("click", () => reviewPrimaryAction("hide_global"));
+
+const reviewFlagBtn = $("#reviewFlagBtn");
+if (reviewFlagBtn) reviewFlagBtn.addEventListener("click", () => reviewPrimaryAction("flag"));
+
+const reviewClearBtn = $("#reviewClearBtn");
+if (reviewClearBtn) reviewClearBtn.addEventListener("click", () => reviewPrimaryAction("clear"));
 
 const reviewClassificationKeepBtn = $("#reviewClassificationKeepBtn");
 if (reviewClassificationKeepBtn) {
@@ -7779,7 +8032,7 @@ function updateSidebarModeVisibility() {
   const collectionActionsSection = $("#newCollection")?.closest(".sidebar-section");
   const collectionsHeading = $("#collectionSidebarSection .sidebar-heading");
 
-  if (statusSection) statusSection.hidden = !inReview;
+  if (statusSection) statusSection.hidden = !owner;
   if (treeSection) treeSection.hidden = inReview || focusedShared;
   if (collectionsSection) collectionsSection.hidden = inReview;
   if (collectionActionsSection) collectionActionsSection.hidden = inReview;
@@ -7838,6 +8091,12 @@ function applyRoleVisibility() {
   if (canvasFlagBtnEl) canvasFlagBtnEl.hidden = !canUseFlag();
   const canvasTagBtnEl = $("#canvasTag");
   if (canvasTagBtnEl) canvasTagBtnEl.hidden = !canUseTag();
+  for (const id of ["reviewKeepBtn", "reviewHideLocalBtn", "reviewHideGlobalBtn", "reviewClearBtn"]) {
+    const btn = document.getElementById(id);
+    if (btn) btn.hidden = !owner;
+  }
+  const reviewFlagBtnEl = $("#reviewFlagBtn");
+  if (reviewFlagBtnEl) reviewFlagBtnEl.hidden = !canUseFlag();
 
   // Annotation question toggle — available to all (collaborators ask questions)
   // Notes textarea — available to all

@@ -4,6 +4,12 @@
 
 Inspirations runs locally on `127.0.0.1:8001` — a pure-Python stdlib HTTP server with SQLite, serving vanilla HTML/JS and ~2 GB of image/thumb assets. You've bought `8499timberbridgeln.com` from Squarespace and want to share the app at `8499timberbridgeln.com/inspirations` with a handful of collaborators, keeping the door open to host other things (docs, etc.) at the same domain later.
 
+As of 2026-04-23, the machine-wide hosting standard has moved to repo-local
+`launchd` services plus the shared Cloudflare runbook at
+`/Users/minime/Projects/DevLauncher/docs/launchd-cloudflared-standard.md`. Treat
+the manual LaunchAgent examples below as historical context, not the preferred
+final state.
+
 ## Recommendation: Cloudflare Tunnel from your Mac
 
 **Why this beats a VPS or Tailscale Funnel for your situation:**
@@ -12,7 +18,7 @@ Inspirations runs locally on `127.0.0.1:8001` — a pure-Python stdlib HTTP serv
 - Path-based routing is natively supported for future apps
 - No Docker, no nginx, no server to patch — you just keep running the Python server locally
 
-**Trade-off:** Your Mac must stay on. If it sleeps or loses internet, the site goes down. For a handful of collaborators on a home-build project, that's fine. We'll set up Launch Agents so everything auto-restarts on reboot.
+**Trade-off:** Your Mac must stay on. If it sleeps or loses internet, the site goes down. For a handful of collaborators on a home-build project, that's fine. In the current standard, the app should run under `launchd` and `cloudflared` should use Cloudflare's official service installer.
 
 **How it works with your router:** `cloudflared` makes a regular outbound HTTPS connection (port 443) from your Mac to Cloudflare's edge — the same kind your browser makes. Your router needs no port forwarding, no firewall changes, no configuration at all. Cloudflare sends incoming visitor requests back through the already-open tunnel. Your home IP is never exposed to collaborators.
 
@@ -129,19 +135,15 @@ Free plan allows 1 rate limiting rule. Protect admin login from brute-force:
 - Rate: 5 requests per minute per IP
 - Action: Block
 
-### Step 8: Auto-start via macOS Launch Agents
+### Step 8: Auto-start via launchd + shared Cloudflare standard
 
-**Python server** — `~/Library/LaunchAgents/com.inspirations.server.plist`:
-- `WorkingDirectory`: `/Users/minime/Projects/Inspirations`
-- `ProgramArguments`: python3 path, `-m`, `inspirations`, `serve`, `--host`, `127.0.0.1`, `--port`, `8001`
-- `EnvironmentVariables`: `PYTHONPATH=src`, `INSPIRATIONS_ADMIN_PASSWORD=<strong-password>`
-- `KeepAlive`: true
-
-**Cloudflare tunnel** — `~/Library/LaunchAgents/com.cloudflared.tunnel.plist`:
-- `ProgramArguments`: `/opt/homebrew/bin/cloudflared`, `tunnel`, `run`, `inspirations`
-- `KeepAlive`: true
-
-Also: System Settings > Energy > prevent automatic sleep when display is off.
+- Run Inspirations under its own repo-local `launchd` service.
+- Reuse the Mac mini's shared Cloudflare tunnel instead of starting a separate
+  long-lived `cloudflared` process from this repo.
+- Use `cloudflared service install` for login-only setup or
+  `sudo cloudflared service install` for boot-time setup.
+- Store boot-time Cloudflare config in `/etc/cloudflared/config.yml`.
+- Also: System Settings > Energy > prevent automatic sleep when display is off.
 
 ### Step 9: Send magic links to collaborators
 
@@ -163,9 +165,8 @@ The token persists in their browser's localStorage + cookie. They bookmark the s
 | `src/inspirations/db.py` | Add `PRAGMA journal_mode=WAL` |
 | `app/shared.js:9` | Add `Secure` flag to cookie |
 
-Plus two new files:
-- `~/Library/LaunchAgents/com.inspirations.server.plist`
-- `~/Library/LaunchAgents/com.cloudflared.tunnel.plist`
+Plus repo-local launchd setup for the app service, and the shared machine-wide
+Cloudflare configuration described in the DevLauncher runbook.
 
 ## Verification
 
@@ -174,5 +175,5 @@ Plus two new files:
 3. Confirm the app loads, images display, magic link auth works
 4. Check Cloudflare analytics dashboard for request logs
 5. Test admin login rate limiting by hitting `/api/admin/login` rapidly
-6. Reboot Mac and verify both services auto-start via Launch Agents
+6. Reboot Mac and verify the app service and Cloudflare service auto-start via `launchd`
 7. Run existing test suite: `PYTHONPATH=src python3 -m unittest discover -s tests -v`

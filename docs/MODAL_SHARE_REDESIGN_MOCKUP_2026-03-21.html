@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Modal Share Redesign Mockup</title>
+  <style>
+    :root {
+      --bg: #f6f3ef;
+      --panel: #ffffff;
+      --border: rgba(44, 40, 37, 0.12);
+      --text: #2c2825;
+      --muted: #847c76;
+      --accent: #b8860b;
+      --question: #e67e22;
+      --annotation: #6f5aa8;
+      --soft: #f0ece6;
+      --shadow: 0 10px 30px rgba(44, 40, 37, 0.12);
+      --radius: 14px;
+      font-family: "DM Sans", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: linear-gradient(180deg, #fbf9f6, #f3efe9); color: var(--text); padding: 28px; }
+    h1 { margin: 0 0 10px; font-size: 24px; }
+    p.lead { margin: 0 0 24px; color: var(--muted); max-width: 900px; }
+    .stack { display: grid; gap: 28px; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 18px; box-shadow: var(--shadow); overflow: hidden; }
+    .card-head { padding: 14px 18px; border-bottom: 1px solid var(--border); background: #fcfbf9; display: flex; justify-content: space-between; align-items: center; }
+    .tag { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+    .modal { display: grid; gap: 0; }
+    .modal-header { padding: 18px 22px; border-bottom: 1px solid var(--border); display: grid; gap: 14px; }
+    .header-row { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+    .title-block { display: grid; gap: 5px; min-width: 320px; flex: 1 1 auto; }
+    .title { font-size: 22px; font-weight: 650; }
+    .meta { color: var(--muted); font-size: 13px; }
+    .chip-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .chip { border-radius: 999px; padding: 4px 10px; font-size: 12px; background: var(--soft); color: var(--muted); border: 1px solid var(--border); }
+    .chip.identity { background: rgba(230,126,34,.08); color: #9a4d09; border-color: rgba(230,126,34,.2); }
+    .header-tools { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+    .group { border: 1px solid var(--border); border-radius: 12px; padding: 8px 10px; display: flex; gap: 8px; align-items: center; background: #fcfbf9; }
+    .group-label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-right: 4px; }
+    .btn { border: 1px solid var(--border); background: white; color: var(--text); padding: 7px 10px; border-radius: 10px; font-size: 12px; }
+    .btn.primary { background: rgba(184,134,11,.12); border-color: rgba(184,134,11,.22); color: #7a5a12; }
+    .modal-body { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(320px, .85fr); min-height: 620px; }
+    .stage-col { padding: 20px; border-right: 1px solid var(--border); background: #fbfaf8; display: grid; gap: 12px; }
+    .stage-prompt { border: 1px solid rgba(230,126,34,.22); background: rgba(230,126,34,.08); color: #9a4d09; border-radius: 12px; padding: 10px 12px; display: grid; gap: 4px; }
+    .stage-prompt .kicker { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }
+    .stage-prompt .subtle { font-size: 11px; opacity: .85; }
+    .stage { border: 1px solid var(--border); border-radius: 14px; background: linear-gradient(135deg, #ece7e1, #ddd5ca); min-height: 520px; display: grid; place-items: center; color: var(--muted); }
+    .side-col { padding: 20px; display: grid; gap: 16px; align-content: start; }
+    .section { display: grid; gap: 8px; }
+    .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; font-weight: 700; }
+    .section-title.questions { color: var(--question); }
+    .section-title.annotations { color: var(--annotation); }
+    .notes-card, .labels-card, .list-card { border: 1px solid var(--border); border-radius: 12px; background: #fcfbf9; padding: 12px; }
+    .notes-card { color: var(--muted); }
+    .question-item { border: 1px solid rgba(230,126,34,.18); background: rgba(230,126,34,.06); border-radius: 10px; padding: 10px; display: grid; gap: 4px; }
+    .question-num { color: var(--question); font-weight: 700; font-size: 12px; }
+    .annotation-item { border: 1px solid rgba(111,90,168,.18); background: rgba(111,90,168,.05); border-radius: 10px; padding: 10px; display: grid; gap: 4px; }
+    .mock-note { color: var(--muted); font-size: 12px; }
+    @media (max-width: 980px) { .modal-body { grid-template-columns: 1fr; } .stage-col { border-right: none; border-bottom: 1px solid var(--border); } }
+  </style>
+</head>
+<body>
+  <h1>Modal / Share Redesign Mockup</h1>
+  <p class="lead">Two role-specific mockups. The collaborator version is intentionally calmer and more focused. The owner version keeps power features, but groups them more clearly.</p>
+
+  <div class="stack">
+    <section class="card">
+      <div class="card-head">
+        <strong>Collaborator modal</strong>
+        <span class="tag">Proposed</span>
+      </div>
+      <div class="modal">
+        <div class="modal-header">
+          <div class="header-row">
+            <div class="title-block">
+              <div class="chip-row">
+                <span class="chip">Pin</span>
+                <span class="chip identity">Viewing as Mark (Builder)</span>
+              </div>
+              <div class="title">CB: Cabinetry</div>
+              <div class="meta">Pinterest · Shared collection · 7 of 52</div>
+              <div class="chip-row">
+                <span class="chip">Open original ↗</span>
+              </div>
+            </div>
+            <div class="header-tools">
+              <div class="group">
+                <span class="group-label">Browse</span>
+                <button class="btn">Prev</button>
+                <span class="mock-note">7 of 52</span>
+                <button class="btn">Next</button>
+              </div>
+              <div class="group">
+                <span class="group-label">Share</span>
+                <button class="btn primary">Share ▾</button>
+              </div>
+              <button class="btn">Close</button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-body">
+          <div class="stage-col">
+            <div class="stage-prompt">
+              <div class="kicker">Questions</div>
+              <div>Click on the image to ask a question.</div>
+              <div class="subtle">Press Enter to save. Use Shift+Enter for a new line.</div>
+            </div>
+            <div class="stage">Image / media stage</div>
+          </div>
+          <div class="side-col">
+            <div class="section">
+              <div class="section-title questions">Questions</div>
+              <div class="list-card">
+                <div class="question-item">
+                  <div class="question-num">?1</div>
+                  <div>Do you want flush inset examples in this collection too?</div>
+                </div>
+                <div class="question-item" style="margin-top:8px;">
+                  <div class="question-num">?2</div>
+                  <div>Are these meant for kitchen lowers only or all built-ins?</div>
+                </div>
+              </div>
+            </div>
+            <div class="section">
+              <div class="section-title">Notes</div>
+              <div class="notes-card">Read-only owner notes appear here as context, not as an editable field.</div>
+            </div>
+            <div class="section">
+              <div class="section-title">Labels</div>
+              <div class="labels-card mock-note">cabinetry, kitchen, built-ins, hardware</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <strong>Owner modal</strong>
+        <span class="tag">Proposed</span>
+      </div>
+      <div class="modal">
+        <div class="modal-header">
+          <div class="header-row">
+            <div class="title-block">
+              <div class="chip-row">
+                <span class="chip">Pin</span>
+                <span class="chip identity">Viewing as Jim (Owner)</span>
+              </div>
+              <div class="title">CB: Cabinetry</div>
+              <div class="meta">Pinterest · Board: favorite-places-spaces · Item 7 of 52</div>
+              <div class="chip-row">
+                <span class="chip">Open original ↗</span>
+                <span class="chip">Asset ID in metadata only</span>
+              </div>
+            </div>
+            <div class="header-tools">
+              <div class="group">
+                <span class="group-label">Browse</span>
+                <button class="btn">Prev</button>
+                <span class="mock-note">7 of 52</span>
+                <button class="btn">Next</button>
+              </div>
+              <div class="group">
+                <span class="group-label">Share</span>
+                <button class="btn">Copy Link</button>
+                <button class="btn">Email</button>
+                <button class="btn">Print</button>
+              </div>
+              <button class="btn">Close</button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-body">
+          <div class="stage-col">
+            <div class="stage">Image / media stage</div>
+          </div>
+          <div class="side-col">
+            <div class="section">
+              <div class="section-title">Notes</div>
+              <div class="notes-card">Owner-editable notes and source context live here.</div>
+            </div>
+            <div class="section">
+              <div class="section-title annotations">Annotations</div>
+              <div class="list-card">
+                <div class="annotation-item">
+                  <div><strong>#1</strong> Owner annotation about cabinet reveal depth.</div>
+                </div>
+              </div>
+            </div>
+            <div class="section">
+              <div class="section-title">Labels</div>
+              <div class="labels-card mock-note">cabinetry, trim, inset, hardware</div>
+            </div>
+            <div class="section">
+              <div class="section-title">Review</div>
+              <div class="notes-card">Owner-only review/classification controls remain available here when relevant.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>
