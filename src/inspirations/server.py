@@ -2060,13 +2060,16 @@ class ApiHandler(BaseHTTPRequestHandler):
         try:
             with Db(self.server.db_path) as db:
                 ensure_schema(db)
+                is_owner = str((actor or {}).get("role") or "").strip().lower() == "owner"
                 rows = list_collections(
                     db,
-                    include_hidden=False,
+                    include_hidden=is_owner,
                     viewer_role=str((actor or {}).get("role") or ""),
                     viewer_actor_id=str((actor or {}).get("id") or ""),
                 )
             if rows:
+                active_rows = [row for row in rows if not int(row.get("hidden") or 0)]
+                hidden_rows = [row for row in rows if int(row.get("hidden") or 0)]
                 collections_node = {
                     "id": "collections",
                     "label": "Collections",
@@ -2074,30 +2077,48 @@ class ApiHandler(BaseHTTPRequestHandler):
                     "type": "collections_group",
                     "children": [],
                 }
-                for row in rows:
+
+                def _collection_tree_child(row: dict) -> dict:
                     data = decorate_collection_record(dict(row))
                     cid = str(data["id"] or "")
-                    if not cid:
-                        continue
-                    collections_node["children"].append(
-                        {
-                            "id": f"collection:{cid}",
-                            "label": str(data["name"] or ""),
-                            "count": int(data.get("count_visible") or data.get("count") or 0),
-                            "type": "collection",
-                            "collection_id": cid,
-                            "description": str(data.get("description") or ""),
-                            "provenance_kind": str(data.get("provenance_kind") or ""),
-                            "provenance_label": str(data.get("provenance_label") or collection_provenance_label(str(data.get("provenance_kind") or ""))),
-                            "provenance_badge": str(data.get("provenance_badge") or collection_provenance_badge(str(data.get("provenance_kind") or ""))),
-                            "provenance_note": str(data.get("provenance_note") or ""),
-                            "intent": str(data.get("intent") or "working"),
-                            "shared_actor_id": str(data.get("shared_actor_id") or ""),
-                            "shared_actor_name": str(data.get("shared_actor_name") or ""),
-                        }
-                    )
+                    return {
+                        "id": f"collection:{cid}",
+                        "label": str(data["name"] or ""),
+                        "count": int(data.get("count_visible") or data.get("count") or 0),
+                        "type": "collection",
+                        "collection_id": cid,
+                        "description": str(data.get("description") or ""),
+                        "hidden": int(data.get("hidden") or 0),
+                        "provenance_kind": str(data.get("provenance_kind") or ""),
+                        "provenance_label": str(data.get("provenance_label") or collection_provenance_label(str(data.get("provenance_kind") or ""))),
+                        "provenance_badge": str(data.get("provenance_badge") or collection_provenance_badge(str(data.get("provenance_kind") or ""))),
+                        "provenance_note": str(data.get("provenance_note") or ""),
+                        "intent": str(data.get("intent") or "working"),
+                        "shared_actor_id": str(data.get("shared_actor_id") or ""),
+                        "shared_actor_name": str(data.get("shared_actor_name") or ""),
+                    }
+
+                for row in active_rows:
+                    if str(row.get("id") or ""):
+                        collections_node["children"].append(_collection_tree_child(row))
+                if hidden_rows:
+                    hidden_children = [
+                        _collection_tree_child(row)
+                        for row in hidden_rows
+                        if str(row.get("id") or "")
+                    ]
+                    if hidden_children:
+                        collections_node["children"].append(
+                            {
+                                "id": "collections:hidden",
+                                "label": "Hidden",
+                                "count": len(hidden_children),
+                                "type": "collections_hidden_group",
+                                "children": hidden_children,
+                            }
+                        )
                 if collections_node["children"]:
-                    collections_node["count"] = len(collections_node["children"])
+                    collections_node["count"] = len(active_rows) + len(hidden_rows)
                     tree.append(collections_node)
         except Exception:
             pass

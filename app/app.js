@@ -2460,6 +2460,88 @@ function buildClassificationNode(node) {
   return el;
 }
 
+function buildCollectionLeaf(child, selectedCollectionIds) {
+  const leaf = document.createElement("button");
+  const isActive = selectedCollectionIds.length === 1 && selectedCollectionIds[0] === child.collection_id;
+  const badge = child.provenance_badge
+    ? `<span class="tree-collection-badge" title="${escapeHtml(child.provenance_label || "")}">${escapeHtml(child.provenance_badge)}</span>`
+    : "";
+  const sharedNames = Array.isArray(child.shared_actor_names) ? child.shared_actor_names.filter(Boolean) : [];
+  const shareSummary = _sharedWithSummary(sharedNames);
+  const shareBadge = String(child.intent || "").trim().toLowerCase() === "shared"
+    ? `<span class="tree-collection-badge tree-collection-share-badge" title="${escapeHtml(shareSummary || "Shared collection")}">Shared</span>`
+    : "";
+  const hiddenBadge = Number(child.hidden || 0) === 1
+    ? `<span class="tree-collection-badge" title="Hidden collection">Hidden</span>`
+    : "";
+  const titleBits = [String(child.label || "")];
+  if (shareSummary) titleBits.push(shareSummary);
+  if (child.provenance_label) titleBits.push(String(child.provenance_label));
+  if (child.provenance_note) titleBits.push(String(child.provenance_note));
+  leaf.className = `tree-leaf${isActive ? " active" : ""}`;
+  leaf.title = titleBits.join(" — ");
+  leaf.innerHTML = `<span class="tree-leaf-main"><span class="tree-leaf-text">${escapeHtml(child.label)}</span>${shareBadge}${badge}${hiddenBadge}</span><span class="tree-count">${child.count}</span>`;
+  leaf.onclick = () => {
+    resetTriageFilter();
+    state.currentSource = null;
+    state.currentBoard = null;
+    state.currentContentKind = null;
+    clearCatalogFilter();
+    clearClassificationFilter();
+    setCollectionFilterIds([child.collection_id], { label: child.label, nodeId: child.id });
+    state.offset = 0;
+    renderCatalogTree();
+    loadAssets();
+  };
+  const _colId = child.collection_id;
+  addTreeHideToggle(leaf, () => ({ collection_id: _colId }));
+  return leaf;
+}
+
+function buildCollectionBranchNode(node, selectedCollectionIds) {
+  const el = document.createElement("div");
+  el.className = "tree-node";
+  const nodeKey = String(node.id || node.label || "collection-branch");
+  const selectedCollectionSet = new Set(selectedCollectionIds);
+  const visibleChildren = Array.isArray(node.children) ? node.children : [];
+  const hasActiveChild = visibleChildren.some((child) => (
+    (child.collection_id && selectedCollectionSet.has(child.collection_id))
+    || _treeNodeContainsActiveSelection(child)
+  ));
+  if (hasActiveChild) state.expandedTreeNodes.add(nodeKey);
+
+  const toggle = document.createElement("button");
+  toggle.className = `tree-toggle${hasActiveChild ? " active" : ""}`;
+  toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label">${escapeHtml(node.label || "Collections")}</span><span class="tree-count">${Number(node.count || visibleChildren.length || 0)}</span>`;
+  toggle.title = node.label || "Collections";
+
+  const children = document.createElement("div");
+  children.className = "tree-children";
+  _setTreeNodeExpanded(nodeKey, toggle, children, state.expandedTreeNodes.has(nodeKey));
+  _wireTreeArrowToggle(toggle, nodeKey, children);
+  toggle.onclick = () => {
+    resetTriageFilter();
+    state.currentSource = null;
+    state.currentBoard = null;
+    state.currentContentKind = null;
+    clearCatalogFilter();
+    clearClassificationFilter();
+    setCollectionFilterIds(collectDescendantCollectionIds(node), { label: node.label || "Collections", nodeId: node.id });
+    state.offset = 0;
+    renderCatalogTree();
+    loadAssets();
+  };
+
+  for (const child of visibleChildren) {
+    if (Array.isArray(child.children)) children.appendChild(buildCollectionBranchNode(child, selectedCollectionIds));
+    else children.appendChild(buildCollectionLeaf(child, selectedCollectionIds));
+  }
+
+  el.appendChild(toggle);
+  el.appendChild(children);
+  return el;
+}
+
 function buildCollectionsGroupNode(node) {
   const el = document.createElement("div");
   el.className = "tree-node";
@@ -2508,39 +2590,8 @@ function buildCollectionsGroupNode(node) {
   };
 
   for (const child of visibleChildren) {
-    const leaf = document.createElement("button");
-    const isActive = selectedCollectionIds.length === 1 && selectedCollectionIds[0] === child.collection_id;
-    const badge = child.provenance_badge
-      ? `<span class="tree-collection-badge" title="${escapeHtml(child.provenance_label || "")}">${escapeHtml(child.provenance_badge)}</span>`
-      : "";
-    const sharedNames = Array.isArray(child.shared_actor_names) ? child.shared_actor_names.filter(Boolean) : [];
-    const shareSummary = _sharedWithSummary(sharedNames);
-    const shareBadge = String(child.intent || "").trim().toLowerCase() === "shared"
-      ? `<span class="tree-collection-badge tree-collection-share-badge" title="${escapeHtml(shareSummary || "Shared collection")}">Shared</span>`
-      : "";
-    const titleBits = [String(child.label || "")];
-    if (shareSummary) titleBits.push(shareSummary);
-    if (child.provenance_label) titleBits.push(String(child.provenance_label));
-    if (child.provenance_note) titleBits.push(String(child.provenance_note));
-    leaf.className = `tree-leaf${isActive ? " active" : ""}`;
-    leaf.title = titleBits.join(" — ");
-    leaf.innerHTML = `<span class="tree-leaf-main"><span class="tree-leaf-text">${escapeHtml(child.label)}</span>${shareBadge}${badge}</span><span class="tree-count">${child.count}</span>`;
-    leaf.onclick = () => {
-      resetTriageFilter();
-      state.currentSource = null;
-      state.currentBoard = null;
-      state.currentContentKind = null;
-      clearCatalogFilter();
-      clearClassificationFilter();
-      setCollectionFilterIds([child.collection_id], { label: child.label, nodeId: child.id });
-      state.offset = 0;
-      renderCatalogTree();
-      loadAssets();
-    };
-    // Context menu for bulk triage on collections (owner-only)
-    const _colId = child.collection_id;
-    addTreeHideToggle(leaf, () => ({ collection_id: _colId }));
-    children.appendChild(leaf);
+    if (Array.isArray(child.children)) children.appendChild(buildCollectionBranchNode(child, selectedCollectionIds));
+    else children.appendChild(buildCollectionLeaf(child, selectedCollectionIds));
   }
 
   el.appendChild(toggle);

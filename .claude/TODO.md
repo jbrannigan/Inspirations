@@ -23,7 +23,8 @@ Active scope/acceptance doc: `docs/SPRINT1_AGENDA_NEXT.md`
 - Information architecture target (collaborator view):
   - Hide entire `Status` block.
   - `Collections` first, `All Items` as peer. Default `Collections` expanded.
-- Collection lifecycle: Add `Hide collection` and `Delete collection` (owner). Hidden collections move under a `Hidden` branch within `Collections`.
+- [x] Collection lifecycle: hidden collections move under a `Hidden` branch within `Collections` for owners.
+- [ ] Collection lifecycle polish: owner hide/restore/delete actions exist in Manage Visibility; decide whether to add per-collection inline actions in the sidebar.
 - Scope hierarchy copy: `Hide in this collection` vs. `Hide globally` vs. `Keep` (corpus-level).
 - Follow-up note: switching out of one-by-one review should feel like moving between review modes rather than exiting the workflow. Implemented in current UX unification slice: one-by-one now returns to Grid review when launched from Grid review.
 

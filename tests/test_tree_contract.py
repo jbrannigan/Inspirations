@@ -314,7 +314,11 @@ class TestTreeContract(unittest.TestCase):
         collections_node = next((n for n in tree if n.get("type") == "collections_group"), None)
         self.assertIsNotNone(collections_node, "collections group should be present")
         labels = [str(c.get("label") or "") for c in collections_node.get("children", [])]
-        self.assertEqual(labels, ["Bathroom", "CB: Alpha", "CB: Zebra"])
+        self.assertEqual(labels, ["Bathroom", "CB: Alpha", "CB: Zebra", "Hidden"])
+        self.assertEqual(collections_node.get("count"), 4)
+        hidden_branch = next((c for c in collections_node.get("children", []) if c.get("type") == "collections_hidden_group"), None)
+        self.assertIsNotNone(hidden_branch, "owner tree should expose hidden collections under a Hidden branch")
+        self.assertEqual([str(c.get("label") or "") for c in hidden_branch.get("children", [])], ["CB: Hidden"])
 
     def test_collections_group_counts_only_visible_items(self):
         """Collection counts should match visible items returned by /api/assets."""
