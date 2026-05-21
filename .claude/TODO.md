@@ -14,11 +14,12 @@
 Active scope/acceptance doc: `docs/SPRINT1_AGENDA_NEXT.md`
 
 - Run a focused UX review of current Grid review mode redundancy.
-- Owners see one consolidated `Review` action bar in both Grid and Explorer (`Keep`, `Hide`, `Flag`, `Tag`, `Clear`).
+- [x] Owners see one consolidated `Review` action set in Grid review and one-by-one review (`Keep`, `Hide in collection`, `Hide globally`, `Flag`, `Clear`).
+- [ ] Explorer review entry still switches to Grid review for safety; revisit native Explorer action parity after Grid/one-by-one stabilizes.
 - Information architecture target (owner view):
-  - Root 1: `Status` tree — `All` at root, children: `Pending`, `Keepers`, `Hidden`, `Needs comment`, `Flagged`.
-  - Root 2: `Collections` (peer root).
-  - Root 3: `All Items` (peer root for corpus browsing facets/sources).
+  - [x] Root 1: `Status` tree — `All` at root, children: `Pending`, `Keepers`, `Hidden`, `Needs comment`, `Flagged`.
+  - [x] Root 2: `Collections` (peer root).
+  - [x] Root 3: `All Items` (peer root for corpus browsing facets/sources).
 - Information architecture target (collaborator view):
   - Hide entire `Status` block.
   - `Collections` first, `All Items` as peer. Default `Collections` expanded.
