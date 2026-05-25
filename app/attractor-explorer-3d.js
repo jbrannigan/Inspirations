@@ -64,6 +64,7 @@
   let _filterIds = null;
   let _searchTerm = "";
   let _focusedMode = true;
+  let _groupByKey = "";
 
   // Settings
   let _attractStrength = 0.35;
@@ -78,6 +79,7 @@
   let _tweenStart = 0;
   const _tweenDuration = 600;
   let _tweening = false;
+  let _cameraCenterTween = null;
   let _deferredSettleRaf = null;
   let _deferredSettleRunId = 0;
   let _deferSettleUntil = 0;
@@ -229,6 +231,24 @@
     scan: 0x8b6914,
     photo: 0x5b6f8c,
   };
+  const GROUP_BY_LIMIT = 7;
+  const GROUP_BY_SPECS = [
+    { key: "", label: "None" },
+    { key: "source", label: "Source" },
+    { key: "room", label: "Room" },
+    { key: "style_family", label: "Style" },
+    { key: "materials", label: "Material" },
+    { key: "colors", label: "Color" },
+    { key: "product_focus", label: "Product" },
+  ];
+  const GROUP_BY_SOURCE_LABELS = {
+    pinterest: "Pinterest",
+    facebook: "Facebook",
+    houzz: "Houzz",
+    scan: "Scans",
+    photo: "Photos",
+  };
+  const DEFAULT_OPEN_CATEGORY_KEYS = new Set(["room", "style_family", "materials", "colors"]);
 
   function _normalizeSourceKey(source) {
     const key = String(source || "").trim().toLowerCase();
@@ -425,7 +445,7 @@
       spread: _clamp(rawPreset.spread, 1, 20, 6),
       size: _clamp(rawPreset.size, 0.05, 30, 8),
       restPull: _clamp(rawPreset.restPull, MIN_REST_PULL, MAX_REST_PULL, 0.02),
-      focusedMode: !!rawPreset.focusedMode,
+      focusedMode: true,
       liveMode: !!rawPreset.liveMode,
       showThumbs: typeof rawPreset.showThumbs === "boolean" ? rawPreset.showThumbs : true,
     };
@@ -444,7 +464,7 @@
     if (Number.isFinite(look?.restPull)) {
       _restPull = _clamp(look.restPull, MIN_REST_PULL, MAX_REST_PULL, _restPull);
     }
-    if (typeof look?.focusedMode === "boolean") _focusedMode = look.focusedMode;
+    _focusedMode = true;
     if (typeof look?.liveMode === "boolean") {
       _liveDefaultEnabled = look.liveMode;
       _liveMode = look.liveMode;
@@ -478,7 +498,7 @@
       if (Number.isFinite(s.restPull)) {
         _restPull = _clamp(s.restPull, MIN_REST_PULL, MAX_REST_PULL, _restPull);
       }
-      if (typeof s.focusedMode === "boolean") _focusedMode = s.focusedMode;
+      _focusedMode = true;
       if (typeof s.showThumbs === "boolean") _showThumbs = s.showThumbs;
       if (typeof s.liveMode === "boolean") {
         _liveDefaultEnabled = s.liveMode;
@@ -497,6 +517,7 @@
         const startupPreset = _presets.find((p) => p.name === _startupPresetName);
         if (startupPreset) _applyLookToState(startupPreset, { markManualSize: true });
       }
+      _focusedMode = true;
     } catch (_) {
       // Ignore malformed local settings
     }
@@ -509,7 +530,7 @@
         spread: _repulsion,
         size: _nodeSize,
         restPull: _restPull,
-        focusedMode: _focusedMode,
+        focusedMode: true,
         showThumbs: _showThumbs,
         liveMode: _liveDefaultEnabled,
         presets: _presets.map((p) => ({
@@ -518,7 +539,7 @@
           spread: p.spread,
           size: p.size,
           restPull: p.restPull,
-          focusedMode: p.focusedMode,
+          focusedMode: true,
           liveMode: p.liveMode,
           showThumbs: p.showThumbs,
         })),
@@ -670,7 +691,14 @@
     // Control panel
     _controlsEl = document.createElement("div");
     _controlsEl.className = "attractor-controls";
-    _container.appendChild(_controlsEl);
+    const toolbarMount = document.getElementById("explorerToolbarMount");
+    if (toolbarMount) {
+      toolbarMount.hidden = false;
+      _controlsEl.classList.add("toolbar-mounted");
+      toolbarMount.appendChild(_controlsEl);
+    } else {
+      _container.appendChild(_controlsEl);
+    }
 
     // Hover preview (desktop/laptop pointers only)
     _hoverPreviewEl = document.createElement("div");
@@ -868,7 +896,11 @@
       _nodeSize = _defaultNodeSizeForCount(_nodes.length);
     }
 
-    // Build controls
+    // Build controls. Start new loads in category-filter mode; the user can
+    // switch to grouping explicitly from the toolbar.
+    _focusedMode = true;
+    _groupByKey = "";
+    _activeAttractors = [];
     _buildControls();
 
     // Start from precomputed layout coordinates (avoids "everything is a sphere")
@@ -1312,7 +1344,9 @@
       _animFrameId = requestAnimationFrame(loop);
       if (_paused) return;
 
+      _stepCameraCenterTween();
       if (_controls) _controls.update();
+
 
       if (_liveMode && _liveUntil > 0 && performance.now() >= _liveUntil) {
         _endLiveBurst({ settle: true });
@@ -1383,6 +1417,62 @@
     if (_animFrameId) {
       cancelAnimationFrame(_animFrameId);
       _animFrameId = null;
+    }
+  }
+
+  function _visibleClusterCenter() {
+    if (!_nodes.length) return null;
+    let sumX = 0;
+    let sumY = 0;
+    let sumZ = 0;
+    let count = 0;
+    for (const node of _nodes) {
+      const x = Number.isFinite(node._targetX) ? node._targetX : node.x;
+      const y = Number.isFinite(node._targetY) ? node._targetY : node.y;
+      const z = Number.isFinite(node._targetZ) ? node._targetZ : node.z;
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+      sumX += x;
+      sumY += y;
+      sumZ += z;
+      count++;
+    }
+    if (!count) return null;
+    return new THREE.Vector3(sumX / count, sumY / count, sumZ / count);
+  }
+
+  function _smoothCenterVisibleCluster() {
+    if (!_camera || !_controls || !THREE || _controlsDragging) return;
+    const center = _visibleClusterCenter();
+    if (!center) return;
+
+    const fromTarget = _controls.target.clone();
+    const fromCamera = _camera.position.clone();
+    const cameraOffset = fromCamera.clone().sub(fromTarget);
+    const toCamera = center.clone().add(cameraOffset);
+
+    if (fromTarget.distanceToSquared(center) < 0.01) return;
+    _cameraCenterTween = {
+      start: performance.now(),
+      duration: 620,
+      fromTarget,
+      toTarget: center,
+      fromCamera,
+      toCamera,
+    };
+    _needsOverlaySync = true;
+  }
+
+  function _stepCameraCenterTween() {
+    if (!_cameraCenterTween || !_camera || !_controls) return;
+    const tween = _cameraCenterTween;
+    const t = Math.min(1, (performance.now() - tween.start) / tween.duration);
+    const ease = 1 - Math.pow(1 - t, 3);
+    _controls.target.lerpVectors(tween.fromTarget, tween.toTarget, ease);
+    _camera.position.lerpVectors(tween.fromCamera, tween.toCamera, ease);
+    _needsOverlaySync = true;
+    if (t >= 1) {
+      _cameraCenterTween = null;
+      _queueNearTextures();
     }
   }
 
@@ -1665,10 +1755,51 @@
       spread: _repulsion,
       size: _nodeSize,
       restPull: _restPull,
-      focusedMode: _focusedMode,
+      focusedMode: true,
       liveMode: _liveMode,
       showThumbs: _showThumbs,
     });
+  }
+
+  function _setNumericControlValue(input, value, digits) {
+    if (!input) return;
+    const text = _fmtNum(value, digits);
+    if ("value" in input) {
+      if (document.activeElement !== input) input.value = text;
+    } else {
+      input.textContent = text;
+    }
+  }
+
+  function _wireRangeNumberControl({ rangeId, numberId, min, max, fallback, digits, apply }) {
+    const range = _controlsEl?.querySelector(`#${rangeId}`);
+    const number = _controlsEl?.querySelector(`#${numberId}`);
+    if (!range) return;
+
+    const commit = (rawValue, { formatNumber = true } = {}) => {
+      const value = _clamp(rawValue, min, max, fallback);
+      range.value = String(value);
+      if (number && formatNumber) number.value = _fmtNum(value, digits);
+      apply(value);
+    };
+
+    range.addEventListener("input", (e) => {
+      commit(e.target.value);
+    });
+
+    if (number) {
+      number.addEventListener("input", (e) => {
+        const raw = String(e.target.value || "").trim();
+        if (!raw || raw === "-" || raw === "." || raw === "-.") return;
+        commit(raw, { formatNumber: false });
+      });
+      number.addEventListener("change", (e) => {
+        commit(e.target.value);
+      });
+      number.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+      });
+    }
   }
 
   function _syncControlInputsFromState() {
@@ -1681,18 +1812,17 @@
     const spreadVal = _controlsEl.querySelector("#_attr3dSpreadVal");
     const sizeVal = _controlsEl.querySelector("#_attr3dSizeVal");
     const restPullVal = _controlsEl.querySelector("#_attr3dRestPullVal");
-    const focusToggle = _controlsEl.querySelector("#_attr3dFocus");
     const liveToggle = _controlsEl.querySelector("#_attr3dLive");
     const thumbsToggle = _controlsEl.querySelector("#_attr3dThumbs");
     if (strSlider) strSlider.value = String(_attractStrength);
     if (spreadSlider) spreadSlider.value = String(_repulsion);
     if (sizeSlider) sizeSlider.value = String(_nodeSize);
     if (restPullSlider) restPullSlider.value = String(_restPull);
-    if (strVal) strVal.textContent = _fmtNum(_attractStrength, 2);
-    if (spreadVal) spreadVal.textContent = _fmtNum(_repulsion, 0);
-    if (sizeVal) sizeVal.textContent = _fmtNum(_nodeSize, 2);
-    if (restPullVal) restPullVal.textContent = _fmtNum(_restPull, 3);
-    if (focusToggle) focusToggle.checked = _focusedMode;
+    _setNumericControlValue(strVal, _attractStrength, 2);
+    _setNumericControlValue(spreadVal, _repulsion, 0);
+    _setNumericControlValue(sizeVal, _nodeSize, 2);
+    _setNumericControlValue(restPullVal, _restPull, 3);
+    _syncGroupByUi();
     if (liveToggle) liveToggle.checked = _liveMode;
     if (thumbsToggle) thumbsToggle.checked = _showThumbs;
   }
@@ -1753,35 +1883,253 @@
     return true;
   }
 
+  function _groupByOptionsHtml() {
+    return GROUP_BY_SPECS
+      .filter((spec) => !spec.key || spec.key === "source" || Array.isArray(_attractorOptions[spec.key]))
+      .map((spec) => `<option value="${spec.key}" ${_groupByKey === spec.key ? "selected" : ""}>${spec.label}</option>`)
+      .join("");
+  }
+
+  function _groupByLabel(key) {
+    const spec = GROUP_BY_SPECS.find((item) => item.key === key);
+    return spec ? spec.label : "";
+  }
+
+  function _scopeNodesWithoutGrouping() {
+    return _allNodes.filter((node) => {
+      if (_filterIds && _filterIds.size > 0 && !_filterIds.has(node.id)) return false;
+      if (!_nodeMatchesText(node)) return false;
+      return true;
+    });
+  }
+
+  function _groupOptionsForKey(key) {
+    const scopeNodes = _scopeNodesWithoutGrouping();
+    if (!key || !scopeNodes.length) return [];
+    if (key === "source") {
+      const counts = new Map();
+      for (const node of scopeNodes) {
+        const src = _normalizeSourceKey(node.source || "");
+        if (!src) continue;
+        counts.set(src, (counts.get(src) || 0) + 1);
+      }
+      return Array.from(counts.entries())
+        .map(([source, count]) => ({
+          source,
+          name: GROUP_BY_SOURCE_LABELS[source] || source,
+          count,
+          px: 0, py: 0, pz: 0,
+        }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, GROUP_BY_LIMIT);
+    }
+
+    const options = Array.isArray(_attractorOptions[key]) ? _attractorOptions[key] : [];
+    return options
+      .map((opt) => {
+        let count = 0;
+        for (const node of scopeNodes) {
+          if (node.vector?.[opt.dim] > 0) count++;
+        }
+        return { dim: opt.dim, name: opt.name, count, px: 0, py: 0, pz: 0 };
+      })
+      .filter((opt) => opt.count > 0)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, GROUP_BY_LIMIT);
+  }
+
+  function _refreshGroupByAttractors() {
+    _activeAttractors = _groupOptionsForKey(_groupByKey);
+    _syncGroupByUi();
+  }
+
+  function _syncGroupByUi() {
+    const select = _controlsEl?.querySelector("#_attr3dGroupBy");
+    if (select && select.value !== _groupByKey) select.value = _groupByKey;
+    const clearBtn = _controlsEl?.querySelector("#_attr3dClearGrouping");
+    if (clearBtn) clearBtn.disabled = !_groupByKey;
+
+    const strip = _controlsEl?.querySelector("#_attr3dActiveGroups");
+    const label = _controlsEl?.querySelector("#_attr3dActiveGroupsLabel");
+    const chips = _controlsEl?.querySelector("#_attr3dGroupChips");
+    if (!strip || !chips) return;
+    chips.innerHTML = "";
+    if (_focusedMode || _activeAttractors.length === 0) {
+      strip.hidden = true;
+      return;
+    }
+
+    strip.hidden = false;
+    if (label) label.textContent = _groupByKey
+      ? `Grouped by ${_groupByLabel(_groupByKey) || _groupByKey}`
+      : "Grouped categories";
+    for (const att of _activeAttractors) {
+      const chip = document.createElement("span");
+      chip.className = "attractor-chip attractor-group-chip active";
+      chip.setAttribute("aria-label", `${att.name || "Group"} group, ${att.count || 0} items`);
+      const name = document.createElement("span");
+      name.textContent = att.name || "Group";
+      const count = document.createElement("span");
+      count.className = "chip-count";
+      count.textContent = String(att.count || 0);
+      chip.append(name, count);
+      chips.appendChild(chip);
+    }
+  }
+
+  function _setGroupBy(key) {
+    const nextKey = String(key || "");
+    const hadGroupBy = !!_groupByKey;
+    _groupByKey = nextKey;
+    if (_groupByKey) _focusedMode = false;
+    if (!_groupByKey && hadGroupBy) _activeAttractors = [];
+    _rebuildForFocusedMode();
+  }
+
+  function _nodeMatchesAttractor(node, att) {
+    if (!node || !att) return false;
+    return att.source !== undefined
+      ? node.source === att.source
+      : node.vector?.[att.dim] > 0;
+  }
+
+  function _nodeMatchesAnyAttractor(node) {
+    if (_activeAttractors.length === 0) return true;
+    return _activeAttractors.some((att) => _nodeMatchesAttractor(node, att));
+  }
+
+  function _syncAttractorChipStates() {
+    if (!_controlsEl) return;
+    _controlsEl.querySelectorAll(".attractor-chips-section .attractor-chip").forEach((chip) => {
+      const srcStr = chip.dataset.src;
+      const dim = Number.parseInt(chip.dataset.dim || "", 10);
+      const isActive = srcStr
+        ? _activeAttractors.some((a) => a.source === srcStr)
+        : Number.isFinite(dim) && _activeAttractors.some((a) => a.dim === dim);
+      chip.classList.toggle("active", isActive);
+    });
+  }
+
+  function _syncCategoriesButtonUi() {
+    const btn = _controlsEl?.querySelector(".attractor-panel-toggle");
+    const count = _activeAttractors.length;
+    if (btn) {
+      btn.textContent = count > 0 ? `Categories (${count})` : "Categories";
+      btn.classList.toggle("active", count > 0);
+    }
+    const clearBtn = _controlsEl?.querySelector(".attractor-clear-categories");
+    if (clearBtn) clearBtn.disabled = count === 0;
+  }
+
+  function _syncModeSwitchUi() {
+    const filterBtn = _controlsEl?.querySelector("#_attr3dModeFilter");
+    const groupBtn = _controlsEl?.querySelector("#_attr3dModeGroup");
+    if (filterBtn) {
+      filterBtn.classList.toggle("active", _focusedMode);
+      filterBtn.setAttribute("aria-pressed", _focusedMode ? "true" : "false");
+    }
+    if (groupBtn) {
+      groupBtn.classList.toggle("active", !_focusedMode);
+      groupBtn.setAttribute("aria-pressed", !_focusedMode ? "true" : "false");
+    }
+    const modeText = _controlsEl?.querySelector(".attractor-categories-toolbar span");
+    if (modeText) {
+      modeText.textContent = `Categories ${_focusedMode ? "filter matching items" : "group matching items"}`;
+    }
+  }
+
+  function _computeOverlapStats() {
+    if (_activeAttractors.length === 0) return null;
+
+    const source = _scopeNodesWithoutGrouping();
+    const coveredIds = new Set();
+    for (const node of source) {
+      if (_nodeMatchesAnyAttractor(node)) coveredIds.add(node.id);
+    }
+
+    const stats = new Map();
+    for (const catKey of Object.keys(_attractorOptions)) {
+      for (const opt of _attractorOptions[catKey] || []) {
+        stats.set(opt.dim, { total: 0, unique: 0 });
+      }
+    }
+
+    for (const node of source) {
+      for (const [dim, s] of stats) {
+        if (node.vector?.[dim] > 0) {
+          s.total++;
+          if (!coveredIds.has(node.id)) s.unique++;
+        }
+      }
+    }
+    return stats;
+  }
+
+  function _updateChipLabels() {
+    if (!_controlsEl) return;
+    const stats = _computeOverlapStats();
+    const chips = _controlsEl.querySelectorAll(".attractor-chips-section .attractor-chip");
+    chips.forEach((chip) => {
+      const countEl = chip.querySelector(".chip-count");
+      if (!countEl) return;
+      const baseCount = Number.parseInt(chip.dataset.count || "", 10);
+      const dim = Number.parseInt(chip.dataset.dim || "", 10);
+      if (!stats || !Number.isFinite(dim)) {
+        if (Number.isFinite(baseCount)) countEl.textContent = String(baseCount);
+        countEl.title = "";
+        return;
+      }
+
+      const s = stats.get(dim);
+      if (!s) {
+        if (Number.isFinite(baseCount)) countEl.textContent = String(baseCount);
+        return;
+      }
+
+      const isActive = _activeAttractors.some((a) => a.dim === dim);
+      if (isActive) {
+        countEl.textContent = String(s.total);
+        countEl.title = `${s.total} items match this category`;
+      } else {
+        countEl.textContent = `${s.unique}/${s.total}`;
+        countEl.title = `${s.unique} new items not covered by active categories (${s.total} total)`;
+      }
+    });
+  }
+
+  function _toggleAttractor(opt) {
+    _groupByKey = "";
+    const idx = opt.source !== undefined
+      ? _activeAttractors.findIndex((a) => a.source === opt.source)
+      : _activeAttractors.findIndex((a) => a.dim === opt.dim);
+    if (idx >= 0) {
+      _activeAttractors.splice(idx, 1);
+    } else {
+      _activeAttractors.push(
+        opt.source !== undefined
+          ? { source: opt.source, name: opt.name, count: opt.count, px: 0, py: 0, pz: 0 }
+          : { dim: opt.dim, name: opt.name, count: opt.count, px: 0, py: 0, pz: 0 }
+      );
+    }
+    _rebuildForFocusedMode();
+    _emitSelectionChange();
+  }
+
+  function _clearAttractors() {
+    if (_activeAttractors.length === 0 && !_groupByKey) return;
+    _groupByKey = "";
+    _activeAttractors = [];
+    _rebuildForFocusedMode();
+    _emitSelectionChange();
+  }
+
   function _applyLookAndRefresh(look) {
     if (!look) return false;
-    const prevFocusedMode = _focusedMode;
-    const prevShowThumbs = _showThumbs;
     _applyLookToState(look, { markManualSize: true });
     _liveCalm = 0;
     _syncControlInputsFromState();
     _saveSettings();
-
-    if (prevFocusedMode !== _focusedMode) {
-      _rebuildForFocusedMode();
-      return true;
-    }
-
-    if (!_showThumbs) _clearOverlayMeshes();
-    if (_activeAttractors.length > 0) {
-      if (_liveMode) {
-        _markSceneDirty();
-      } else {
-        _settleAndTween(_retickTicksForNodeCount(_nodes.length));
-      }
-    } else {
-      _resetNodesToRest();
-      _syncInstanceMesh();
-    }
-    if (_showThumbs) {
-      if (!prevShowThumbs) _queueNearTextures();
-      _syncTextureOverlays(true);
-    }
+    _rebuildForFocusedMode();
     return true;
   }
 
@@ -1789,69 +2137,91 @@
     if (!_controlsEl) return;
     _controlsEl.innerHTML = "";
 
-    // Sliders row FIRST (always visible)
+    const searchRow = document.createElement("div");
+    searchRow.className = "attractor-search-row";
+    searchRow.innerHTML = `
+      <input class="attractor-search" type="search" placeholder="Type text to filter" aria-label="Filter map text">
+      <button class="attractor-panel-toggle" type="button" aria-expanded="false">Categories</button>
+      <span class="attractor-help-text">Sidebar filters choose the items. Group by arranges the current scope.</span>
+    `;
+    const searchInput = searchRow.querySelector(".attractor-search");
+    const panelToggle = searchRow.querySelector(".attractor-panel-toggle");
+    if (searchInput) searchInput.value = _searchTerm || "";
+    if (panelToggle) {
+      panelToggle.addEventListener("click", () => {
+        const expanded = !_controlsEl.classList.contains("categories-open");
+        _controlsEl.classList.toggle("categories-open", expanded);
+        panelToggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+      });
+    }
+    _controlsEl.appendChild(searchRow);
+
     const slidersRow = document.createElement("div");
     slidersRow.className = "attractor-sliders";
 
     slidersRow.innerHTML = `
       <label class="slider-with-value">
-        <span class="slider-head">Strength <input type="range" id="_attr3dStr" min="0.05" max="0.8" step="0.05" value="${_attractStrength}"></span>
-        <span class="slider-value" id="_attr3dStrVal">${_fmtNum(_attractStrength, 2)}</span>
+        <span class="slider-label">Strength</span>
+        <span class="slider-head"><input type="range" id="_attr3dStr" min="0.05" max="0.8" step="0.05" value="${_attractStrength}"><input class="slider-value slider-number" id="_attr3dStrVal" type="number" inputmode="decimal" min="0.05" max="0.8" step="0.05" value="${_fmtNum(_attractStrength, 2)}" aria-label="Strength value"></span>
       </label>
       <label class="slider-with-value">
-        <span class="slider-head">Spread <input type="range" id="_attr3dSpread" min="1" max="20" step="1" value="${_repulsion}"></span>
-        <span class="slider-value" id="_attr3dSpreadVal">${_fmtNum(_repulsion, 0)}</span>
+        <span class="slider-label">Spread</span>
+        <span class="slider-head"><input type="range" id="_attr3dSpread" min="1" max="20" step="1" value="${_repulsion}"><input class="slider-value slider-number" id="_attr3dSpreadVal" type="number" inputmode="numeric" min="1" max="20" step="1" value="${_fmtNum(_repulsion, 0)}" aria-label="Spread value"></span>
       </label>
       <label class="slider-with-value">
-        <span class="slider-head">Size <input type="range" id="_attr3dSize" min="0.05" max="30" step="0.05" value="${_nodeSize}"></span>
-        <span class="slider-value" id="_attr3dSizeVal">${_fmtNum(_nodeSize, 2)}</span>
+        <span class="slider-label">Size</span>
+        <span class="slider-head"><input type="range" id="_attr3dSize" min="0.05" max="30" step="0.05" value="${_nodeSize}"><input class="slider-value slider-number" id="_attr3dSizeVal" type="number" inputmode="decimal" min="0.05" max="30" step="0.05" value="${_fmtNum(_nodeSize, 2)}" aria-label="Size value"></span>
       </label>
       <label class="slider-with-value">
-        <span class="slider-head">Anchor <input type="range" id="_attr3dRestPull" min="${MIN_REST_PULL}" max="${MAX_REST_PULL}" step="0.002" value="${_restPull}"></span>
-        <span class="slider-value" id="_attr3dRestPullVal">${_fmtNum(_restPull, 3)}</span>
+        <span class="slider-label">Anchor</span>
+        <span class="slider-head"><input type="range" id="_attr3dRestPull" min="${MIN_REST_PULL}" max="${MAX_REST_PULL}" step="0.002" value="${_restPull}"><input class="slider-value slider-number" id="_attr3dRestPullVal" type="number" inputmode="decimal" min="${MIN_REST_PULL}" max="${MAX_REST_PULL}" step="0.002" value="${_fmtNum(_restPull, 3)}" aria-label="Anchor value"></span>
       </label>
-      <label class="physics-toggle">Focus <input type="checkbox" id="_attr3dFocus" ${_focusedMode ? "checked" : ""}></label>
+      <span class="filter-group-switch" role="group" aria-label="Category mode">
+        <button type="button" id="_attr3dModeFilter" class="mode-option ${_focusedMode ? "active" : ""}" aria-pressed="${_focusedMode ? "true" : "false"}">Filter</button>
+        <button type="button" id="_attr3dModeGroup" class="mode-option ${!_focusedMode ? "active" : ""}" aria-pressed="${!_focusedMode ? "true" : "false"}">Group</button>
+      </span>
+      <label class="group-by-control">Group by <select id="_attr3dGroupBy" aria-label="Group visible items">
+        ${_groupByOptionsHtml()}
+      </select></label>
+      <button type="button" class="attractor-clear-grouping" id="_attr3dClearGrouping" ${_groupByKey ? "" : "disabled"}>Clear grouping</button>
       <label class="physics-toggle">Live <input type="checkbox" id="_attr3dLive" ${_liveMode ? "checked" : ""}></label>
       ${_isOwnerRole() ? `<label class="physics-toggle">Thumbs <input type="checkbox" id="_attr3dThumbs" ${_showThumbs ? "checked" : ""}></label>` : ""}
     `;
     _controlsEl.appendChild(slidersRow);
 
-    if (_isOwnerRole()) {
-      const presetsRow = document.createElement("div");
-      presetsRow.className = "attractor-presets-row";
-      presetsRow.innerHTML = `
-        <span class="preset-label">Looks</span>
-        <select id="_attr3dPresetSelect" class="attractor-preset-select" aria-label="3D presets">
-          <option value="">Looks…</option>
-        </select>
-        <button type="button" class="attractor-preset-btn" id="_attr3dPresetSave">Save</button>
-        <button type="button" class="attractor-preset-btn" id="_attr3dPresetDelete" disabled>Delete</button>
-        <label class="attractor-preset-startup">
-          <input type="checkbox" id="_attr3dPresetStartup" disabled>
-          Startup
-        </label>
-      `;
-      _controlsEl.appendChild(presetsRow);
-    }
+    const activeGroups = document.createElement("div");
+    activeGroups.className = "attractor-active-groups";
+    activeGroups.id = "_attr3dActiveGroups";
+    activeGroups.hidden = true;
+    activeGroups.innerHTML = `
+      <span class="attractor-active-groups-label" id="_attr3dActiveGroupsLabel">Grouped</span>
+      <span class="attractor-chips attractor-group-chips" id="_attr3dGroupChips"></span>
+    `;
+    _controlsEl.appendChild(activeGroups);
 
-    // Chip groups in hover-reveal section
     const chipsSection = document.createElement("div");
     chipsSection.className = "attractor-chips-section";
+    const toolbar = document.createElement("div");
+    toolbar.className = "attractor-categories-toolbar";
+    toolbar.innerHTML = `
+      <span>Categories ${_focusedMode ? "filter matching items" : "group matching items"}</span>
+      <button type="button" class="attractor-clear-categories">Clear categories</button>
+    `;
+    chipsSection.appendChild(toolbar);
 
-    // Source chips — always first
     {
-      const srcOrder = ["pinterest", "facebook", "houzz", "scan"];
-      const srcLabels = { pinterest: "Pinterest", facebook: "Facebook", houzz: "Houzz", scan: "Scans" };
+      const srcOrder = ["pinterest", "facebook", "houzz", "scan", "photo"];
+      const srcLabels = { pinterest: "Pinterest", facebook: "Facebook", houzz: "Houzz", scan: "Scans", photo: "Photos" };
       const srcCounts = {};
       for (const n of _allNodes) srcCounts[n.source] = (srcCounts[n.source] || 0) + 1;
-
       const presentSrcs = srcOrder.filter((s) => srcCounts[s] > 0);
       if (presentSrcs.length > 0) {
-        const group = document.createElement("div");
+        const group = document.createElement("details");
         group.className = "attractor-group";
-        const lbl = document.createElement("span");
+        group.open = _activeAttractors.length === 0 || _activeAttractors.some((att) => att.source !== undefined);
+        const lbl = document.createElement("summary");
         lbl.className = "attractor-group-label";
-        lbl.textContent = "Source";
+        lbl.innerHTML = `Source <span class="attractor-group-count">${presentSrcs.length}</span>`;
         group.appendChild(lbl);
         const chips = document.createElement("div");
         chips.className = "attractor-chips";
@@ -1863,8 +2233,8 @@
           btn.type = "button";
           btn.dataset.src = src;
           btn.dataset.count = count;
-          btn.innerHTML = `<span class="src-dot" style="background:${cssColor}"></span>${srcLabels[src]} <span class="chip-count">${count}</span>`;
-          btn.addEventListener("click", () => _toggleAttractor({ source: src, name: srcLabels[src], count }));
+          btn.innerHTML = `<span class="src-dot" style="background:${cssColor}"></span>${srcLabels[src] || src} <span class="chip-count">${count}</span>`;
+          btn.addEventListener("click", () => _toggleAttractor({ source: src, name: srcLabels[src] || src, count }));
           chips.appendChild(btn);
         }
         group.appendChild(chips);
@@ -1888,17 +2258,18 @@
       const options = _attractorOptions[catKey];
       if (!options || options.length === 0) continue;
 
-      const group = document.createElement("div");
+      const group = document.createElement("details");
       group.className = "attractor-group";
+      group.open = _activeAttractors.some((att) => options.some((opt) => opt.dim === att.dim))
+        || (_activeAttractors.length === 0 && DEFAULT_OPEN_CATEGORY_KEYS.has(catKey));
 
-      const label = document.createElement("span");
+      const label = document.createElement("summary");
       label.className = "attractor-group-label";
-      label.textContent = (_categories[catKey] || {}).label || catKey;
+      label.innerHTML = `${(_categories[catKey] || {}).label || catKey} <span class="attractor-group-count">${options.length}</span>`;
       group.appendChild(label);
 
       const chips = document.createElement("div");
       chips.className = "attractor-chips";
-
       const maxChips = catKey === "colors"
         ? 8
         : (catKey === "product_focus" || catKey === "room" ? 12 : 10);
@@ -1917,64 +2288,99 @@
       chipsSection.appendChild(group);
     }
     _controlsEl.appendChild(chipsSection);
+    const clearCategories = chipsSection.querySelector(".attractor-clear-categories");
+    if (clearCategories) clearCategories.addEventListener("click", _clearAttractors);
 
-    // Wire sliders
-    const strSlider = _controlsEl.querySelector("#_attr3dStr");
-    const strVal = _controlsEl.querySelector("#_attr3dStrVal");
-    if (strSlider)
-      strSlider.addEventListener("input", (e) => {
-        _attractStrength = parseFloat(e.target.value);
-        if (strVal) strVal.textContent = _fmtNum(_attractStrength, 2);
+    if (_isOwnerRole()) {
+      const presetsRow = document.createElement("div");
+      presetsRow.className = "attractor-presets-row";
+      presetsRow.innerHTML = `
+        <span class="preset-label">Looks</span>
+        <select id="_attr3dPresetSelect" class="attractor-preset-select" aria-label="3D presets">
+          <option value="">Looks…</option>
+        </select>
+        <button type="button" class="attractor-preset-btn" id="_attr3dPresetSave">Save</button>
+        <button type="button" class="attractor-preset-btn" id="_attr3dPresetDelete" disabled>Delete</button>
+        <label class="attractor-preset-startup">
+          <input type="checkbox" id="_attr3dPresetStartup" disabled>
+          Startup
+        </label>
+      `;
+      _controlsEl.appendChild(presetsRow);
+    }
+
+    // Wire sliders and editable values. The number inputs are deliberately
+    // redundant: precision dragging on iPad is unreliable.
+    _wireRangeNumberControl({
+      rangeId: "_attr3dStr",
+      numberId: "_attr3dStrVal",
+      min: 0.05,
+      max: 0.8,
+      fallback: _attractStrength,
+      digits: 2,
+      apply(value) {
+        _attractStrength = value;
+        _saveSettings();
+        if (_activeAttractors.length > 0 && !_liveMode) _settleAndTween(_retickTicksForNodeCount(_nodes.length));
+      },
+    });
+
+    _wireRangeNumberControl({
+      rangeId: "_attr3dSpread",
+      numberId: "_attr3dSpreadVal",
+      min: 1,
+      max: 20,
+      fallback: _repulsion,
+      digits: 0,
+      apply(value) {
+        _repulsion = value;
         _saveSettings();
         if (_activeAttractors.length > 0) {
-          if (_liveMode) { /* forces update each frame */ }
-          else _settleAndTween(_retickTicksForNodeCount(_nodes.length));
-        }
-      });
-
-    const spreadSlider = _controlsEl.querySelector("#_attr3dSpread");
-    const spreadVal = _controlsEl.querySelector("#_attr3dSpreadVal");
-    if (spreadSlider)
-      spreadSlider.addEventListener("input", (e) => {
-        _repulsion = parseFloat(e.target.value);
-        if (spreadVal) spreadVal.textContent = _fmtNum(_repulsion, 0);
-        _saveSettings();
-        if (_activeAttractors.length > 0) {
-          if (_liveMode) { /* forces update each frame */ }
-          else _settleAndTween(_retickTicksForNodeCount(_nodes.length));
+          if (!_liveMode) _settleAndTween(_retickTicksForNodeCount(_nodes.length));
         } else {
           _resetNodesToRest();
           _syncInstanceMesh();
         }
-      });
+      },
+    });
 
-    const sizeSlider = _controlsEl.querySelector("#_attr3dSize");
-    const sizeVal = _controlsEl.querySelector("#_attr3dSizeVal");
-    if (sizeSlider)
-      sizeSlider.addEventListener("input", (e) => {
-        _nodeSize = parseFloat(e.target.value);
+    _wireRangeNumberControl({
+      rangeId: "_attr3dSize",
+      numberId: "_attr3dSizeVal",
+      min: 0.05,
+      max: 30,
+      fallback: _nodeSize,
+      digits: 2,
+      apply(value) {
+        _nodeSize = value;
         _sizeManuallySet = true;
-        if (sizeVal) sizeVal.textContent = _fmtNum(_nodeSize, 2);
         _saveSettings();
         _markSceneDirty();
-      });
+      },
+    });
 
-    const restPullSlider = _controlsEl.querySelector("#_attr3dRestPull");
-    const restPullVal = _controlsEl.querySelector("#_attr3dRestPullVal");
-    if (restPullSlider)
-      restPullSlider.addEventListener("input", (e) => {
-        _restPull = _clamp(e.target.value, MIN_REST_PULL, MAX_REST_PULL, _restPull);
-        if (restPullVal) restPullVal.textContent = _fmtNum(_restPull, 3);
+    _wireRangeNumberControl({
+      rangeId: "_attr3dRestPull",
+      numberId: "_attr3dRestPullVal",
+      min: MIN_REST_PULL,
+      max: MAX_REST_PULL,
+      fallback: _restPull,
+      digits: 3,
+      apply(value) {
+        _restPull = value;
         _saveSettings();
-      });
+      },
+    });
 
-    const focusToggle = _controlsEl.querySelector("#_attr3dFocus");
-    if (focusToggle)
-      focusToggle.addEventListener("change", (e) => {
-        _focusedMode = e.target.checked;
-        _saveSettings();
-        _rebuildForFocusedMode();
-      });
+    const groupBySelect = _controlsEl.querySelector("#_attr3dGroupBy");
+    if (groupBySelect) groupBySelect.addEventListener("change", (e) => _setGroupBy(e.target.value || ""));
+    const clearGroupingBtn = _controlsEl.querySelector("#_attr3dClearGrouping");
+    if (clearGroupingBtn) clearGroupingBtn.addEventListener("click", () => _setGroupBy(""));
+
+    const filterModeBtn = _controlsEl.querySelector("#_attr3dModeFilter");
+    const groupModeBtn = _controlsEl.querySelector("#_attr3dModeGroup");
+    if (filterModeBtn) filterModeBtn.addEventListener("click", () => setFocusedMode(true));
+    if (groupModeBtn) groupModeBtn.addEventListener("click", () => setFocusedMode(false));
 
     const liveToggle = _controlsEl.querySelector("#_attr3dLive");
     if (liveToggle)
@@ -2003,6 +2409,14 @@
           _syncTextureOverlays(true);
         }
       });
+
+    if (searchInput) {
+      searchInput.addEventListener("input", (e) => {
+        _searchTerm = (e.target.value || "").toLowerCase().trim();
+        _emitTextFilterChange(e.target.value || "");
+        _rebuildForFocusedMode();
+      });
+    }
 
     const presetSelect = _controlsEl.querySelector("#_attr3dPresetSelect");
     const presetSave = _controlsEl.querySelector("#_attr3dPresetSave");
@@ -2066,109 +2480,40 @@
     }
 
     _refreshPresetControls("");
-  }
-
-  function _toggleAttractor(opt) {
-    const idx = opt.source !== undefined
-      ? _activeAttractors.findIndex((a) => a.source === opt.source)
-      : _activeAttractors.findIndex((a) => a.dim === opt.dim);
-    if (idx >= 0) {
-      _activeAttractors.splice(idx, 1);
-    } else {
-      _activeAttractors.push(
-        opt.source !== undefined
-          ? { source: opt.source, name: opt.name, count: opt.count, px: 0, py: 0, pz: 0 }
-          : { dim: opt.dim, name: opt.name, count: opt.count, px: 0, py: 0, pz: 0 }
-      );
-    }
-
-    // Update chip active states
-    const chips = _controlsEl.querySelectorAll(".attractor-chip");
-    chips.forEach((chip) => {
-      const srcStr = chip.dataset.src;
-      const isActive = srcStr
-        ? _activeAttractors.some((a) => a.source === srcStr)
-        : _activeAttractors.some((a) => a.dim === parseInt(chip.dataset.dim));
-      chip.classList.toggle("active", isActive);
-    });
-
-    if (_focusedMode) {
-      _rebuildForFocusedMode();
-    } else {
-      _updateAttractorForces();
-    }
+    _syncAttractorChipStates();
+    _syncCategoriesButtonUi();
+    _syncModeSwitchUi();
+    _syncGroupByUi();
     _updateChipLabels();
   }
 
-  // ─── Overlap indicators (same logic as 2D) ───────────────────────────────
-
-  function _computeOverlapStats() {
-    if (_activeAttractors.length === 0) return null;
-    const source = _allNodes.length > 0 ? _allNodes : _nodes;
-
-    const coveredIds = new Set();
-    for (const node of source) {
-      for (const att of _activeAttractors) {
-        const w = att.source !== undefined
-          ? (node.source === att.source ? 1 : 0)
-          : node.vector[att.dim];
-        if (w > 0) {
-          coveredIds.add(node.id);
-          break;
-        }
-      }
-    }
-
-    const stats = new Map();
-    for (const catKey of Object.keys(_attractorOptions)) {
-      for (const opt of _attractorOptions[catKey]) {
-        stats.set(opt.dim, { total: 0, unique: 0 });
-      }
-    }
-
-    for (const node of source) {
-      for (const [dim, s] of stats) {
-        if (node.vector[dim] > 0) {
-          s.total++;
-          if (!coveredIds.has(node.id)) s.unique++;
-        }
-      }
-    }
-    return stats;
-  }
-
-  function _updateChipLabels() {
-    if (!_controlsEl) return;
-    const stats = _computeOverlapStats();
-    const chips = _controlsEl.querySelectorAll(".attractor-chip");
-
-    chips.forEach((chip) => {
-      const dim = parseInt(chip.dataset.dim);
-      const baseCount = parseInt(chip.dataset.count);
-      const countEl = chip.querySelector(".chip-count");
-      if (!countEl) return;
-
-      if (!stats) {
-        countEl.textContent = baseCount;
-        countEl.title = "";
-        return;
-      }
-
-      const s = stats.get(dim);
-      if (!s) { countEl.textContent = baseCount; return; }
-
-      const isActive = _activeAttractors.some((a) => a.dim === dim);
-      if (isActive) {
-        countEl.textContent = s.total;
-        countEl.title = `${s.total} items match this attractor`;
-      } else {
-        countEl.textContent = `${s.unique}/${s.total}`;
-        countEl.title = `${s.unique} new items not covered by active attractors (${s.total} total)`;
-      }
+  function _emitSelectionChange() {
+    if (typeof _selectCallback !== "function") return;
+    const scopeAttractors = _focusedMode ? _activeAttractors : [];
+    _selectCallback(getVisibleNodeIds(), {
+      activeAttractors: scopeAttractors.map((att) => ({
+        name: att.name || "",
+        count: att.count || 0,
+        source: att.source,
+        dim: att.dim,
+      })),
+      categoryMode: _focusedMode ? "filter" : "group",
     });
   }
 
-  // ─── Focused mode ─────────────────────────────────────────────────────────
+  function _emitTextFilterChange(term) {
+    window.dispatchEvent(new CustomEvent("inspirations:explorer-text-filter", {
+      detail: { term: String(term || "") },
+    }));
+  }
+
+  function _nodeMatchesText(node) {
+    if (!_searchTerm) return true;
+    const haystack = `${node.title || ""} ${node.source || ""}`.toLowerCase();
+    return haystack.includes(_searchTerm);
+  }
+
+  // ─── Scope rebuild ────────────────────────────────────────────────────────
 
   function _rebuildForFocusedMode() {
     _cancelDeferredSettle();
@@ -2182,22 +2527,18 @@
       node._texPriority = Number.POSITIVE_INFINITY;
     }
 
-    // Determine visible node set
-    if (_focusedMode) {
-      if (_filterIds && _filterIds.size > 0) {
-        _nodes = _allNodes.filter((n) => _filterIds.has(n.id));
-      } else if (_activeAttractors.length > 0) {
-        _nodes = _allNodes.filter((n) =>
-          _activeAttractors.some((att) =>
-            att.source !== undefined ? n.source === att.source : n.vector[att.dim] > 0
-          )
-        );
-      } else {
-        _nodes = _allNodes.slice();
-      }
+    // Sidebar/text filters define the base scope. Category chips can either
+    // filter that scope or group it, depending on the toolbar switch.
+    const scopeNodes = _scopeNodesWithoutGrouping();
+    if (_groupByKey) {
+      _focusedMode = false;
+      _refreshGroupByAttractors();
     } else {
-      _nodes = _allNodes.slice();
+      _syncGroupByUi();
     }
+    _nodes = (_focusedMode && _activeAttractors.length > 0)
+      ? scopeNodes.filter((node) => _nodeMatchesAnyAttractor(node))
+      : scopeNodes;
 
     _buildInstanceMesh();
 
@@ -2218,6 +2559,12 @@
     _markVisualsDirty();
     _updateNodeVisuals(true);
     _syncInstanceMesh();
+    _smoothCenterVisibleCluster();
+    _syncAttractorChipStates();
+    _syncCategoriesButtonUi();
+    _syncModeSwitchUi();
+    _syncGroupByUi();
+    _updateChipLabels();
     // Queue texture loads for any nodes that still need them
     _queueNearTextures();
     _syncTextureOverlays(true);
@@ -2229,24 +2576,25 @@
     const nextFilter = nodeIds ? new Set(nodeIds) : null;
     if (_sameIdSet(_filterIds, nextFilter)) return;
     _filterIds = nextFilter;
-    if (_focusedMode) {
-      _rebuildForFocusedMode();
-    } else {
-      _markVisualsDirty();
-      if (_liveDefaultEnabled) _armLiveBurst();
-    }
+    _rebuildForFocusedMode();
   }
 
   function setSearch(term) {
     _searchTerm = (term || "").toLowerCase().trim();
-    _markVisualsDirty();
+    const input = _controlsEl?.querySelector(".attractor-search");
+    if (input && input.value !== (term || "")) input.value = term || "";
+    _rebuildForFocusedMode();
   }
 
   function setFocusedMode(on) {
     _focusedMode = !!on;
-    const toggle = _controlsEl?.querySelector("#_attr3dFocus");
-    if (toggle) toggle.checked = _focusedMode;
+    if (_focusedMode && _groupByKey) {
+      _groupByKey = "";
+      _activeAttractors = [];
+    }
+    _saveSettings();
     _rebuildForFocusedMode();
+    _emitSelectionChange();
   }
 
   function getVisibleNodeIds() {
@@ -2346,6 +2694,8 @@
     _hoverPreviewImgEl = null;
     _hoverPreviewTitleEl = null;
     if (_controlsEl) _controlsEl.remove();
+    const toolbarMount = document.getElementById("explorerToolbarMount");
+    if (toolbarMount && toolbarMount.children.length === 0) toolbarMount.hidden = true;
     if (_labelsEl) _labelsEl.remove();
     _controlsEl = null;
     _labelsEl = null;

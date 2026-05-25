@@ -1,7 +1,7 @@
 // ─── State ─────────────────────────────────────────────────────────────────────
 const state = {
   // Navigation
-  view: "browse",               // "browse" | "review"
+  view: "browse",               // "browse" | "explorer" | "review"
   sidebarHidden: false,         // side panel collapsed state
   currentBoard: null,           // board filter (null = all)
   currentSource: null,          // source filter (null = all)
@@ -22,6 +22,7 @@ const state = {
   assets: [],
   hasMore: false,
   loadingAssets: false,
+  pendingAssetsReload: false,
   offset: 0,
   q: "",
   semanticMode: false,
@@ -1581,7 +1582,11 @@ function wireSidebarResize() {
 // ─── Asset loading ─────────────────────────────────────────────────────────────
 
 async function loadAssets(opts = {}) {
-  if (state.loadingAssets) return;
+  if (state.loadingAssets) {
+    if (!opts.append) state.pendingAssetsReload = true;
+    return;
+  }
+  state.pendingAssetsReload = false;
   const append = opts.append || false;
   if (!append) { state.offset = 0; }
 
@@ -1663,13 +1668,19 @@ async function loadAssets(opts = {}) {
     updateStats();
     updateLoadMoreBtn();
     updateFilterIndicator();
-    syncExplorerFilter();
+    await syncExplorerFilter();
   } catch (e) {
     if (seq !== state.assetsRequestSeq) return;
     const grid = $("#grid");
     if (grid) grid.innerHTML = `<div class="empty-state">Unable to load items: ${escapeHtml(formatApiError(e))}</div>`;
   } finally {
-    if (seq === state.assetsRequestSeq) state.loadingAssets = false;
+    if (seq === state.assetsRequestSeq) {
+      state.loadingAssets = false;
+      if (state.pendingAssetsReload && !append) {
+        state.pendingAssetsReload = false;
+        loadAssets();
+      }
+    }
   }
 }
 
@@ -1681,9 +1692,67 @@ function updateLoadMoreBtn() {
   btn.textContent = state.loadingAssets ? "Loading…" : "Load More";
 }
 
+function syncTopFilterToolbar() {
+  const cardToolbar = $("#topCardFilterToolbar");
+  const explorerToolbar = $("#explorerToolbarMount");
+  const input = $("#canvasTextFilter");
+  const explorerActive = isExplorerViewActive();
+
+  if (cardToolbar) cardToolbar.hidden = explorerActive;
+  if (explorerToolbar) {
+    explorerToolbar.hidden = !explorerActive || explorerToolbar.children.length === 0;
+  }
+  if (input && document.activeElement !== input) input.value = state.q || "";
+}
+
+function updateExplorerModeChip() {
+  const chip = $("#explorerModeChip");
+  syncTopFilterToolbar();
+  if (!chip) return;
+  if (!isExplorerViewActive()) {
+    chip.hidden = true;
+    chip.textContent = "";
+    chip.className = "explorer-mode-chip";
+    return;
+  }
+
+  const count = Number.isFinite(_explorerFilterCount)
+    ? Math.max(0, Number(_explorerFilterCount || 0))
+    : null;
+  const countLabel = count === null ? "" : `${count} item${count === 1 ? "" : "s"}`;
+  const isMobileMode = _isExplorerMobileConstrained();
+  const is3D = _explorerMode === "3d";
+  const mobileBudget = isMobileMode ? _explorerMobile3DBudget : null;
+  const budgetTitle = mobileBudget?.nodeLimit
+    ? ` This iPad's measured 3D budget is about ${mobileBudget.nodeLimit} items.`
+    : "";
+  chip.hidden = false;
+  chip.className = `explorer-mode-chip ${is3D ? "mode-3d" : "mode-2d"}`;
+  if (_explorerModeChipOverride) {
+    chip.textContent = _explorerModeChipOverride;
+    return;
+  }
+  if (is3D) {
+    const isScoped3D = !!(_explorerInternalFilterIds || _explorerPayloadFilterKey || _hasActiveFilters());
+    const rotateHint = isMobileMode ? " - drag to rotate" : "";
+    chip.title = `Drag the map to rotate.${budgetTitle}`;
+    chip.textContent = `${isScoped3D ? "3D subset" : "3D map"}${countLabel ? `: ${countLabel}` : ""}${rotateHint}${_explorerInternalFilterIds ? " - tap pill to clear" : ""}`;
+  } else if (isMobileMode) {
+    chip.title = mobileBudget?.nodeLimit
+      ? `Large sets use 2D lite mode. Filter below about ${mobileBudget.nodeLimit} items to switch into 3D on this iPad.`
+      : "Large sets use 2D lite mode on iPad until a filtered subset is small enough for 3D.";
+    chip.textContent = `iPad lite: 2D map${countLabel ? ` (${countLabel})` : ""}`;
+  } else {
+    chip.title = "";
+    chip.textContent = `2D map${countLabel ? `: ${countLabel}` : ""}`;
+  }
+}
+
 function updateStats() {
   const statsEl = $("#stats");
   if (!statsEl) return;
+  syncTopFilterToolbar();
+  updateExplorerModeChip();
   if (isExplorerViewActive() && Number.isFinite(_explorerFilterCount)) {
     const count = Math.max(0, Number(_explorerFilterCount || 0));
     statsEl.textContent = `${count} item${count === 1 ? "" : "s"}`;
@@ -1692,9 +1761,9 @@ function updateStats() {
   const shown = state.assets.length;
   const total = state.totalCount;
   if (state.hasMore && total) {
-    statsEl.textContent = `${shown} of ${total} items`;
+    statsEl.textContent = `${shown} loaded of ${total} items`;
   } else if (state.hasMore) {
-    statsEl.textContent = `${shown} items shown — more available`;
+    statsEl.textContent = `${shown} items loaded - more available`;
   } else {
     statsEl.textContent = `${shown} items`;
   }
@@ -1721,6 +1790,7 @@ function renderGrid() {
   // Maintain canvas review class across re-renders
   const browseView = $("#browseView");
   if (browseView) browseView.classList.toggle("canvas-review-active", state.canvasReview);
+  syncTopFilterToolbar();
 
   if (!state.assets.length) {
     grid.innerHTML = '<div class="empty-state">No items match your current filters.</div>';
@@ -6905,6 +6975,7 @@ let explorerData = null;
 
 const viewGridBtn = $("#viewGrid");
 const viewExplorerBtn = $("#viewExplorer");
+const explorerModeChip = $("#explorerModeChip");
 const explorerBusyOverlay = $("#explorerBusyOverlay");
 const explorerBusyText = $("#explorerBusyText");
 
@@ -6914,7 +6985,7 @@ let _explorerMode = "3d";   // "2d" | "3d"
 let _ExplorerImpl = null;
 let _disable3DForSession = false;
 let _explorer3DLoadPromise = null;
-const EXPLORER_3D_MODULE_URL = `${_B}/app/attractor-explorer-3d.js?v=40`;
+const EXPLORER_3D_MODULE_URL = `${_B}/app/attractor-explorer-3d.js?v=59`;
 // Hard refresh in Safari can cold-load Three.js from CDN; allow enough
 // headroom so we do not incorrectly drop into 2D fallback.
 const EXPLORER_3D_READY_WAIT_MS = 12000;
@@ -6965,8 +7036,24 @@ async function _ensureExplorer3DLoaded() {
   return _getExplorer3D();
 }
 
-function _resolveExplorerImpl() {
-  if (!_disable3DForSession) {
+function _filterKeyFromIds(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return "";
+  return ids.slice().sort().join("|");
+}
+
+function _filterExplorerDataByIds(data, ids) {
+  if (!data || !Array.isArray(data.assets) || !Array.isArray(ids) || ids.length === 0) return data;
+  const wanted = new Set(ids);
+  return {
+    ...data,
+    assets: data.assets.filter((asset) => wanted.has(asset.id)),
+    filtered_total: ids.length,
+  };
+}
+
+function _resolveExplorerImpl(forceMode = null) {
+  if (forceMode === "2d") return { impl: _Explorer2D, mode: "2d" };
+  if (!_disable3DForSession && (forceMode === "3d" || !_isExplorerMobileConstrained())) {
     const e3d = _getExplorer3D();
     if (e3d) return { impl: e3d, mode: "3d" };
   }
@@ -6977,11 +7064,19 @@ let _cachedExplorerAttractorDataIncludesHidden = false;
 let _explorerFilterCount = null;
 let _explorerPayloadIncludesHidden = false;
 let _explorerScopeReloading = false;
+let _explorerModeReloading = false;
 let _busyCursorDepth = 0;
 let _explorerBusyDepth = 0;
 let _explorerBusyStartedAt = 0;
 let _explorerBusyToken = 0;
 const EXPLORER_MIN_BUSY_MS = 280;
+const EXPLORER_MOBILE_3D_BUDGET_KEY = "inspirations.explorer.mobile3dBudget.v1";
+const EXPLORER_MOBILE_3D_FALLBACK_BUDGET = 650;
+let _explorerPayloadFilterKey = "";
+let _explorerModeChipOverride = "";
+let _explorerInternalFilterIds = null;
+let _explorerMobile3DBudget = null;
+let _explorerMobile3DBudgetPromise = null;
 
 function _setGlobalBusyCursor(cursor) {
   if (document.body) document.body.style.cursor = cursor;
@@ -7010,6 +7105,11 @@ function _setExplorerBusyOverlay(visible, text = "") {
   if (!explorerBusyOverlay) return;
   if (explorerBusyText && text) explorerBusyText.textContent = text;
   explorerBusyOverlay.hidden = !visible;
+}
+
+function _setExplorerModeChipOverride(text = "") {
+  _explorerModeChipOverride = String(text || "");
+  updateExplorerModeChip();
 }
 
 function _setExplorerFrozen(visible) {
@@ -7054,6 +7154,194 @@ function _isAttractorPayload(data) {
     data.categories &&
     data.attractors
   );
+}
+
+function _isExplorerMobileConstrained() {
+  return !!(
+    window.matchMedia &&
+    (
+      window.matchMedia("(max-width: 900px)").matches ||
+      window.matchMedia("(hover: none) and (pointer: coarse)").matches
+    )
+  );
+}
+
+function _explorerMobileBudgetCacheKey() {
+  const dpr = Math.round((window.devicePixelRatio || 1) * 100) / 100;
+  const width = Math.round(window.innerWidth || 0);
+  const height = Math.round(window.innerHeight || 0);
+  const cores = Number(navigator.hardwareConcurrency || 0);
+  return `${width}x${height}@${dpr}/c${cores}`;
+}
+
+function _readExplorerMobile3DBudget() {
+  try {
+    const raw = window.sessionStorage?.getItem(EXPLORER_MOBILE_3D_BUDGET_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || parsed.cacheKey !== _explorerMobileBudgetCacheKey()) return null;
+    const nodeLimit = Number(parsed.nodeLimit);
+    if (!Number.isFinite(nodeLimit) || nodeLimit < 1) return null;
+    return parsed;
+  } catch (_) {
+    return null;
+  }
+}
+
+function _writeExplorerMobile3DBudget(budget) {
+  try {
+    window.sessionStorage?.setItem(EXPLORER_MOBILE_3D_BUDGET_KEY, JSON.stringify(budget));
+  } catch (_) {
+    // Session storage is optional; the benchmark can be rerun.
+  }
+}
+
+function _makeExplorerMobile3DBudget(nodeLimit, details = {}) {
+  const limit = Math.max(250, Math.min(2200, Math.round(Number(nodeLimit) || EXPLORER_MOBILE_3D_FALLBACK_BUDGET)));
+  return {
+    cacheKey: _explorerMobileBudgetCacheKey(),
+    nodeLimit: limit,
+    measuredAt: Date.now(),
+    ...details,
+  };
+}
+
+async function _measureExplorerMobile3DBudget() {
+  const fallback = _makeExplorerMobile3DBudget(EXPLORER_MOBILE_3D_FALLBACK_BUDGET, {
+    source: "fallback",
+    reason: "WebGL benchmark unavailable",
+  });
+  const canvas = document.createElement("canvas");
+  const dpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+  canvas.width = Math.round(256 * dpr);
+  canvas.height = Math.round(256 * dpr);
+  const gl = canvas.getContext("webgl", {
+    alpha: false,
+    antialias: false,
+    depth: false,
+    failIfMajorPerformanceCaveat: false,
+    powerPreference: "high-performance",
+    preserveDrawingBuffer: false,
+    stencil: false,
+  });
+  if (!gl) return fallback;
+
+  const compileShader = (type, source) => {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      gl.deleteShader(shader);
+      return null;
+    }
+    return shader;
+  };
+
+  const vertexShader = compileShader(gl.VERTEX_SHADER, `
+    attribute vec2 a_pos;
+    void main() {
+      gl_Position = vec4(a_pos, 0.0, 1.0);
+      gl_PointSize = 2.0;
+    }
+  `);
+  const fragmentShader = compileShader(gl.FRAGMENT_SHADER, `
+    precision mediump float;
+    void main() {
+      gl_FragColor = vec4(1.0, 0.85, 0.35, 0.85);
+    }
+  `);
+  if (!vertexShader || !fragmentShader) return fallback;
+
+  const program = gl.createProgram();
+  gl.attachShader(program, vertexShader);
+  gl.attachShader(program, fragmentShader);
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return fallback;
+  gl.useProgram(program);
+
+  const counts = [350, 600, 900, 1200, 1600, 2200, 3000, 4000];
+  const maxCount = counts[counts.length - 1];
+  const positions = new Float32Array(maxCount * 2);
+  for (let i = 0; i < maxCount; i += 1) {
+    // Deterministic scatter, enough to exercise draw cost without layout work.
+    const a = i * 2.399963229728653;
+    const r = Math.sqrt((i + 0.5) / maxCount) * 1.9;
+    positions[i * 2] = Math.cos(a) * r * 0.5;
+    positions[i * 2 + 1] = Math.sin(a) * r * 0.5;
+  }
+
+  const buffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+  gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(program, "a_pos");
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+
+  let drawBudget = counts[0];
+  let lastAvgMs = 0;
+  const targetDrawMs = 4.5;
+  for (const count of counts) {
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    const start = performance.now();
+    for (let pass = 0; pass < 4; pass += 1) {
+      gl.clearColor(0, 0, 0, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.drawArrays(gl.POINTS, 0, count);
+    }
+    gl.finish();
+    lastAvgMs = (performance.now() - start) / 4;
+    if (lastAvgMs <= targetDrawMs) {
+      drawBudget = count;
+    } else {
+      break;
+    }
+  }
+
+  const maxTextureSize = Number(gl.getParameter(gl.MAX_TEXTURE_SIZE) || 0);
+  const viewportPixels = (window.innerWidth || 0) * (window.innerHeight || 0) * dpr * dpr;
+  const textureFactor = maxTextureSize && maxTextureSize < 4096 ? 0.72 : 1;
+  const viewportFactor = viewportPixels > 2_800_000 ? 0.82 : 1;
+  const mobileSafetyFactor = 0.55;
+  const nodeLimit = drawBudget * mobileSafetyFactor * textureFactor * viewportFactor;
+  return _makeExplorerMobile3DBudget(nodeLimit, {
+    source: "webgl-draw",
+    drawBudget,
+    lastAvgMs: Math.round(lastAvgMs * 100) / 100,
+    maxTextureSize,
+  });
+}
+
+async function _getExplorerMobile3DBudget() {
+  if (!_isExplorerMobileConstrained()) {
+    return _makeExplorerMobile3DBudget(Number.POSITIVE_INFINITY, { source: "desktop" });
+  }
+  if (_explorerMobile3DBudget) return _explorerMobile3DBudget;
+  const stored = _readExplorerMobile3DBudget();
+  if (stored) {
+    _explorerMobile3DBudget = stored;
+    return stored;
+  }
+  if (!_explorerMobile3DBudgetPromise) {
+    _explorerMobile3DBudgetPromise = _measureExplorerMobile3DBudget()
+      .then((budget) => {
+        _explorerMobile3DBudget = budget;
+        _writeExplorerMobile3DBudget(budget);
+        updateExplorerModeChip();
+        return budget;
+      })
+      .finally(() => {
+        _explorerMobile3DBudgetPromise = null;
+      });
+  }
+  return _explorerMobile3DBudgetPromise;
+}
+
+function _canUseMobile3DForCount(count, budget) {
+  const n = Number(count || 0);
+  if (!Number.isFinite(n) || n <= 0) return false;
+  const limit = Number(budget?.nodeLimit || EXPLORER_MOBILE_3D_FALLBACK_BUDGET);
+  return n <= limit;
 }
 
 function _merge3DExplorerData(layoutData, attractorData) {
@@ -7150,7 +7438,7 @@ function _shouldExplorerIncludeHiddenData() {
   return isOwner() && state.triageFilter === "hidden";
 }
 
-async function _loadExplorerPayload(mode, includeHidden) {
+async function _loadExplorerPayload(mode, includeHidden, payloadFilterIds = null) {
   const hiddenQs = includeHidden ? "include_hidden=1" : "";
   const attractorUrl = `/api/explorer/attractor-data?dims=2${hiddenQs ? `&${hiddenQs}` : ""}`;
   const layoutUrl = `/api/explorer/layout${hiddenQs ? `?${hiddenQs}` : ""}`;
@@ -7177,27 +7465,36 @@ async function _loadExplorerPayload(mode, includeHidden) {
     _cachedExplorerAttractorDataIncludesHidden = includeHidden;
     try {
       const layoutData = await layoutPromise;
-      return _merge3DExplorerData(layoutData, baseData);
+      return _filterExplorerDataByIds(_merge3DExplorerData(layoutData, baseData), payloadFilterIds);
     } catch (e) {
       console.warn("[Explorer] 3D layout request failed; using PCA fallback positions", e);
-      return baseData;
+      return _filterExplorerDataByIds(baseData, payloadFilterIds);
     }
   }
   const data = await api(attractorUrl);
   _cachedExplorerAttractorData = data;
   _cachedExplorerAttractorDataIncludesHidden = includeHidden;
-  return data;
+  return _filterExplorerDataByIds(data, payloadFilterIds);
 }
 
-function _resetExplorerViewInstance() {
-  if (_ExplorerImpl && explorerLoaded && typeof _ExplorerImpl.destroy === "function") {
-    _ExplorerImpl.destroy();
+function _resetExplorerViewInstance(impl = _ExplorerImpl) {
+  if (impl && explorerLoaded && typeof impl.destroy === "function") {
+    impl.destroy();
   }
   const container = document.getElementById("explorerContainer");
   if (container) container.innerHTML = "";
   explorerLoaded = false;
   explorerData = null;
   _explorerPayloadIncludesHidden = false;
+  _explorerPayloadFilterKey = "";
+}
+
+async function clearExplorerInternalFilter() {
+  _explorerInternalFilterIds = null;
+  _setExplorerModeChipOverride("Returning to iPad 2D lite full map...");
+  await _ensureMobileExplorerModeForFilterIds(null);
+  _setExplorerModeChipOverride("");
+  updateStats();
 }
 
 function setViewMode(mode, options = {}) {
@@ -7212,6 +7509,7 @@ function setViewMode(mode, options = {}) {
   const layoutEl = $(".layout");
 
   if (mode === "explorer") {
+    state.view = "explorer";
     if (browseView) browseView.hidden = true;
     if (explorerView) explorerView.hidden = false;
     if (layoutEl) layoutEl.classList.add("explorer-active");
@@ -7219,8 +7517,10 @@ function setViewMode(mode, options = {}) {
     if (viewExplorerBtn) viewExplorerBtn.classList.add("active");
     _writeViewModeToUrl("explorer");
     if (persist) _writeViewModePref("explorer");
+    updateStats();
     loadExplorerView();
   } else {
+    state.view = "browse";
     if (browseView) browseView.hidden = false;
     if (explorerView) explorerView.hidden = true;
     if (layoutEl) layoutEl.classList.remove("explorer-active");
@@ -7228,24 +7528,28 @@ function setViewMode(mode, options = {}) {
     if (viewExplorerBtn) viewExplorerBtn.classList.remove("active");
     _writeViewModeToUrl("grid");
     if (persist) _writeViewModePref("grid");
+    updateStats();
     if (_ExplorerImpl && explorerLoaded) {
       _ExplorerImpl.pause();
     }
   }
 }
 
-async function loadExplorerView({ allow2DFallback = true } = {}) {
+async function loadExplorerView({ allow2DFallback = true, forceMode = null, payloadFilterIds = null } = {}) {
   // Load 3D code lazily when explorer is opened.
   // This avoids paying Three.js startup cost when the user stays in grid mode.
-  await _ensureExplorer3DLoaded();
+  if (forceMode === "3d" || !_isExplorerMobileConstrained()) {
+    await _ensureExplorer3DLoaded();
+  }
 
-  const nextExplorer = _resolveExplorerImpl();
+  const nextExplorer = _resolveExplorerImpl(forceMode);
   const nextImpl = nextExplorer.impl;
-  const implChanged = explorerLoaded && _ExplorerImpl && _ExplorerImpl !== nextImpl;
+  const previousImpl = _ExplorerImpl;
+  const implChanged = explorerLoaded && previousImpl && previousImpl !== nextImpl;
+  if (implChanged) _resetExplorerViewInstance(previousImpl);
   _ExplorerImpl = nextImpl;
   _explorerMode = nextExplorer.mode;
 
-  if (implChanged) _resetExplorerViewInstance();
   if (!_ExplorerImpl || typeof _ExplorerImpl.init !== "function") {
     Shared.showToast("Explorer not available", { type: "error", duration: 3000 });
     return;
@@ -7261,6 +7565,11 @@ async function loadExplorerView({ allow2DFallback = true } = {}) {
       }
       if (asset) openModal(asset);
     });
+    if (typeof _ExplorerImpl.onSelect === "function") {
+      _ExplorerImpl.onSelect((nodeIds, meta = {}) => {
+        _handleExplorerInternalSelection(nodeIds, meta);
+      });
+    }
     explorerLoaded = true;
   } else {
     if (typeof _ExplorerImpl.pause === "function") _ExplorerImpl.pause();
@@ -7276,11 +7585,12 @@ async function loadExplorerView({ allow2DFallback = true } = {}) {
     const includeHidden = _shouldExplorerIncludeHiddenData();
     _setExplorerBusyOverlay(true, _explorerMode === "3d" ? "Fetching your 3D map…" : "Fetching your map…");
     Shared.showToast(`Loading ${_explorerMode.toUpperCase()} attractor map…`, { type: "info", duration: 2000 });
-    const data = await _loadExplorerPayload(_explorerMode, includeHidden);
+    const data = await _loadExplorerPayload(_explorerMode, includeHidden, payloadFilterIds);
     _setExplorerBusyOverlay(true, _explorerMode === "3d" ? "Arranging your 3D tiles…" : "Arranging your map…");
     await _nextPaint();
     explorerData = data;
     _explorerPayloadIncludesHidden = includeHidden;
+    _explorerPayloadFilterKey = _filterKeyFromIds(payloadFilterIds);
     _explorerFilterCount = Array.isArray(data?.assets) ? data.assets.length : null;
     _ExplorerImpl.loadData(data, { deferSettle: _explorerMode === "3d" });
     if (typeof _ExplorerImpl.resume === "function") _ExplorerImpl.resume();
@@ -7293,9 +7603,9 @@ async function loadExplorerView({ allow2DFallback = true } = {}) {
       !!_Explorer2D &&
       _Explorer2D !== _ExplorerImpl;
     if (canFallbackTo2D) {
-      console.warn("[Explorer] 3D failed; switching to 2D fallback", e);
+      console.warn("[Explorer] 3D failed; switching to 2D lite fallback", e);
       _disable3DForSession = true;
-      Shared.showToast("3D unavailable, switched to 2D fallback.", { type: "warning", duration: 3000 });
+      Shared.showToast("3D unavailable, switched to 2D lite mode.", { type: "warning", duration: 3000 });
       _resetExplorerViewInstance();
       await loadExplorerView({ allow2DFallback: false });
       return;
@@ -7308,6 +7618,25 @@ async function loadExplorerView({ allow2DFallback = true } = {}) {
 
 if (viewGridBtn) viewGridBtn.addEventListener("click", () => setViewMode("grid", { persist: true }));
 if (viewExplorerBtn) viewExplorerBtn.addEventListener("click", () => setViewMode("explorer", { persist: true }));
+if (explorerModeChip) {
+  explorerModeChip.addEventListener("click", () => {
+    if (_explorerInternalFilterIds && _explorerInternalFilterIds.length) clearExplorerInternalFilter();
+  });
+}
+
+let _explorerTextFilterTimer = 0;
+window.addEventListener("inspirations:explorer-text-filter", (event) => {
+  const term = String(event?.detail?.term || "").trim();
+  window.clearTimeout(_explorerTextFilterTimer);
+  _explorerTextFilterTimer = window.setTimeout(() => {
+    if (state.q === term && !state.chatPrompt && !state.chatItemIds) return;
+    state.q = term;
+    state.chatPrompt = "";
+    state.chatItemIds = null;
+    updateFilterIndicator();
+    loadAssets();
+  }, 260);
+});
 
 // ─── Explorer ↔ filter sync ──────────────────────────────────────────────────────
 
@@ -7324,6 +7653,51 @@ function _hasActiveFilters() {
     state.chatItemIds ||
     (state.q && state.q.trim())
   );
+}
+
+async function _ensureMobileExplorerModeForFilterIds(ids) {
+  if (!_isExplorerMobileConstrained() || _explorerModeReloading) return false;
+  const count = Array.isArray(ids) ? ids.length : 0;
+  const budget = await _getExplorerMobile3DBudget();
+  const canUseFiltered3D = _canUseMobile3DForCount(count, budget);
+  const nextMode = canUseFiltered3D ? "3d" : "2d";
+  const nextKey = canUseFiltered3D ? _filterKeyFromIds(ids) : "";
+  if (_explorerMode === nextMode && _explorerPayloadFilterKey === nextKey) return false;
+
+  _explorerModeReloading = true;
+  try {
+    _setExplorerModeChipOverride(canUseFiltered3D
+      ? `Switching to 3D subset: ${count} item${count === 1 ? "" : "s"}...`
+      : (count > 0
+        ? `Using 2D lite: ${count} items exceeds this iPad's 3D budget (${budget.nodeLimit})...`
+        : "Returning to iPad 2D lite full map..."));
+    await loadExplorerView({
+      forceMode: nextMode,
+      payloadFilterIds: canUseFiltered3D ? ids : null,
+    });
+  } finally {
+    _setExplorerModeChipOverride("");
+    _explorerModeReloading = false;
+  }
+  return true;
+}
+
+async function _handleExplorerInternalSelection(nodeIds, meta = {}) {
+  if (!_isExplorerMobileConstrained() || _explorerModeReloading) return;
+  if (!Array.isArray(nodeIds)) return;
+  const categoryMode = String(meta.categoryMode || "");
+  const hasInternalAttractor =
+    categoryMode !== "group" &&
+    Array.isArray(meta.activeAttractors) &&
+    meta.activeAttractors.length > 0;
+  _explorerInternalFilterIds = hasInternalAttractor ? nodeIds.slice() : null;
+  const count = nodeIds.length;
+  _explorerFilterCount = count;
+  _setExplorerModeChipOverride("");
+  updateStats();
+  await _ensureMobileExplorerModeForFilterIds(nodeIds);
+  _setExplorerModeChipOverride("");
+  updateStats();
 }
 
 async function syncExplorerFilter() {
@@ -7357,6 +7731,14 @@ async function syncExplorerFilter() {
 
     // No filters → show everything
     if (!_hasActiveFilters()) {
+      if (_explorerInternalFilterIds && _explorerInternalFilterIds.length) {
+        if (await _ensureMobileExplorerModeForFilterIds(_explorerInternalFilterIds)) return;
+        _ExplorerImpl.setFilter(_explorerInternalFilterIds);
+        _explorerFilterCount = _explorerInternalFilterIds.length;
+        updateStats();
+        return;
+      }
+      if (await _ensureMobileExplorerModeForFilterIds(null)) return;
       _ExplorerImpl.setFilter(null);
       _explorerFilterCount = Array.isArray(explorerData?.assets) ? explorerData.assets.length : null;
       updateStats();
@@ -7365,6 +7747,7 @@ async function syncExplorerFilter() {
 
     // Chat-curated items: highlight only those IDs
     if (state.chatItemIds) {
+      if (await _ensureMobileExplorerModeForFilterIds(state.chatItemIds)) return;
       _ExplorerImpl.setFilter(state.chatItemIds);
       _explorerFilterCount = state.chatItemIds.length;
       updateStats();
@@ -7379,6 +7762,7 @@ async function syncExplorerFilter() {
       try {
         const data = await api(`/api/catalog/asset-ids?${catalogParams}`);
         if (seq !== _explorerFilterSeq) return; // stale
+        if (await _ensureMobileExplorerModeForFilterIds(data.ids || [])) return;
         _ExplorerImpl.setFilter(data.ids || []);
         _explorerFilterCount = Array.isArray(data.ids) ? data.ids.length : 0;
         updateStats();
@@ -7415,6 +7799,7 @@ async function syncExplorerFilter() {
     try {
       const data = await api(`/api/asset-ids?${params}`);
       if (seq !== _explorerFilterSeq) return; // stale
+      if (await _ensureMobileExplorerModeForFilterIds(data.ids || [])) return;
       _ExplorerImpl.setFilter(data.ids || []);
       _explorerFilterCount = Array.isArray(data.ids) ? data.ids.length : 0;
       updateStats();
@@ -7430,6 +7815,25 @@ async function syncExplorerFilter() {
 }
 
 // ─── Filter indicator ────────────────────────────────────────────────────────────
+
+function clearAllActiveFilters() {
+  state.q = "";
+  state.semanticMode = false;
+  state.chatPrompt = "";
+  state.chatItemIds = null;
+  state.currentSource = null;
+  state.currentBoard = null;
+  state.currentContentKind = null;
+  state.currentTreeNodeId = null;
+  state.offset = 0;
+  resetTriageFilter();
+  clearCatalogFilter();
+  clearClassificationFilter();
+  clearCollectionFilter();
+  renderCatalogTree();
+  updateFilterIndicator();
+  loadAssets();
+}
 
 function updateFilterIndicator() {
   const bar = $("#filterSummary");
@@ -7506,8 +7910,8 @@ function updateFilterIndicator() {
   } else {
     text.textContent = `Results filtered by: ${parts.join(" • ")}`;
     if (clearBtn) {
-      clearBtn.hidden = true;
-      clearBtn.disabled = true;
+      clearBtn.hidden = false;
+      clearBtn.disabled = false;
     }
   }
   bar.hidden = false;
@@ -7515,15 +7919,26 @@ function updateFilterIndicator() {
 
 const clearFilterBtn = $("#clearFilterSummary");
 if (clearFilterBtn) clearFilterBtn.addEventListener("click", () => {
-  if (!state.chatPrompt) return;
-  state.q = "";
-  state.chatPrompt = "";
-  state.chatItemIds = null;
-  updateFilterIndicator();
-  loadAssets();
+  clearAllActiveFilters();
 });
 
 // ─── Search (driven entirely via Ask Dave now) ──────────────────────────────────
+
+const canvasTextFilter = $("#canvasTextFilter");
+let _canvasTextFilterTimer = 0;
+if (canvasTextFilter) {
+  canvasTextFilter.addEventListener("input", (event) => {
+    const term = String(event.target.value || "").trim();
+    window.clearTimeout(_canvasTextFilterTimer);
+    _canvasTextFilterTimer = window.setTimeout(() => {
+      state.q = term;
+      state.chatPrompt = "";
+      state.chatItemIds = null;
+      updateFilterIndicator();
+      loadAssets();
+    }, 260);
+  });
+}
 
 // ─── Load More ───────────────────────────────────────────────────────────────────
 

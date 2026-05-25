@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inspirations!</title>
-    <link rel="stylesheet" href="/app/styles.css?v=46" />
+    <link rel="stylesheet" href="/app/styles.css?v=60" />
     <script type="importmap">
       {
         "imports": {
@@ -176,7 +176,12 @@
       <main class="content">
         <div class="stats-bar">
           <span id="stats" class="stats-count">Loading…</span>
+          <span id="explorerModeChip" class="explorer-mode-chip" hidden></span>
           <span id="actorContextChip" class="actor-context-chip" hidden></span>
+          <span id="topCardFilterToolbar" class="top-filter-toolbar">
+            <input id="canvasTextFilter" class="canvas-text-filter" type="search" autocomplete="off" placeholder="Type text to filter" aria-label="Filter cards text">
+          </span>
+          <span id="explorerToolbarMount" class="explorer-toolbar-mount" hidden></span>
           <span id="canvasNarrative" class="stats-narrative"></span>
           <span id="filterSummary" class="stats-filter" hidden>
             <span id="filterSummaryText"></span>
@@ -783,7 +788,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
     <script src="/app/shared.js?v=3"></script>
     <script src="/app/explorer.js?v=2"></script>
-    <script src="/app/attractor-explorer.js?v=3"></script>
-    <script src="/app/app.js?v=89"></script>
+    <script src="/app/attractor-explorer.js?v=15"></script>
+    <script src="/app/app.js?v=116"></script>
   </body>
 </html>

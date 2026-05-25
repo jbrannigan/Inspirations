@@ -64,14 +64,16 @@ See `docs/LOCAL_DAVE_API_KEY.md` for verification and troubleshooting.
 
 5. Start the app:
 ```sh
-PYTHONPATH=src python3 -m inspirations serve --host 127.0.0.1 --port 8000
+PYTHONPATH=src python3 -m inspirations serve --host 127.0.0.1 --port 8001
 ```
-Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
+Open [http://127.0.0.1:8001](http://127.0.0.1:8001).
 
 For iPhone/iPad/LAN testing:
 ```sh
-PYTHONPATH=src python3 -m inspirations serve --host 0.0.0.0 --port 8000
+./tools/run_review_server.sh
 ```
+This binds to `0.0.0.0:8001` by default so iPads/iPhones on the same LAN can
+open `http://<mac-lan-ip>:8001`.
 
 Behind a reverse proxy (e.g., New Home Next.js site at `/inspirations-app`):
 ```sh
@@ -87,11 +89,13 @@ BASE_PATH=/inspirations-app PYTHONPATH=src python3 -m inspirations serve --port 
 
 ### Attractor Explorer
 - Semantic visualization of your entire collection as a force-directed map
-- Toggle attractor chips (Bathroom, Kitchen, Modern, Wood…) to pull matching items toward labeled poles
 - **2D mode** — Canvas-based D3 force layout with scroll-zoom and CSS pre-zoom feedback
 - **3D mode** — Three.js WebGL with OrbitControls, billboard thumbnails, and custom 3D force simulation
-- Sliders for Strength, Spread, and Size; Focus mode filters non-matching items for cleaner clouds
-- Sidebar tree stays visible for filtering; chips revealed on hover to reduce visual clutter
+- Sidebar filters and text search define the base item scope
+- Category chips have explicit **Filter** and **Group** modes: Filter narrows the visible items; Group arranges the current scope around selected category poles
+- 3D adds a `Group by` shortcut for Source, Room, Style, Material, Color, and Product grouping without changing sidebar scope
+- Sliders include editable numeric fields so tuning works on iPad as well as desktop
+- Broad iPad/mobile-constrained sets use `iPad lite: 2D map`; filtered subsets can switch back to 3D when the measured WebGL budget allows it
 
 ### Triage Review
 - Select a collection and hit "Review" to enter triage mode
@@ -139,7 +143,8 @@ ruff check src tests
 
 ## Current Status
 
-The project is mid-rebuild. See `docs/SCRAPE_REBUILD_SPEC.md` for the full implementation plan.
+The scrape-first rebuild is complete. Current active work is UX refinement,
+especially Explorer filtering/grouping, iPad stability, and collaboration scope.
 
 ## Future Work
 
@@ -148,6 +153,7 @@ The project is mid-rebuild. See `docs/SCRAPE_REBUILD_SPEC.md` for the full imple
 ## Docs
 
 - `docs/SCRAPE_REBUILD_SPEC.md` — Current implementation spec
+- `docs/EXPLORER_CONTROL_HANDOFF_2026-05-24.md` — Current Explorer control semantics and latest smoke-test notes
 - `docs/TODO_CONSUMING_UX.md` — Future work: shared collection viewer experience
 - `docs/archive/` — Historical documentation from the pre-rebuild system
 - `CLAUDE.md` — AI assistant guidance for working in this repo
