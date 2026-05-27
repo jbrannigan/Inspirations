@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-HOST="${INSPIRATIONS_REVIEW_HOST:-127.0.0.1}"
+HOST="${INSPIRATIONS_REVIEW_HOST:-0.0.0.0}"
 PORT="${INSPIRATIONS_REVIEW_PORT:-8001}"
 DB_PATH="${INSPIRATIONS_REVIEW_DB:-data/inspirations.sqlite}"
 STORE_DIR="${INSPIRATIONS_REVIEW_STORE:-store}"

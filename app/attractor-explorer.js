@@ -27,6 +27,7 @@
   let _attractorOptions = {};
   let _activeAttractors = []; // [{dim, name, count, px, py}]
   let _transform = { x: 0, y: 0, k: 1 };
+  let _zoomBehavior = null;
   let _width = 800;
   let _height = 600;
   let _paused = false;
@@ -52,6 +53,7 @@
   let _tweenStart = 0;
   let _tweenDuration = 600;  // ms
   let _tweening = false;
+  let _centerTweenId = 0;
 
   // Pre-computed physics settings
   const SETTLE_TICKS = 200;   // ticks for initial layout
@@ -63,6 +65,7 @@
   let _thumbsLoading = 0;
   const _thumbQueue = [];
   const MAX_CONCURRENT_THUMBS = 12;
+  const MOBILE_MAX_CONCURRENT_THUMBS = 4;
 
   // Quadtree for hit testing
   let _quadtree = null;
@@ -75,6 +78,7 @@
     scan: "#8b6914",
     photo: "#5b6f8c",
   };
+  const DEFAULT_OPEN_CATEGORY_KEYS = new Set(["room", "style_family", "materials", "colors"]);
 
   function _normalizeSourceKey(source) {
     const key = String(source || "").trim().toLowerCase();
@@ -89,6 +93,16 @@
     "#2e8b57", "#b05050", "#4682b4", "#d2691e", "#708090",
     "#9b59b6", "#1abc9c", "#e67e22", "#c0392b", "#7f8c8d",
   ];
+
+  function _isMobileConstrained() {
+    return !!(
+      window.matchMedia &&
+      (
+        window.matchMedia("(max-width: 900px)").matches ||
+        window.matchMedia("(hover: none) and (pointer: coarse)").matches
+      )
+    );
+  }
 
   // ─── Init ────────────────────────────────────────────────────────────────
 
@@ -120,11 +134,18 @@
     // Control panel
     _controlsEl = document.createElement("div");
     _controlsEl.className = "attractor-controls";
-    _container.appendChild(_controlsEl);
+    const toolbarMount = document.getElementById("explorerToolbarMount");
+    if (toolbarMount) {
+      toolbarMount.hidden = false;
+      _controlsEl.classList.add("toolbar-mounted");
+      toolbarMount.appendChild(_controlsEl);
+    } else {
+      _container.appendChild(_controlsEl);
+    }
 
     // Zoom & pan via D3 with CSS pre-zoom for instant feedback
     if (typeof d3 !== "undefined") {
-      const zoomBehavior = d3
+      _zoomBehavior = d3
         .zoom()
         .scaleExtent([0.15, 6])
         .on("zoom", (event) => {
@@ -140,7 +161,7 @@
           _updateVisibleThumbs();
         });
 
-      d3.select(_canvas).call(zoomBehavior);
+      d3.select(_canvas).call(_zoomBehavior);
 
       // Click detection
       _canvas.addEventListener("click", _onClick);
@@ -232,7 +253,7 @@
     _initSimulation();
 
     // Settle the initial PCA layout with collision avoidance
-    _settleSimulation(SETTLE_TICKS);
+    _settleSimulation(_isMobileConstrained() ? 60 : SETTLE_TICKS);
 
     // Render the settled state
     _updateQuadtree();
@@ -414,6 +435,63 @@
       _tweening = false;
       _updateVisibleThumbs();
     }
+  }
+
+  function _smoothCenterVisibleCluster() {
+    if (!_canvas || !_nodes.length) return;
+    let sumX = 0;
+    let sumY = 0;
+    let count = 0;
+    for (const node of _nodes) {
+      const x = Number.isFinite(node._targetX) ? node._targetX : node.x;
+      const y = Number.isFinite(node._targetY) ? node._targetY : node.y;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      sumX += x;
+      sumY += y;
+      count++;
+    }
+    if (!count) return;
+
+    const cx = sumX / count;
+    const cy = sumY / count;
+    const k = _transform.k || 1;
+    const target = {
+      x: (_width * 0.5) - (cx * k),
+      y: (_height * 0.5) - (cy * k),
+      k,
+    };
+
+    // Use D3's zoom pipeline when available so pan state and user interactions
+    // stay in sync. Fall back to a lightweight tween if D3 is unavailable.
+    if (typeof d3 !== "undefined" && _zoomBehavior && d3.zoomIdentity) {
+      d3.select(_canvas)
+        .transition()
+        .duration(520)
+        .ease(d3.easeCubicOut)
+        .call(
+          _zoomBehavior.transform,
+          d3.zoomIdentity.translate(target.x, target.y).scale(target.k)
+        );
+      return;
+    }
+
+    const runId = ++_centerTweenId;
+    const start = performance.now();
+    const from = { x: _transform.x, y: _transform.y, k: _transform.k };
+    const duration = 520;
+    const step = () => {
+      if (runId !== _centerTweenId) return;
+      const t = Math.min(1, (performance.now() - start) / duration);
+      const ease = 1 - Math.pow(1 - t, 3);
+      _transform = {
+        x: from.x + (target.x - from.x) * ease,
+        y: from.y + (target.y - from.y) * ease,
+        k: from.k + (target.k - from.k) * ease,
+      };
+      _scheduleRender();
+      if (t < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
   }
 
   // ─── Attractor pole labels ───────────────────────────────────────────────
@@ -616,7 +694,8 @@
   }
 
   function _processThumbQueue() {
-    while (_thumbsLoading < MAX_CONCURRENT_THUMBS && _thumbQueue.length > 0) {
+    const maxConcurrent = _isMobileConstrained() ? MOBILE_MAX_CONCURRENT_THUMBS : MAX_CONCURRENT_THUMBS;
+    while (_thumbsLoading < maxConcurrent && _thumbQueue.length > 0) {
       const node = _thumbQueue.shift();
       _thumbsLoading++;
       const img = new Image();
@@ -659,19 +738,91 @@
 
   // ─── Control panel ───────────────────────────────────────────────────────
 
+  function _fmtNum(value, digits) {
+    return Number(value).toFixed(digits).replace(/\.?0+$/, "");
+  }
+
+  function _clamp(value, min, max, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, n));
+  }
+
+  function _wireRangeNumberControl({ rangeId, numberId, min, max, fallback, digits, apply }) {
+    const range = _controlsEl?.querySelector(`#${rangeId}`);
+    const number = _controlsEl?.querySelector(`#${numberId}`);
+    if (!range) return;
+
+    const commit = (rawValue, { formatNumber = true } = {}) => {
+      const value = _clamp(rawValue, min, max, fallback);
+      range.value = String(value);
+      if (number && formatNumber) number.value = _fmtNum(value, digits);
+      apply(value);
+    };
+
+    range.addEventListener("input", (e) => {
+      commit(e.target.value);
+    });
+
+    if (number) {
+      number.addEventListener("input", (e) => {
+        const raw = String(e.target.value || "").trim();
+        if (!raw || raw === "-" || raw === "." || raw === "-.") return;
+        commit(raw, { formatNumber: false });
+      });
+      number.addEventListener("change", (e) => {
+        commit(e.target.value);
+      });
+      number.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+      });
+    }
+  }
+
   function _buildControls() {
     if (!_controlsEl) return;
     _controlsEl.innerHTML = "";
 
-    // Sliders row FIRST (always visible)
+    const searchRow = document.createElement("div");
+    searchRow.className = "attractor-search-row";
+    searchRow.innerHTML = `
+      <input class="attractor-search" type="search" placeholder="Type text to filter" aria-label="Filter map text">
+      <button class="attractor-panel-toggle" type="button" aria-expanded="false">Categories</button>
+      <span class="attractor-help-text">Text filters the map. Categories can filter the map or group matching items.</span>
+    `;
+    const searchInput = searchRow.querySelector(".attractor-search");
+    const panelToggle = searchRow.querySelector(".attractor-panel-toggle");
+    if (searchInput) searchInput.value = _searchTerm || "";
+    if (panelToggle) {
+      panelToggle.addEventListener("click", () => {
+        const expanded = !_controlsEl.classList.contains("categories-open");
+        _controlsEl.classList.toggle("categories-open", expanded);
+        panelToggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+      });
+    }
+    _controlsEl.appendChild(searchRow);
+
+    // Sliders and pills live in the collapsible drawer.
     const slidersRow = document.createElement("div");
     slidersRow.className = "attractor-sliders";
 
     slidersRow.innerHTML = `
-      <label>Strength <input type="range" id="_attrStr" min="0.05" max="0.8" step="0.05" value="${_attractStrength}"></label>
-      <label>Spread <input type="range" id="_attrRep" min="1" max="20" step="1" value="${Math.abs(_repulsion)}"></label>
-      <label>Size <input type="range" id="_attrSize" min="6" max="40" step="1" value="${_nodeSize}"></label>
-      <label class="physics-toggle">Focus <input type="checkbox" id="_attrFocus" ${_focusedMode ? "checked" : ""}></label>
+      <label class="slider-with-value">
+        <span class="slider-label">Strength</span>
+        <span class="slider-head"><input type="range" id="_attrStr" min="0.05" max="0.8" step="0.05" value="${_attractStrength}"><input class="slider-value slider-number" id="_attrStrVal" type="number" inputmode="decimal" min="0.05" max="0.8" step="0.05" value="${_fmtNum(_attractStrength, 2)}" aria-label="Strength value"></span>
+      </label>
+      <label class="slider-with-value">
+        <span class="slider-label">Spread</span>
+        <span class="slider-head"><input type="range" id="_attrRep" min="1" max="20" step="1" value="${Math.abs(_repulsion)}"><input class="slider-value slider-number" id="_attrRepVal" type="number" inputmode="numeric" min="1" max="20" step="1" value="${_fmtNum(Math.abs(_repulsion), 0)}" aria-label="Spread value"></span>
+      </label>
+      <label class="slider-with-value">
+        <span class="slider-label">Size</span>
+        <span class="slider-head"><input type="range" id="_attrSize" min="6" max="40" step="1" value="${_nodeSize}"><input class="slider-value slider-number" id="_attrSizeVal" type="number" inputmode="numeric" min="6" max="40" step="1" value="${_fmtNum(_nodeSize, 0)}" aria-label="Size value"></span>
+      </label>
+      <span class="filter-group-switch" role="group" aria-label="Category mode">
+        <button type="button" id="_attrModeFilter" class="mode-option ${_focusedMode ? "active" : ""}" aria-pressed="${_focusedMode ? "true" : "false"}">Filter</button>
+        <button type="button" id="_attrModeGroup" class="mode-option ${!_focusedMode ? "active" : ""}" aria-pressed="${!_focusedMode ? "true" : "false"}">Group</button>
+      </span>
       <label class="physics-toggle">Live <input type="checkbox" id="_attrLive" ${_liveMode ? "checked" : ""}></label>
       <label class="physics-toggle">Thumbs <input type="checkbox" id="_attrThumbs" ${_showThumbs ? "checked" : ""}></label>
     `;
@@ -680,6 +831,13 @@
     // Chip groups in hover-reveal section
     const chipsSection = document.createElement("div");
     chipsSection.className = "attractor-chips-section";
+    const toolbar = document.createElement("div");
+    toolbar.className = "attractor-categories-toolbar";
+    toolbar.innerHTML = `
+      <span>Categories ${_focusedMode ? "filter matching items" : "group matching items"}</span>
+      <button type="button" class="attractor-clear-categories">Clear categories</button>
+    `;
+    chipsSection.appendChild(toolbar);
 
     // Source chips
     {
@@ -689,11 +847,12 @@
       for (const n of _allNodes) srcCounts[n.source] = (srcCounts[n.source] || 0) + 1;
       const presentSrcs = srcOrder.filter((s) => srcCounts[s] > 0);
       if (presentSrcs.length > 0) {
-        const group = document.createElement("div");
+        const group = document.createElement("details");
         group.className = "attractor-group";
-        const lbl = document.createElement("span");
+        group.open = _activeAttractors.length === 0 || _activeAttractors.some((att) => att.source !== undefined);
+        const lbl = document.createElement("summary");
         lbl.className = "attractor-group-label";
-        lbl.textContent = "Source";
+        lbl.innerHTML = `Source <span class="attractor-group-count">${presentSrcs.length}</span>`;
         group.appendChild(lbl);
         const chips = document.createElement("div");
         chips.className = "attractor-chips";
@@ -730,12 +889,14 @@
       const options = _attractorOptions[catKey];
       if (!options || options.length === 0) continue;
 
-      const group = document.createElement("div");
+      const group = document.createElement("details");
       group.className = "attractor-group";
+      group.open = _activeAttractors.some((att) => options.some((opt) => opt.dim === att.dim))
+        || (_activeAttractors.length === 0 && DEFAULT_OPEN_CATEGORY_KEYS.has(catKey));
 
-      const label = document.createElement("span");
+      const label = document.createElement("summary");
       label.className = "attractor-group-label";
-      label.textContent = (_categories[catKey] || {}).label || catKey;
+      label.innerHTML = `${(_categories[catKey] || {}).label || catKey} <span class="attractor-group-count">${options.length}</span>`;
       group.appendChild(label);
 
       const chips = document.createElement("div");
@@ -760,19 +921,33 @@
       chipsSection.appendChild(group);
     }
     _controlsEl.appendChild(chipsSection);
+    const clearCategories = chipsSection.querySelector(".attractor-clear-categories");
+    if (clearCategories) clearCategories.addEventListener("click", _clearAttractors);
+    _syncCategoriesButtonUi();
 
-    // Wire sliders
-    const strSlider = _controlsEl.querySelector("#_attrStr");
-    if (strSlider)
-      strSlider.addEventListener("input", (e) => {
-        _attractStrength = parseFloat(e.target.value);
+    // Wire sliders and editable values. Number inputs keep tuning usable on iPad.
+    _wireRangeNumberControl({
+      rangeId: "_attrStr",
+      numberId: "_attrStrVal",
+      min: 0.05,
+      max: 0.8,
+      fallback: _attractStrength,
+      digits: 2,
+      apply(value) {
+        _attractStrength = value;
         if (_activeAttractors.length > 0) _updateAttractorForces();
-      });
+      },
+    });
 
-    const repSlider = _controlsEl.querySelector("#_attrRep");
-    if (repSlider)
-      repSlider.addEventListener("input", (e) => {
-        _repulsion = -parseFloat(e.target.value);
+    _wireRangeNumberControl({
+      rangeId: "_attrRep",
+      numberId: "_attrRepVal",
+      min: 1,
+      max: 20,
+      fallback: Math.abs(_repulsion),
+      digits: 0,
+      apply(value) {
+        _repulsion = -value;
         if (_simulation) {
           _simulation.force("charge", d3.forceManyBody().strength(_repulsion).distanceMax(250));
           if (_liveMode) {
@@ -785,12 +960,18 @@
             _scheduleRender();
           }
         }
-      });
+      },
+    });
 
-    const sizeSlider = _controlsEl.querySelector("#_attrSize");
-    if (sizeSlider)
-      sizeSlider.addEventListener("input", (e) => {
-        _nodeSize = parseInt(e.target.value);
+    _wireRangeNumberControl({
+      rangeId: "_attrSize",
+      numberId: "_attrSizeVal",
+      min: 6,
+      max: 40,
+      fallback: _nodeSize,
+      digits: 0,
+      apply(value) {
+        _nodeSize = Math.round(value);
         if (_simulation)
           _simulation.force("collide", d3.forceCollide().radius(_nodeSize / 2 + 1).iterations(1));
         _updateVisibleThumbs();
@@ -801,15 +982,13 @@
           _updateQuadtree();
           _scheduleRender();
         }
-      });
+      },
+    });
 
-    // Focus toggle — exclude non-matching items from simulation
-    const focusToggle = _controlsEl.querySelector("#_attrFocus");
-    if (focusToggle)
-      focusToggle.addEventListener("change", (e) => {
-        _focusedMode = e.target.checked;
-        _rebuildForFocusedMode();
-      });
+    const filterModeBtn = _controlsEl.querySelector("#_attrModeFilter");
+    const groupModeBtn = _controlsEl.querySelector("#_attrModeGroup");
+    if (filterModeBtn) filterModeBtn.addEventListener("click", () => setFocusedMode(true));
+    if (groupModeBtn) groupModeBtn.addEventListener("click", () => setFocusedMode(false));
 
     // Live toggle
     const liveToggle = _controlsEl.querySelector("#_attrLive");
@@ -837,6 +1016,18 @@
         _showThumbs = e.target.checked;
         _scheduleRender();
       });
+
+    if (searchInput) {
+      searchInput.addEventListener("input", (e) => {
+        _searchTerm = (e.target.value || "").toLowerCase().trim();
+        _emitTextFilterChange(e.target.value || "");
+        if (_focusedMode) {
+          _rebuildForFocusedMode();
+        } else {
+          _scheduleRender();
+        }
+      });
+    }
   }
 
   function _toggleAttractor(opt) {
@@ -870,6 +1061,76 @@
       _updateAttractorForces();
     }
     _updateChipLabels();
+    _syncCategoriesButtonUi();
+    _emitSelectionChange();
+  }
+
+  function _clearAttractors() {
+    if (_activeAttractors.length === 0) return;
+    _activeAttractors = [];
+    _controlsEl?.querySelectorAll(".attractor-chip.active").forEach((chip) => {
+      chip.classList.remove("active");
+    });
+    if (_focusedMode) {
+      _rebuildForFocusedMode();
+    } else {
+      _updateAttractorForces();
+    }
+    _updateChipLabels();
+    _syncCategoriesButtonUi();
+    _emitSelectionChange();
+  }
+
+  function _syncCategoriesButtonUi() {
+    const btn = _controlsEl?.querySelector(".attractor-panel-toggle");
+    const count = _activeAttractors.length;
+    if (btn) {
+      btn.textContent = count > 0 ? `Categories (${count})` : "Categories";
+      btn.classList.toggle("active", count > 0);
+    }
+    const clearBtn = _controlsEl?.querySelector(".attractor-clear-categories");
+    if (clearBtn) clearBtn.disabled = count === 0;
+  }
+
+  function _syncModeSwitchUi() {
+    const filterBtn = _controlsEl?.querySelector("#_attrModeFilter");
+    const groupBtn = _controlsEl?.querySelector("#_attrModeGroup");
+    if (filterBtn) {
+      filterBtn.classList.toggle("active", _focusedMode);
+      filterBtn.setAttribute("aria-pressed", _focusedMode ? "true" : "false");
+    }
+    if (groupBtn) {
+      groupBtn.classList.toggle("active", !_focusedMode);
+      groupBtn.setAttribute("aria-pressed", !_focusedMode ? "true" : "false");
+    }
+    const modeText = _controlsEl?.querySelector(".attractor-categories-toolbar span");
+    if (modeText) modeText.textContent = `Categories ${_focusedMode ? "filter matching items" : "group matching items"}`;
+  }
+
+  function _emitSelectionChange() {
+    if (typeof _selectCallback !== "function") return;
+    const scopeAttractors = _focusedMode ? _activeAttractors : [];
+    _selectCallback(getVisibleNodeIds(), {
+      activeAttractors: scopeAttractors.map((att) => ({
+        name: att.name || "",
+        count: att.count || 0,
+        source: att.source,
+        dim: att.dim,
+      })),
+      categoryMode: _focusedMode ? "filter" : "group",
+    });
+  }
+
+  function _emitTextFilterChange(term) {
+    window.dispatchEvent(new CustomEvent("inspirations:explorer-text-filter", {
+      detail: { term: String(term || "") },
+    }));
+  }
+
+  function _nodeMatchesText(node) {
+    if (!_searchTerm) return true;
+    const haystack = `${node.title || ""} ${node.source || ""}`.toLowerCase();
+    return haystack.includes(_searchTerm);
   }
 
   // ─── Overlap indicators ──────────────────────────────────────────────────
@@ -888,7 +1149,8 @@
     const coveredIds = new Set();
     for (const node of source) {
       for (const att of _activeAttractors) {
-        if (node.vector[att.dim] > 0) {
+        const matches = att.source !== undefined ? node.source === att.source : node.vector[att.dim] > 0;
+        if (matches) {
           coveredIds.add(node.id);
           break;
         }
@@ -954,19 +1216,14 @@
 
   function _rebuildForFocusedMode() {
     if (_focusedMode) {
-      if (_filterIds && _filterIds.size > 0) {
-        // External filter (chat/grid) — show only those items
-        _nodes = _allNodes.filter((n) => _filterIds.has(n.id));
-      } else if (_activeAttractors.length > 0) {
-        // No external filter but attractors active — show items matching any attractor
-        _nodes = _allNodes.filter((n) =>
-          _activeAttractors.some((att) =>
-            att.source !== undefined ? n.source === att.source : n.vector[att.dim] > 0
-          )
+      _nodes = _allNodes.filter((n) => {
+        if (_filterIds && _filterIds.size > 0 && !_filterIds.has(n.id)) return false;
+        if (!_nodeMatchesText(n)) return false;
+        if (_activeAttractors.length === 0) return true;
+        return _activeAttractors.some((att) =>
+          att.source !== undefined ? n.source === att.source : n.vector[att.dim] > 0
         );
-      } else {
-        _nodes = _allNodes.slice();
-      }
+      });
     } else {
       _nodes = _allNodes.slice();
     }
@@ -979,6 +1236,7 @@
     _updateQuadtree();
     _scheduleRender();
     _updateVisibleThumbs();
+    _smoothCenterVisibleCluster();
   }
 
   // ─── Public API (mirrors Explorer.js) ────────────────────────────────────
@@ -1026,9 +1284,13 @@
 
   function destroy() {
     pause();
+    if (_controlsEl) _controlsEl.remove();
+    const toolbarMount = document.getElementById("explorerToolbarMount");
+    if (toolbarMount && toolbarMount.children.length === 0) toolbarMount.hidden = true;
     if (_container) {
       _container.innerHTML = "";
     }
+    _controlsEl = null;
     _nodes = [];
     _allNodes = [];
     _simulation = null;
@@ -1040,13 +1302,18 @@
 
   function setSearch(term) {
     _searchTerm = (term || "").toLowerCase().trim();
-    _scheduleRender();
+    const input = _controlsEl?.querySelector(".attractor-search");
+    if (input && input.value !== (term || "")) input.value = term || "";
+    if (_focusedMode) {
+      _rebuildForFocusedMode();
+    } else {
+      _scheduleRender();
+    }
   }
 
   function setFocusedMode(on) {
     _focusedMode = !!on;
-    const toggle = _controlsEl?.querySelector("#_attrFocus");
-    if (toggle) toggle.checked = _focusedMode;
+    _syncModeSwitchUi();
     _rebuildForFocusedMode();
   }
 

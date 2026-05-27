@@ -197,6 +197,29 @@ updates the tracking state.
 
 ---
 
+## D019 — Explorer scope, grouping, and iPad fallback semantics (2026-05-25)
+
+**Decision:** Sidebar filters and text search define the base Explorer item
+scope. Category chips then have an explicit `Filter / Group` mode: `Filter`
+reduces the visible item set, while `Group` arranges the current scope around
+selected category poles. In 3D Explorer, `Group by` is an automatic grouping
+shortcut and does not change global filters or sidebar state. On
+iPad/mobile-constrained layouts, 2D is a lite fallback for broad sets, while
+filtered subsets can switch back to 3D when a measured per-session WebGL budget
+says the subset is small enough.
+
+**Why:** The previous category-pill surface was ambiguous: users could not tell
+whether pills were filtering the collection or grouping visible nodes. iPad
+Safari also showed instability on broad 3D sets, but a static node cutoff was
+too opaque and device-dependent.
+
+**Consequence:** 3D Explorer shows a `Categories` drawer, a `Filter / Group`
+switch, and visible grouping chips for active grouping poles. iPad mode labels
+broad sets as `iPad lite: 2D map`; 3D is restored for filtered subsets within
+the measured device budget.
+
+---
+
 ## Archived Decisions (pre-rebuild)
 
 Decisions D010–D013 (cluster explorer, accessibility tier, session-only delete)

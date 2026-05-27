@@ -17,11 +17,12 @@ The scrape-first rebuild is complete. The database has been rebuilt from browser
 
 ### Recent changes:
 - **Attractor Explorer** — 2D (D3 force-directed) and 3D (Three.js WebGL) semantic visualizations
-  - Semantic attractor poles (rooms, styles, materials, colors) with toggleable chips
-  - Control panel: sliders always visible, chips hover-reveal, 3D/Focus/Live checkboxes
-  - Sidebar tree stays visible in explorer for filtering; Focus defaults ON
-  - CSS pre-zoom for instant scroll feedback in 2D; texture cache fix in 3D
-  - Spread slider in 3D scales collision pass cell size and min distance
+  - Sidebar filters and text search define the base Explorer item scope
+  - Category chips now have explicit `Filter / Group` semantics: filter narrows the visible set; group arranges the current scope without changing global/sidebar filters
+  - 3D includes a `Group by` shortcut, visible active grouping chips, and restored `Categories` drawer
+  - Explorer controls live in the top stats toolbar, with editable numeric values beside tuning sliders for iPad usability
+  - iPad/mobile-constrained broad sets use `iPad lite: 2D map`; filtered subsets switch back to 3D when a measured per-session WebGL budget allows it
+  - The mode/count hint now updates when filters are applied, including 2D iPad fallback mode
 - Pagination (`has_more` flag) — all 6,295 items accessible via Load More
 - Collections auto-created from `board` values during rebuild
 - Pinterest title fallback to `seo_alt_text` (fixes "(untitled)" tiles)
@@ -118,13 +119,13 @@ PYTHONPATH=src python3 -m inspirations ai tag --provider gemini --api-key "$GEMI
 
 Vanilla HTML/CSS/JS, no build step. The app has three main workflows:
 1. **Collection browsing + triage** — View collections as tile grids, natural-language collection management via chat prompt, keeper/hidden/skip review workflow with annotation marking
-2. **Attractor Explorer** — Semantic visualization (2D canvas with D3 forces, or 3D WebGL with Three.js). Toggle between Grid and Explorer views via toolbar buttons. In explorer, attractor chips (rooms, styles, materials, colors) pull matching items toward labeled poles. Control panel has sliders (Strength/Spread/Size) always visible, with chips revealed on hover. 3D mode is a checkbox in the control panel alongside Focus and Live toggles. Sidebar tree stays visible in explorer mode for filtering.
+2. **Attractor Explorer** — Semantic visualization (2D canvas with D3 forces, or 3D WebGL with Three.js). Toggle between Grid and Explorer via toolbar buttons. Sidebar filters and text search define the base scope. Category chips use explicit `Filter / Group` semantics, and 3D also offers `Group by` shortcuts that arrange the current scope without changing global/sidebar filters. Explorer controls are mounted in the top stats toolbar, with editable numeric tuning values for desktop and iPad. Mobile-constrained broad sets use `iPad lite: 2D map`; filtered subsets can switch back to 3D when the measured WebGL budget allows it.
 3. **Share export** — Generate HTML artifacts for sharing curated collections with designers
 
 Key explorer files:
-- `attractor-explorer.js` — 2D canvas + D3 force simulation, CSS pre-zoom feedback
-- `attractor-explorer-3d.js` — Three.js WebGL, custom 3D force sim, billboard textures
-- `app.js` — View switching (grid/explorer), `switchExplorerMode()` for 2D↔3D, `on3DToggle` callback wiring
+- `attractor-explorer.js` — 2D canvas + D3 force simulation, text/category filtering, Filter/Group category controls, CSS pre-zoom feedback
+- `attractor-explorer-3d.js` — Three.js WebGL, custom 3D force sim, billboard textures, category drawer, grouping shortcuts
+- `app.js` — View switching (grid/explorer), sidebar/text filter sync, iPad 2D/3D fallback budgeting, Explorer mode/count hint
 
 ### Data Model (SQLite)
 
