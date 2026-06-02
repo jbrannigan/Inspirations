@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Local-first inspiration library for home design research. Browser-scraped data from Pinterest and Facebook, plus local scans, with a keeper/hidden triage workflow and natural-language collection management. The frontend is a vanilla JS web app served by Python's standard library HTTP server.
+Local-first inspiration library for home design research. Browser-scraped data from Pinterest and Facebook, plus local scans, with keeper/hidden triage, Explorer, Dave/chat, collection management, source/QC tools, and one-collection standalone PDF export for designer handoffs. The frontend is a vanilla JS web app served by Python's standard library HTTP server.
 
 ## Current State: Post-Rebuild (Feb 2026)
 
@@ -12,7 +12,7 @@ The scrape-first rebuild is complete. The database has been rebuilt from browser
 
 - **6,295 assets total**: 3,783 Pinterest pins, 2,405 Facebook saved items, 107 scans
 - **6,070 thumbnails** generated
-- **92 collections** auto-created from board names
+- **15 active collection folders**: 12 AI-derived `CB:` starting sets and 3 architect-scan workflow cohorts
 - **986 bad Facebook images** nulled (duplicate SHA256 captures replaced with thumbnail_url fallback)
 
 ### Recent changes:
@@ -23,6 +23,10 @@ The scrape-first rebuild is complete. The database has been rebuilt from browser
   - Explorer controls live in the top stats toolbar, with editable numeric values beside tuning sliders for iPad usability
   - iPad/mobile-constrained broad sets use `iPad lite: 2D map`; filtered subsets switch back to 3D when a measured per-session WebGL budget allows it
   - The mode/count hint now updates when filters are applied, including 2D iPad fallback mode
+- **Designer PDF export** — selected collection exports as standalone PDF plus audit Markdown under `data/exports/`; embedded local previews and direct external source URLs only. The contextual canvas-header action appears only when exactly one collection is selected.
+- **Local collection management** — sidebar `Manage Collections` edits collection names/descriptions; `Manage Collection Archive` handles archive/restore/delete separately. Archiving a folder never hides or deletes its items.
+- **Collection archive cleanup** — obsolete `pins:` source-board mirrors and completed `Review:` workflow folders were removed after a local SQLite backup. Source-board browsing now reads live `assets.board` metadata directly.
+- **Live collaborator sharing retired** — magic-link actor UX, `/api/me`, `/api/actors`, `/api/context/resolve`, and `/api/questions/dashboard` are legacy/disabled in active UI. Keep schema columns for compatibility, but do not present collaborator assignment or app-context share links.
 - Pagination (`has_more` flag) — all 6,295 items accessible via Load More
 - Collections auto-created from `board` values during rebuild
 - Pinterest title fallback to `seo_alt_text` (fixes "(untitled)" tiles)
@@ -72,7 +76,15 @@ explorer, sidebar, or browse-tree code.
 ```bash
 PYTHONPATH=src python3 -m inspirations <subcommand>
 ```
-Subcommands: `init`, `list`, `import pinterest-scrape`, `import facebook-scrape`, `rebuild-db`, `thumbs`, `ai tag`, `ai errors`, `ai embed`, `ai similar`, `export html`, `export portal`, `serve`
+Subcommands: `init`, `list`, `import pinterest-scrape`, `import facebook-scrape`, `rebuild-db`, `thumbs`, `ai tag`, `ai errors`, `ai embed`, `ai similar`, `export html`, `export portal` (legacy/debug), `export collection-pdf`, `serve`
+
+### Export a designer PDF for one collection
+```bash
+PYTHONPATH=src python3 -m inspirations export collection-pdf \
+  --collection-id <id> \
+  --out data/exports/<name>.pdf
+```
+Requires local `pandoc` and `tectonic`. The generated Markdown stays beside the PDF for audit/debugging.
 
 ### Start the dev server with auto-reload
 ```bash
@@ -107,7 +119,7 @@ PYTHONPATH=src python3 -m inspirations ai tag --provider gemini --api-key "$GEMI
 - **`security.py`** — URL validation helpers used by the download pipeline.
 - **`thumbnails.py`** — Auto-detects system tools (`sips` on macOS, `magick` on Linux), Pillow fallback.
 - **`ai.py`** — AI tagging pipeline. Gemini integration. Primary model: `gemini-2.5-flash`, fallback to `gemini-2.0-flash` on `RECITATION` errors.
-- **`export.py`** — Share-by-export utilities. Generates single-file HTML galleries and static share portal.
+- **`export.py`** — Export utilities. Active handoff path is one-collection PDF export; single-file HTML galleries/static portal remain legacy/debug utilities.
 - **`server.py`** — Standard library `HTTPServer`. REST API endpoints plus media serving and static files. Supports optional `BASE_PATH` env var for reverse-proxy deployments (strips prefix from incoming requests, injects `window.__BASE_PATH` into HTML).
 - **`devserver.py`** — File-watching wrapper for auto-reload during development.
 - **`importers/`** — Adapter pattern. Each normalizes source data into consistent `Asset` records. Imports are idempotent.
@@ -120,7 +132,7 @@ PYTHONPATH=src python3 -m inspirations ai tag --provider gemini --api-key "$GEMI
 Vanilla HTML/CSS/JS, no build step. The app has three main workflows:
 1. **Collection browsing + triage** — View collections as tile grids, natural-language collection management via chat prompt, keeper/hidden/skip review workflow with annotation marking
 2. **Attractor Explorer** — Semantic visualization (2D canvas with D3 forces, or 3D WebGL with Three.js). Toggle between Grid and Explorer via toolbar buttons. Sidebar filters and text search define the base scope. Category chips use explicit `Filter / Group` semantics, and 3D also offers `Group by` shortcuts that arrange the current scope without changing global/sidebar filters. Explorer controls are mounted in the top stats toolbar, with editable numeric tuning values for desktop and iPad. Mobile-constrained broad sets use `iPad lite: 2D map`; filtered subsets can switch back to 3D when the measured WebGL budget allows it.
-3. **Share export** — Generate HTML artifacts for sharing curated collections with designers
+3. **Collection PDF export** — Export exactly one selected collection as a self-contained PDF with copied local media and visible external source URLs
 
 Key explorer files:
 - `attractor-explorer.js` — 2D canvas + D3 force simulation, text/category filtering, Filter/Group category controls, CSS pre-zoom feedback
@@ -139,7 +151,7 @@ This project uses a layered classification system. Understanding the trust hiera
 
 1. **Source boards** (`assets.board`) — Leslie's personal curation on Pinterest, Facebook, and Houzz. She saved items to specific boards intentionally. Board assignments always take precedence over AI tags when there is a conflict.
 2. **Human review / triage decisions** — Jim and Leslie's decisions in the app are durable intent signals and should not be overridden casually.
-3. **Collections** — `pins:` prefix = mirrored source boards. `CB:` prefix = AI-derived representative collections created from high-confidence descriptions/tagging for creative-brief themes. They are useful starting hypotheses, but they are not human-curated highest-intent selections.
+3. **Collections** — `CB:` prefix = AI-derived representative collections created from high-confidence descriptions/tagging for creative-brief themes. They are useful starting hypotheses, but they are not human-curated highest-intent selections. Historical `pins:` mirrored source-board collections were retired; use live `assets.board` metadata for source-board browsing.
 4. **AI-assigned rooms/styles** (`asset_ai.json` → `rooms`, `styles`) — Gemini image analysis. Good for enrichment and cross-cutting dimensions, but secondary to human curation.
 5. **AI labels** (`asset_labels` table) — Flattened tags from Gemini. Useful for search, filtering, and the detail view label chips. Lowest priority for categorization decisions.
 
@@ -220,6 +232,6 @@ hosting should use `launchd` plus the shared Cloudflare runbook:
 
 ## Future Work (TODO)
 
-- **Consuming UX**: Design the experience for people receiving shared collections (the decorator/designer view). How they browse, filter, and interact with curated inspiration sets. This is a separate concern from the curation app.
+- **PDF handoff polish**: Improve one-collection PDF layout, source-link completeness, ordering controls, and scan/document presentation.
 - **Natural-language collection management**: Chat-style prompt in the app to manage collections ("move all kitchen items to a new collection", "combine these two collections", etc.)
 - **Annotation workflow**: After triage, mark items for annotation/comment, then walk through commenting on marked items.

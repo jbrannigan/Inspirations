@@ -304,21 +304,50 @@ class TestTreeContract(unittest.TestCase):
             )
             db.exec(
                 """
-                insert into collections (id, name, description, created_at, updated_at, hidden)
-                values (?, ?, ?, ?, ?, 1)
+                insert into collections (id, name, description, created_at, updated_at, hidden, provenance_kind)
+                values (?, ?, ?, ?, ?, 1, ?)
                 """,
-                ("c-hidden", "CB: Hidden", "", "2026-03-01T00:00:00+00:00", "2026-03-02T00:00:04+00:00"),
+                ("c-hidden", "CB: Hidden", "", "2026-03-01T00:00:00+00:00", "2026-03-02T00:00:04+00:00", "human_curated"),
+            )
+            db.exec(
+                """
+                insert into collections (id, name, description, created_at, updated_at, hidden, provenance_kind)
+                values (?, ?, ?, ?, ?, 1, ?)
+                """,
+                ("c-review", "Review: Done", "", "2026-03-01T00:00:00+00:00", "2026-03-02T00:00:05+00:00", "workflow_review"),
+            )
+            db.exec(
+                """
+                insert into collections (id, name, description, created_at, updated_at, hidden, provenance_kind)
+                values (?, ?, ?, ?, ?, 1, ?)
+                """,
+                ("c-mirror", "pins: kitchen", "", "2026-03-01T00:00:00+00:00", "2026-03-02T00:00:06+00:00", "source_mirror"),
             )
 
         tree = self._get("/api/catalog/tree", headers={"X-Actor-Token": "owner-tree-token"})["tree"]
         collections_node = next((n for n in tree if n.get("type") == "collections_group"), None)
         self.assertIsNotNone(collections_node, "collections group should be present")
         labels = [str(c.get("label") or "") for c in collections_node.get("children", [])]
-        self.assertEqual(labels, ["Bathroom", "CB: Alpha", "CB: Zebra", "Hidden"])
-        self.assertEqual(collections_node.get("count"), 4)
+        self.assertEqual(labels, ["Bathroom", "CB: Alpha", "CB: Zebra", "Archived Collections"])
+        self.assertEqual(collections_node.get("count"), 6)
         hidden_branch = next((c for c in collections_node.get("children", []) if c.get("type") == "collections_hidden_group"), None)
-        self.assertIsNotNone(hidden_branch, "owner tree should expose hidden collections under a Hidden branch")
-        self.assertEqual([str(c.get("label") or "") for c in hidden_branch.get("children", [])], ["CB: Hidden"])
+        self.assertIsNotNone(hidden_branch, "owner tree should expose archived collections under an archive branch")
+        self.assertEqual(
+            [str(c.get("label") or "") for c in hidden_branch.get("children", [])],
+            ["Completed Reviews", "Imported Board Mirrors", "Legacy Folders"],
+        )
+        self.assertEqual(
+            [str(c.get("label") or "") for c in hidden_branch["children"][0].get("children", [])],
+            ["Review: Done"],
+        )
+        self.assertEqual(
+            [str(c.get("label") or "") for c in hidden_branch["children"][1].get("children", [])],
+            ["pins: kitchen"],
+        )
+        self.assertEqual(
+            [str(c.get("label") or "") for c in hidden_branch["children"][2].get("children", [])],
+            ["CB: Hidden"],
+        )
 
     def test_collections_group_counts_only_visible_items(self):
         """Collection counts should match visible items returned by /api/assets."""

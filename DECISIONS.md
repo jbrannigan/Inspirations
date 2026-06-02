@@ -220,6 +220,77 @@ the measured device budget.
 
 ---
 
+## D020 — Sidebar Refine By facets are stackable scope refinements (2026-05-26)
+
+**Decision:** Sidebar classification/style/material/color choices are
+stackable `Refine By` facets rather than exclusive browse scopes. Source,
+collection, and board choices define the browsing scope; Refine By selections
+can be layered on top. Multiple selections inside one facet are OR; selections
+across different facets are AND.
+
+**Why:** The old sidebar made classification feel like another folder tree,
+and the Explorer category drawer showed style/material/color categories that
+the sidebar could not reproduce. Silent top-N clipping also hid values such as
+`Spanish / Mission`, making the category system feel arbitrary.
+
+**Consequence:** `/api/assets` and `/api/asset-ids` accept repeated
+`facet=axis:value` params while preserving legacy `classification_axis` /
+`classification_value` queries. The sidebar now exposes Style, Materials, and
+Colors using the same legacy facet extraction as Explorer, and Explorer
+category drawers no longer silently truncate chips to a top-N subset.
+
+---
+
+## D021 — Standalone collection PDFs replace live collaborator sharing (2026-05-27)
+
+**Decision:** Inspirations remains Jim's local corpus-management app, including
+Grid, Explorer, Review/Triage, Dave, imports, annotations, source QC, live
+filtering, and collection editing. The external handoff product is now a
+standalone PDF for one selected collection at a time. The old live
+collaborator layer (magic links, actor chips, collaborator assignment, app
+context links, question dashboard/polling, and live shared-collection modal)
+is retired from active UI/API behavior.
+
+**Why:** The product no longer needs to host a live app for designers. A
+self-contained PDF is easier to share, review, archive, and open without
+depending on the Mac, LAN, Cloudflare, app routes, or `store/` paths.
+
+**Consequence:** `export collection-pdf` and
+`POST /api/collections/{id}/export/pdf` are the first-class handoff paths.
+PDF exports copy local previews under `data/exports/`, keep audit Markdown
+beside the PDF, include visible external source URLs, and omit localhost,
+LAN, `/api`, `/media`, `/store`, and other app-dependent links. Legacy schema
+fields (`actors`, `collection_shares`, `collections.intent`,
+`collections.shared_actor_id`, annotation actor/type columns) remain for now
+but are treated as compatibility/legacy, not current product surface.
+
+---
+
+## D022 — Collection archives are folders, not hidden items (2026-06-01)
+
+**Decision:** Collection-folder visibility is presented as an archive workflow,
+separate from asset triage. The sidebar branch is named `Archived Collections`
+and groups archived folders as `Completed Reviews`, `Imported Board Mirrors`,
+and `Legacy Folders`. The management surface is named
+`Manage Collection Archive`.
+
+Historical `pins:` source-board mirror folders and completed `Review:` workflow
+folders were removed after a local SQLite backup. Live source-board browsing
+uses `assets.board` metadata directly. Active `CB:` creative-brief starting sets
+and architect-scan workflow cohorts remain.
+
+**Why:** The old `Hidden` label described two different concepts: hiding an
+asset from the corpus and folding an obsolete collection folder out of the
+sidebar. The old `pins:` folders were frozen board snapshots that duplicated
+the live source tree and could drift from imported board metadata.
+
+**Consequence:** Archiving or deleting a collection folder does not hide or
+delete member assets. New collection UX should treat collections as deliberate
+curator-created working sets or deliverables, not as a replacement for source
+metadata browsing.
+
+---
+
 ## Archived Decisions (pre-rebuild)
 
 Decisions D010–D013 (cluster explorer, accessibility tier, session-only delete)

@@ -902,11 +902,7 @@
       const chips = document.createElement("div");
       chips.className = "attractor-chips";
 
-      // Show top items (most popular)
-      const maxChips = catKey === "colors"
-        ? 8
-        : (catKey === "product_focus" || catKey === "room" ? 12 : 10);
-      for (const opt of options.slice(0, maxChips)) {
+      for (const opt of options) {
         const btn = document.createElement("button");
         btn.className = "attractor-chip";
         btn.type = "button";

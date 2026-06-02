@@ -3,6 +3,11 @@ const state = {
   assets: [],
   selected: new Set(),
   q: "",
+  configured: null,
+  setupAllowed: false,
+  pendingMediaRepairs: [],
+  refreshingMediaRepairs: false,
+  authMessage: "",
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -17,20 +22,65 @@ async function api(path, opts = {}, requireAuth = false) {
 
 function setUiState() {
   const unlocked = !!state.token;
-  $("#adminPassword").disabled = unlocked;
-  $("#unlockAdmin").disabled = unlocked;
+  const configured = state.configured === true;
+  $("#adminPassword").disabled = unlocked || !configured;
+  $("#unlockAdmin").disabled = unlocked || !configured;
   $("#lockAdmin").disabled = !unlocked;
   $("#adminSearch").disabled = !unlocked;
   $("#reloadAssets").disabled = !unlocked;
   $("#selectAllAssets").disabled = !unlocked || state.assets.length === 0;
   $("#clearAssetSelection").disabled = !unlocked || state.selected.size === 0;
   $("#deleteFromDb").disabled = !unlocked || state.selected.size === 0;
+  $("#refreshMediaRepairs").disabled =
+    !unlocked || state.refreshingMediaRepairs || state.pendingMediaRepairs.length === 0;
   $("#selectionCount").textContent = `${state.selected.size} selected`;
-  if (!unlocked) {
-    $("#authStatus").textContent = "Enter admin password to unlock delete actions.";
+  $("#adminSetup").hidden = configured;
+  $("#setupForm").hidden = !state.setupAllowed;
+  if (state.authMessage) {
+    $("#authStatus").textContent = state.authMessage;
+  } else if (!configured) {
+    $("#authStatus").textContent = "Admin mode needs a password before it can be entered.";
+  } else if (!unlocked) {
+    $("#authStatus").textContent = "Enter the admin password to unlock maintenance actions.";
   } else {
-    $("#authStatus").textContent = "Admin mode unlocked. Deletions require DELETE confirmation text.";
+    $("#authStatus").textContent = "Admin mode unlocked. Maintenance actions are available.";
   }
+}
+
+function renderMediaRepairs() {
+  const wrap = $("#mediaRepairItems");
+  wrap.innerHTML = "";
+  if (!state.pendingMediaRepairs.length) {
+    $("#mediaRepairStatus").textContent = "No repaired items are waiting for search-evidence refresh.";
+    setUiState();
+    return;
+  }
+  $("#mediaRepairStatus").textContent =
+    `${state.pendingMediaRepairs.length} repaired item${state.pendingMediaRepairs.length === 1 ? "" : "s"} waiting for refresh.`;
+  for (const item of state.pendingMediaRepairs) {
+    const el = document.createElement("div");
+    el.className = "listItem";
+    el.innerHTML = `
+      <strong>${escapeHtml(item.title || "(untitled)")}</strong>
+      <span class="muted" style="display: block">${escapeHtml(item.repair_kind || "replacement media")} • id: ${escapeHtml(item.asset_id || "")}</span>
+    `;
+    wrap.appendChild(el);
+  }
+  setUiState();
+}
+
+async function loadAdminStatus() {
+  const res = await api("/api/admin/status");
+  state.configured = !!res.configured;
+  state.setupAllowed = !!res.setup_allowed;
+  state.pendingMediaRepairs = res.pending_media_repairs || [];
+  if (!state.configured) {
+    $("#setupHelp").textContent = state.setupAllowed
+      ? "First-time setup: choose an admin password. It will be stored privately on this Mac."
+      : "First-time setup must be completed on the Mac itself. Open http://localhost:8001/app/admin.html on the Mac.";
+  }
+  renderMediaRepairs();
+  setUiState();
 }
 
 function renderAssets() {
@@ -88,12 +138,31 @@ $("#unlockAdmin").onclick = async () => {
       body: JSON.stringify({ password }),
     });
     state.token = res.token || "";
+    state.authMessage = "";
     $("#adminPassword").value = "";
     $("#deleteStatus").textContent = "Admin mode ready. Load assets and choose what to delete from DB.";
     await loadAssets();
   } catch (e) {
-    $("#authStatus").textContent = `Login failed: ${e.message || e}`;
+    state.authMessage = `Login failed: ${e.message || e}`;
   } finally {
+    setUiState();
+  }
+};
+
+$("#setupAdmin").onclick = async () => {
+  const password = ($("#newAdminPassword").value || "").trim();
+  const confirmPassword = ($("#confirmAdminPassword").value || "").trim();
+  try {
+    await api("/api/admin/setup", {
+      method: "POST",
+      body: JSON.stringify({ password, confirm_password: confirmPassword }),
+    });
+    $("#newAdminPassword").value = "";
+    $("#confirmAdminPassword").value = "";
+    state.authMessage = "Admin password created. Enter it below to unlock maintenance actions.";
+    await loadAdminStatus();
+  } catch (e) {
+    state.authMessage = `Setup failed: ${e.message || e}`;
     setUiState();
   }
 };
@@ -107,10 +176,39 @@ $("#lockAdmin").onclick = async () => {
     // no-op
   }
   state.token = "";
+  state.authMessage = "";
   state.assets = [];
   state.selected.clear();
   $("#adminAssets").innerHTML = '<div class="muted">No assets loaded.</div>';
   setUiState();
+};
+
+$("#reloadMediaRepairs").onclick = async () => {
+  try {
+    await loadAdminStatus();
+  } catch (e) {
+    $("#mediaRepairStatus").textContent = `Check failed: ${e.message || e}`;
+  }
+};
+
+$("#refreshMediaRepairs").onclick = async () => {
+  if (!state.token || state.pendingMediaRepairs.length === 0) return;
+  state.refreshingMediaRepairs = true;
+  $("#mediaRepairStatus").textContent = "Refreshing repaired items. This can take a little while...";
+  setUiState();
+  try {
+    const res = await api("/api/admin/media-repairs/refresh", { method: "POST" }, true);
+    const failed = (res.failed || []).length;
+    $("#mediaRepairStatus").textContent =
+      `Refreshed ${res.refreshed || 0} item${res.refreshed === 1 ? "" : "s"}.` +
+      (failed ? ` ${failed} item${failed === 1 ? "" : "s"} still need attention.` : "");
+    await loadAdminStatus();
+  } catch (e) {
+    $("#mediaRepairStatus").textContent = `Refresh failed: ${e.message || e}`;
+  } finally {
+    state.refreshingMediaRepairs = false;
+    setUiState();
+  }
 };
 
 $("#reloadAssets").onclick = async () => {
@@ -180,3 +278,7 @@ $("#deleteFromDb").onclick = async () => {
 
 setUiState();
 renderAssets();
+loadAdminStatus().catch((e) => {
+  $("#authStatus").textContent = `Could not check admin setup: ${e.message || e}`;
+  $("#mediaRepairStatus").textContent = "Could not check pending repairs.";
+});

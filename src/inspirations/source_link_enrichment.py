@@ -7,16 +7,18 @@ import re
 import signal
 import subprocess
 import sys
+import textwrap
 import time
 import urllib.error
 import urllib.request
 import uuid
+from io import BytesIO
 from datetime import datetime, timezone
-from html import unescape
+from html import escape as html_escape, unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, unquote, urljoin, urlparse
 
 from .db import Db
 from .security import is_safe_public_url
@@ -31,8 +33,11 @@ DEFAULT_BROWSER_WAIT_MS = 1500
 USER_AGENT = "Inspirations/0.1"
 HTML_CONTENT_HINTS = ("text/html", "application/xhtml+xml", "text/plain")
 PLATFORM_WRAPPER_HOSTS = {"pinterest.com", "facebook.com"}
+HTTPS_UPGRADE_HOSTS = {"blogspot.com"}
 DEFAULT_AUTH_BROWSER_CHANNEL = "chrome"
 DEFAULT_AUTH_BROWSER_SESSION = "media-repair-auth"
+TEXT_CARD_CANDIDATE_ID = "text-card"
+DEFAULT_MAX_MEDIA_CANDIDATES = 48
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -47,6 +52,7 @@ class _HeadMetaParser(HTMLParser):
         self._title_parts: list[str] = []
         self.meta: dict[str, str] = {}
         self.links: dict[str, str] = {}
+        self.images: list[dict[str, str]] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attrs_map = {str(key or "").lower(): str(value or "") for key, value in attrs}
@@ -65,6 +71,11 @@ class _HeadMetaParser(HTMLParser):
             href = (attrs_map.get("href") or "").strip()
             if rel and href and rel not in self.links:
                 self.links[rel] = href
+            return
+        if tag == "img":
+            src = (attrs_map.get("src") or attrs_map.get("data-src") or "").strip()
+            if src:
+                self.images.append({"url": src, "alt": (attrs_map.get("alt") or "").strip()})
 
     def handle_endtag(self, tag: str) -> None:
         if str(tag or "").lower() == "title":
@@ -151,6 +162,45 @@ def _is_platform_wrapper_host(host: str) -> bool:
     if text.startswith("www."):
         text = text[4:]
     return text in PLATFORM_WRAPPER_HOSTS or any(text.endswith("." + item) for item in PLATFORM_WRAPPER_HOSTS)
+
+
+def _upgrade_known_https_url(url: str) -> str:
+    try:
+        parsed = urlparse(str(url or "").strip())
+    except Exception:
+        return str(url or "").strip()
+    host = (parsed.hostname or "").strip().lower().strip(".")
+    if parsed.scheme != "http" or not host:
+        return str(url or "").strip()
+    if host in HTTPS_UPGRADE_HOSTS or any(host.endswith("." + item) for item in HTTPS_UPGRADE_HOSTS):
+        return parsed._replace(scheme="https").geturl()
+    return str(url or "").strip()
+
+
+def _safe_external_outbound_url(value: Any) -> str:
+    url = _upgrade_known_https_url(_normalize_space(value))
+    host = _extract_domain(url)
+    if not host or _is_platform_wrapper_host(host):
+        return ""
+    if not is_safe_public_url(url, allow_http=True):
+        return ""
+    return url
+
+
+def _first_safe_external_outbound_url(raw: Any) -> str:
+    if not isinstance(raw, list):
+        return ""
+    ranked: list[tuple[int, int, str]] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            continue
+        url = _safe_external_outbound_url(item.get("url", ""))
+        if not url:
+            continue
+        label = _normalize_space(item.get("text", "")).lower()
+        ranked.append((0 if "visit site" in label else 1, index, url))
+    ranked.sort()
+    return ranked[0][2] if ranked else ""
 
 
 def _best_source_url(asset: dict[str, Any]) -> str:
@@ -276,6 +326,15 @@ def _parse_html_payload(raw_text: str, *, final_url: str) -> dict[str, Any]:
         "hero_image_url": "",
         "hero_image_alt": "",
         "hero_text_excerpt": "",
+        "media_candidates": [
+            {
+                "url": urljoin(final_url, item.get("url", "")),
+                "alt": _normalize_space(item.get("alt", "")),
+                "label": f"Page image {index + 1}",
+            }
+            for index, item in enumerate(parser.images)
+            if item.get("url")
+        ],
     }
 
 
@@ -296,6 +355,7 @@ def _parse_text_payload(raw_text: str) -> dict[str, Any]:
         "hero_image_url": "",
         "hero_image_alt": "",
         "hero_text_excerpt": "",
+        "media_candidates": [],
     }
 
 
@@ -312,6 +372,332 @@ def _stable_download_path(downloaded_path: Path, sha256: str) -> Path:
         return stable_path
     os.replace(downloaded_path, stable_path)
     return stable_path
+
+
+def _archive_and_invalidate_media_evidence(
+    db: Db,
+    *,
+    asset_id: str,
+    repair_kind: str,
+    origin_ref: str,
+    created_at: str,
+) -> dict[str, int]:
+    asset_rows = db.query(
+        """
+        select id, image_url, stored_path, thumb_path, sha256, ai_summary
+        from assets
+        where id=?
+        limit 1
+        """,
+        (asset_id,),
+    )
+    if not asset_rows:
+        raise FileNotFoundError("asset not found")
+    stale_rows = {
+        "asset": dict(asset_rows[0]),
+        "asset_ai": [dict(row) for row in db.query("select * from asset_ai where asset_id=? order by created_at, id", (asset_id,))],
+        "asset_labels": [
+            dict(row)
+            for row in db.query("select * from asset_labels where asset_id=? and source='ai' order by created_at, id", (asset_id,))
+        ],
+        "asset_embeddings": [
+            dict(row) for row in db.query("select * from asset_embeddings where asset_id=? order by created_at, id", (asset_id,))
+        ],
+        "asset_track_assessments": [
+            dict(row) for row in db.query("select * from asset_track_assessments where asset_id=? order by created_at, id", (asset_id,))
+        ],
+        "asset_axis_memberships": [
+            dict(row) for row in db.query("select * from asset_axis_memberships where asset_id=? order by created_at, id", (asset_id,))
+        ],
+        "asset_axis_evidence": [
+            dict(row) for row in db.query("select * from asset_axis_evidence where asset_id=? order by created_at, id", (asset_id,))
+        ],
+        "asset_source_link_qc": [
+            dict(row) for row in db.query("select * from asset_source_link_qc where asset_id=? order by created_at, id", (asset_id,))
+        ],
+    }
+    counts = {key: len(rows) for key, rows in stale_rows.items() if isinstance(rows, list)}
+    db.exec(
+        """
+        insert into asset_media_repair_audit
+          (id, asset_id, repair_kind, origin_ref, stale_evidence_json, created_at)
+        values (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(uuid.uuid4()),
+            asset_id,
+            repair_kind,
+            origin_ref or None,
+            json.dumps(stale_rows, ensure_ascii=True, sort_keys=True),
+            created_at,
+        ),
+    )
+    db.exec("delete from asset_ai where asset_id=?", (asset_id,))
+    db.exec("delete from asset_labels where asset_id=? and source='ai'", (asset_id,))
+    db.exec("delete from asset_embeddings where asset_id=?", (asset_id,))
+    db.exec("delete from asset_track_assessments where asset_id=?", (asset_id,))
+    db.exec("delete from asset_axis_memberships where asset_id=?", (asset_id,))
+    db.exec("delete from asset_axis_evidence where asset_id=?", (asset_id,))
+    db.exec("delete from asset_source_link_qc where asset_id=?", (asset_id,))
+    db.exec("update assets set ai_summary=null where id=?", (asset_id,))
+    _record_field_provenance(
+        db,
+        asset_id=asset_id,
+        field_name="media_evidence_status",
+        field_value=f"refresh_required:{repair_kind}",
+        origin_type="media_repair",
+        origin_ref=origin_ref,
+        actor="source_link_enrichment",
+        confidence=1.0,
+        created_at=created_at,
+    )
+    return counts
+
+
+def list_pending_media_repairs(db: Db) -> list[dict[str, str]]:
+    rows = db.query(
+        """
+        select p.asset_id, p.field_value, p.created_at,
+               coalesce(a.title, '') as title
+        from asset_field_provenance p
+        join assets a on a.id=p.asset_id
+        where p.field_name='media_evidence_status'
+          and p.is_current=1
+          and p.field_value like 'refresh_required:%'
+        order by p.created_at, p.asset_id
+        """
+    )
+    pending: list[dict[str, str]] = []
+    for row in rows:
+        status = str(row["field_value"] or "").strip()
+        pending.append(
+            {
+                "asset_id": str(row["asset_id"]),
+                "title": str(row["title"] or ""),
+                "status": status,
+                "repair_kind": status.split(":", 1)[1] if ":" in status else "",
+                "created_at": str(row["created_at"] or ""),
+            }
+        )
+    return pending
+
+
+def mark_media_repair_evidence_refreshed(
+    db: Db,
+    *,
+    asset_id: str,
+    repair_kind: str,
+    origin_ref: str,
+) -> None:
+    _record_field_provenance(
+        db,
+        asset_id=asset_id,
+        field_name="media_evidence_status",
+        field_value=f"refreshed:{repair_kind}",
+        origin_type="media_repair",
+        origin_ref=origin_ref,
+        actor="admin_refresh",
+        confidence=1.0,
+        created_at=_now_iso(),
+    )
+
+
+def _media_candidate_id(url: str) -> str:
+    digest = hashlib.sha1(str(url or "").strip().encode("utf-8", errors="ignore")).hexdigest()[:16]
+    return f"source-{digest}"
+
+
+def _media_candidate_filename_hint(url: str) -> str:
+    try:
+        name = Path(unquote(urlparse(str(url or "")).path)).stem
+    except Exception:
+        return ""
+    name = re.sub(r"\[\d+\]$", "", name)
+    name = _normalize_space(re.sub(r"[-_+]+", " ", name))
+    if len(name) < 4 or len(name) > 90 or re.fullmatch(r"[0-9a-f]{16,}", name, re.IGNORECASE):
+        return ""
+    return name[0].upper() + name[1:]
+
+
+def _normalize_media_candidates(raw: Any, *, limit: int = DEFAULT_MAX_MEDIA_CANDIDATES) -> list[dict[str, str]]:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = []
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        url = _normalize_space(item.get("url", ""))
+        if not url or url in seen or not is_safe_public_url(url, allow_http=False):
+            continue
+        seen.add(url)
+        normalized = {
+            "id": _media_candidate_id(url),
+            "kind": "post_image",
+            "label": _normalize_space(item.get("label", "")) or f"Post image {len(out) + 1}",
+            "url": url,
+            "alt": _normalize_space(item.get("alt", "")),
+            "text": _normalize_space(item.get("text", "")),
+        }
+        source_page_url = _safe_external_outbound_url(item.get("source_page_url", ""))
+        if source_page_url:
+            normalized["source_page_url"] = source_page_url
+            normalized["source_page_label"] = _normalize_space(item.get("source_page_label", "")) or "Linked source page"
+        out.append(normalized)
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
+
+
+def _text_card_lines(text: str, *, width: int = 34) -> list[str]:
+    normalized = _normalize_space(text)
+    if not normalized:
+        return []
+    return textwrap.wrap(normalized, width=width, break_long_words=False, break_on_hyphens=False)[:8]
+
+
+def _text_card_svg(text: str) -> bytes:
+    lines = _text_card_lines(text)
+    line_height = 62
+    start_y = 360 - ((len(lines) - 1) * line_height // 2)
+    tspans = "".join(
+        f'<tspan x="600" y="{start_y + (index * line_height)}">{html_escape(line)}</tspan>'
+        for index, line in enumerate(lines)
+    )
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675">
+  <defs>
+    <linearGradient id="card-gradient" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0%" stop-color="#bd258d"/>
+      <stop offset="48%" stop-color="#755bd5"/>
+      <stop offset="100%" stop-color="#60c4ee"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="675" fill="url(#card-gradient)"/>
+  <text x="600" y="{start_y}" fill="#ffffff" text-anchor="middle"
+        font-family="Arial, Helvetica, sans-serif" font-size="54" font-weight="700">{tspans}</text>
+</svg>
+"""
+    return svg.encode("utf-8")
+
+
+def _text_card_png(text: str) -> bytes | None:
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        return None
+
+    width, height = 1200, 675
+    top = (189, 37, 141)
+    bottom = (96, 196, 238)
+    image = Image.new("RGB", (width, height))
+    draw = ImageDraw.Draw(image)
+    for y in range(height):
+        ratio = y / max(1, height - 1)
+        color = tuple(round(top[channel] + ((bottom[channel] - top[channel]) * ratio)) for channel in range(3))
+        draw.line((0, y, width, y), fill=color)
+
+    font = None
+    for font_path in (
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "/Library/Fonts/Arial Bold.ttf",
+        "/System/Library/Fonts/SFNS.ttf",
+    ):
+        try:
+            font = ImageFont.truetype(font_path, 54)
+            break
+        except Exception:
+            continue
+    if font is None:
+        try:
+            font = ImageFont.load_default(size=54)
+        except TypeError:
+            font = ImageFont.load_default()
+
+    lines = _text_card_lines(text)
+    multiline = "\n".join(lines)
+    spacing = 12
+    box = draw.multiline_textbbox((0, 0), multiline, font=font, spacing=spacing, align="center")
+    x = width / 2
+    y = (height - (box[3] - box[1])) / 2
+    draw.multiline_text((x, y), multiline, font=font, fill="white", anchor="ma", spacing=spacing, align="center")
+    output = BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
+def _promote_text_card(
+    db: Db,
+    *,
+    asset: dict[str, Any],
+    text: str,
+    store_dir: Path,
+    created_at: str,
+    run_id: str,
+) -> dict[str, Any]:
+    asset_id = str(asset.get("id") or "").strip()
+    source = str(asset.get("source") or "").strip() or "enriched"
+    if not asset_id or not _normalize_space(text):
+        raise ValueError("no source text is available for a generated text card")
+    payload = _text_card_png(text)
+    ext = ".png"
+    if payload is None:
+        payload = _text_card_svg(text)
+        ext = ".svg"
+    sha256 = hashlib.sha256(payload).hexdigest()
+    target = store_dir / "originals" / source / f"{sha256}{ext}"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        target.write_bytes(payload)
+    invalidated = _archive_and_invalidate_media_evidence(
+        db,
+        asset_id=asset_id,
+        repair_kind="generated_text_card",
+        origin_ref=run_id,
+        created_at=created_at,
+    )
+    db.exec(
+        """
+        update assets
+        set stored_path=?, sha256=?, thumb_path=null, media_status='image'
+        where id=?
+        """,
+        (str(target), sha256, asset_id),
+    )
+    _record_field_provenance(
+        db,
+        asset_id=asset_id,
+        field_name="stored_path",
+        field_value=str(target),
+        origin_type="generated_text_card",
+        origin_ref=run_id,
+        actor="source_link_enrichment",
+        confidence=1.0,
+        created_at=created_at,
+    )
+    _record_field_provenance(
+        db,
+        asset_id=asset_id,
+        field_name="media_representation",
+        field_value="generated_text_card",
+        origin_type="generated_text_card",
+        origin_ref=run_id,
+        actor="source_link_enrichment",
+        confidence=1.0,
+        created_at=created_at,
+    )
+    generate_thumbnails(db, store_dir=store_dir, source=source, limit=0)
+    return {
+        "promoted": True,
+        "stored_path": str(target),
+        "sha256": sha256,
+        "kind": "text_card",
+        "invalidated": invalidated,
+    }
 
 
 def _promote_hero_image(
@@ -334,6 +720,13 @@ def _promote_hero_image(
     )
     stable_path = _stable_download_path(tmp_path, sha256)
     stable_str = str(stable_path)
+    invalidated = _archive_and_invalidate_media_evidence(
+        db,
+        asset_id=asset_id,
+        repair_kind="source_image",
+        origin_ref=run_id,
+        created_at=created_at,
+    )
     db.exec(
         """
         update assets
@@ -353,7 +746,18 @@ def _promote_hero_image(
         confidence=0.9,
         created_at=created_at,
     )
-    return {"promoted": True, "stored_path": stable_str, "thumb_generated": False}
+    _record_field_provenance(
+        db,
+        asset_id=asset_id,
+        field_name="media_representation",
+        field_value="source_image",
+        origin_type="source_link_enrichment",
+        origin_ref=run_id,
+        actor="source_link_enrichment",
+        confidence=1.0,
+        created_at=created_at,
+    )
+    return {"promoted": True, "stored_path": stable_str, "thumb_generated": False, "invalidated": invalidated}
 
 
 def _fetch_source_page(
@@ -777,8 +1181,32 @@ def _fetch_source_page_browser(
                       return null;
                     }
                   };
-                  const images = Array.from(document.images || []).map(scoreImage).filter(Boolean).sort((a, b) => b.score - a.score);
+                  // Do not borrow a visually prominent image from an unrelated feed post.
+                  // A text-only anchored post should produce useful text evidence with no image candidate.
+                  const imageScope = primaryRoot && primaryRoot !== document.body ? primaryRoot : null;
+                  const imageNodes = imageScope ? Array.from(imageScope.querySelectorAll('img')) : [];
+                  const images = imageNodes.map(scoreImage).filter(Boolean).sort((a, b) => b.score - a.score);
                   const hero = images[0] || null;
+                  const mediaCandidates = [];
+                  const seenCandidateUrls = new Set();
+                  for (const item of images) {
+                    if (!item.src || seenCandidateUrls.has(item.src)) continue;
+                    seenCandidateUrls.add(item.src);
+                    mediaCandidates.push({
+                      url: item.src,
+                      alt: item.alt,
+                      text: item.text,
+                      label: `Post image ${mediaCandidates.length + 1}`,
+                    });
+                    if (mediaCandidates.length >= 12) break;
+                  }
+                  const outboundLinks = Array.from((primaryRoot || document).querySelectorAll('a[href]'))
+                    .map(link => ({
+                      url: link.href || '',
+                      text: clean(link.innerText || link.textContent || '', 160),
+                    }))
+                    .filter(item => /^https?:\\/\\//i.test(item.url))
+                    .slice(0, 60);
                   return {
                     url: location.href,
                     title: document.title || '',
@@ -787,6 +1215,8 @@ def _fetch_source_page_browser(
                     heroImageUrl: hero ? hero.src : '',
                     heroImageAlt: hero ? hero.alt : '',
                     heroText: hero ? hero.text : '',
+                    mediaCandidates,
+                    outboundLinks,
                   };
                 }""",
             ],
@@ -809,6 +1239,35 @@ def _fetch_source_page_browser(
         content_hash = ""
         if text_excerpt:
             content_hash = hashlib.sha256(text_excerpt.encode("utf-8", errors="ignore")).hexdigest()
+        media_candidates = _normalize_media_candidates(payload.get("mediaCandidates", []))
+        if _is_platform_wrapper_host(_extract_domain(final_url)) and _extract_domain(final_url).endswith("pinterest.com"):
+            outbound_url = _first_safe_external_outbound_url(payload.get("outboundLinks", []))
+            if outbound_url:
+                linked = _fetch_source_page(
+                    url=outbound_url,
+                    timeout_s=timeout_s,
+                    max_bytes=DEFAULT_MAX_BYTES,
+                    max_redirects=DEFAULT_MAX_REDIRECTS,
+                    allow_http=True,
+                )
+                linked_source_url = _safe_external_outbound_url(linked.get("final_url", "")) or outbound_url
+                linked_media = [
+                    {
+                        **item,
+                        "label": " · ".join(
+                            part
+                            for part in [
+                                f"Linked page image {index + 1}",
+                                _media_candidate_filename_hint(str(item.get("url") or "")),
+                            ]
+                            if part
+                        ),
+                        "source_page_url": linked_source_url,
+                        "source_page_label": "Linked source page",
+                    }
+                    for index, item in enumerate(_normalize_media_candidates(linked.get("media_candidates", [])))
+                ]
+                media_candidates = _normalize_media_candidates([*media_candidates, *linked_media])
         return {
             "input_url": url,
             "final_url": final_url,
@@ -823,6 +1282,7 @@ def _fetch_source_page_browser(
             "hero_image_url": _normalize_space(payload.get("heroImageUrl", "")),
             "hero_image_alt": _normalize_space(payload.get("heroImageAlt", "")),
             "hero_text_excerpt": _normalize_space(payload.get("heroText", "")),
+            "media_candidates": media_candidates,
             "content_type": "browser/document",
             "http_status": 200,
             "redirect_count": 0,
@@ -858,9 +1318,9 @@ def _fetch_source_page_browser(
         detail = _normalize_space(exc.stderr or exc.stdout or str(exc))
         if profile_dir is not None and ("session" in detail.lower() or "browser" in detail.lower()):
             detail = (
-                detail
-                or f"Authenticated browser session '{session_name}' is not running. "
-                f"Start it with tools/open_media_repair_auth_browser.sh and keep it open during capture."
+                f"Candidate capture browser '{session_name}' is not running. "
+                "On the Mac, run tools/open_media_repair_auth_browser.sh, sign into Facebook in the Chrome window "
+                "if prompted, leave that window open, and try Find source media again."
             )
         return {
             "input_url": url,
@@ -1215,6 +1675,7 @@ def run_source_link_enrichment(
                     _db_text(result.get("hero_image_url")),
                     _db_text(result.get("hero_image_alt")),
                     _db_text(result.get("hero_text_excerpt")),
+                    _db_text(json.dumps(_normalize_media_candidates(result.get("media_candidates", [])), sort_keys=True)),
                     _db_text(result.get("content_type")),
                     result.get("http_status"),
                     int(result.get("redirect_count") or 0),
@@ -1257,9 +1718,9 @@ def run_source_link_enrichment(
             insert into asset_source_link_enrichment (
               id, run_id, asset_id, input_url, final_url, final_domain, canonical_url, og_image_url,
               page_title, og_title, meta_description, og_description, text_excerpt, hero_image_url,
-              hero_image_alt, hero_text_excerpt, content_type, http_status, redirect_count, truncated,
+              hero_image_alt, hero_text_excerpt, media_candidates_json, content_type, http_status, redirect_count, truncated,
               fetch_status, error, content_hash, created_at
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows_to_insert,
         )
@@ -1299,7 +1760,7 @@ def latest_source_link_enrichment_for_asset(db: Db, *, asset_id: str) -> dict[st
         """
         select run_id, input_url, final_url, final_domain, canonical_url, og_image_url,
                page_title, og_title, meta_description, og_description, text_excerpt,
-               hero_image_url, hero_image_alt, hero_text_excerpt,
+               hero_image_url, hero_image_alt, hero_text_excerpt, media_candidates_json,
                content_type, http_status, redirect_count, truncated, fetch_status, error, created_at
         from asset_source_link_enrichment
         where asset_id=?
@@ -1309,6 +1770,203 @@ def latest_source_link_enrichment_for_asset(db: Db, *, asset_id: str) -> dict[st
         (asset_id,),
     )
     return dict(rows[0]) if rows else {}
+
+
+def _generated_text_card_text(*, asset: dict[str, Any], latest: dict[str, Any]) -> str:
+    return (
+        _normalize_space(asset.get("title", ""))
+        or _normalize_space(latest.get("text_excerpt", ""))
+        or _normalize_space(asset.get("description", ""))
+    )
+
+
+def media_repair_gallery_for_asset(db: Db, *, asset_id: str) -> list[dict[str, Any]]:
+    asset_rows = db.query(
+        """
+        select id, source, title, description, image_url, stored_path, thumb_path, sha256
+        from assets
+        where id=?
+        limit 1
+        """,
+        (asset_id,),
+    )
+    if not asset_rows:
+        raise FileNotFoundError("asset not found")
+    asset = dict(asset_rows[0])
+    latest = latest_source_link_enrichment_for_asset(db, asset_id=asset_id)
+    representation = str(
+        db.query_value(
+            """
+            select field_value
+            from asset_field_provenance
+            where asset_id=? and field_name='media_representation' and is_current=1
+            limit 1
+            """,
+            (asset_id,),
+        )
+        or ""
+    ).strip()
+    evidence_status = str(
+        db.query_value(
+            """
+            select field_value
+            from asset_field_provenance
+            where asset_id=? and field_name='media_evidence_status' and is_current=1
+            limit 1
+            """,
+            (asset_id,),
+        )
+        or ""
+    ).strip()
+    representation_label = {
+        "generated_text_card": "Generated text card",
+        "source_image": "Source image",
+    }.get(representation, "Saved image")
+    gallery: list[dict[str, Any]] = []
+    current_preview = ""
+    current_version = str(asset.get("sha256") or "").strip()
+    current_suffix = f"&v={quote(current_version)}" if current_version else ""
+    if str(asset.get("stored_path") or "").strip():
+        current_preview = f"/media/{asset_id}?kind=original{current_suffix}"
+    elif str(asset.get("thumb_path") or "").strip():
+        current_preview = f"/media/{asset_id}?kind=thumb{current_suffix}"
+    else:
+        current_preview = str(asset.get("image_url") or "").strip()
+    if current_preview:
+        gallery.append(
+            {
+                "id": "current-media",
+                "kind": "current_media",
+                "label": f"In use: {representation_label}",
+                "preview_url": current_preview,
+                "selectable": False,
+                "current": True,
+                "representation": representation or "saved_image",
+                "representation_label": representation_label,
+                "evidence_status": evidence_status,
+            }
+        )
+    for item in _normalize_media_candidates(latest.get("media_candidates_json", "[]")):
+        gallery.append(
+            {
+                **item,
+                "preview_url": item["url"],
+                "selectable": True,
+                "current": False,
+            }
+        )
+    text = _generated_text_card_text(asset=asset, latest=latest)
+    if text:
+        gallery.append(
+            {
+                "id": TEXT_CARD_CANDIDATE_ID,
+                "kind": "text_card",
+                "label": "Generated text card",
+                "text": text,
+                "selectable": True,
+                "current": False,
+            }
+        )
+    return gallery
+
+
+def promote_media_repair_candidate_for_asset(
+    db: Db,
+    *,
+    asset_id: str,
+    candidate_id: str,
+    store_dir: Path,
+    notes: str = "",
+) -> dict[str, Any]:
+    asset_rows = db.query(
+        """
+        select id, source, title, description, image_url, stored_path, thumb_path, source_url, source_ref
+        from assets
+        where id=?
+        limit 1
+        """,
+        (asset_id,),
+    )
+    if not asset_rows:
+        raise FileNotFoundError("asset not found")
+    asset = dict(asset_rows[0])
+    latest = latest_source_link_enrichment_for_asset(db, asset_id=asset_id)
+    candidate_id = str(candidate_id or "").strip()
+    if not candidate_id:
+        raise ValueError("choose source media before using it")
+    created_at = _now_iso()
+    run_id = str(latest.get("run_id") or "").strip()
+    if candidate_id == TEXT_CARD_CANDIDATE_ID:
+        text = _generated_text_card_text(asset=asset, latest=latest)
+        report = _promote_text_card(
+            db,
+            asset=asset,
+            text=text,
+            store_dir=store_dir,
+            created_at=created_at,
+            run_id=run_id,
+        )
+        return {
+            "ok": True,
+            "asset_id": asset_id,
+            "candidate_id": candidate_id,
+            "kind": "text_card",
+            "promoted": bool(report.get("promoted")),
+            "invalidated": report.get("invalidated") or {},
+            "refresh_required": ["embedding", "classification"],
+            "notes": notes,
+        }
+    selected = next(
+        (
+            item
+            for item in _normalize_media_candidates(latest.get("media_candidates_json", "[]"))
+            if str(item.get("id") or "") == candidate_id
+        ),
+        None,
+    )
+    if not selected:
+        raise ValueError("selected source media candidate is not available")
+    report = _promote_hero_image(
+        db,
+        asset=asset,
+        hero_image_url=str(selected.get("url") or "").strip(),
+        store_dir=store_dir,
+        created_at=created_at,
+        run_id=run_id,
+    )
+    promoted_source_url = ""
+    selected_source_url = _safe_external_outbound_url(selected.get("source_page_url", ""))
+    current_source_url = str(asset.get("source_url") or "").strip()
+    if selected_source_url and (not current_source_url or _is_platform_wrapper_host(_extract_domain(current_source_url))):
+        promoted_source_url = selected_source_url
+        db.exec(
+            "update assets set source_url=?, source_domain=? where id=?",
+            (promoted_source_url, _extract_domain(promoted_source_url) or None, asset_id),
+        )
+        _record_field_provenance(
+            db,
+            asset_id=asset_id,
+            field_name="source_url",
+            field_value=promoted_source_url,
+            origin_type="media_repair_linked_page",
+            origin_ref=run_id,
+            actor="source_link_enrichment",
+            confidence=0.92,
+            created_at=created_at,
+        )
+    generate_thumbnails(db, store_dir=store_dir, source=str(asset.get("source") or "").strip() or None, limit=0)
+    return {
+        "ok": True,
+        "asset_id": asset_id,
+        "candidate_id": candidate_id,
+        "kind": "post_image",
+        "hero_image_url": str(selected.get("url") or "").strip(),
+        "promoted_source_url": promoted_source_url,
+        "promoted": bool(report.get("promoted")),
+        "invalidated": report.get("invalidated") or {},
+        "refresh_required": ["image_tagging", "embedding", "classification"],
+        "notes": notes,
+    }
 
 
 def promote_latest_hero_image_for_asset(
@@ -1562,9 +2220,9 @@ def _capture_single_asset_source_link_enrichment(
         insert into asset_source_link_enrichment (
           id, run_id, asset_id, input_url, final_url, final_domain, canonical_url, og_image_url,
           page_title, og_title, meta_description, og_description, text_excerpt, hero_image_url,
-          hero_image_alt, hero_text_excerpt, content_type, http_status, redirect_count, truncated,
+          hero_image_alt, hero_text_excerpt, media_candidates_json, content_type, http_status, redirect_count, truncated,
           fetch_status, error, content_hash, created_at
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             str(uuid.uuid4()),
@@ -1583,6 +2241,7 @@ def _capture_single_asset_source_link_enrichment(
             _db_text(result.get("hero_image_url")),
             _db_text(result.get("hero_image_alt")),
             _db_text(result.get("hero_text_excerpt")),
+            _db_text(json.dumps(_normalize_media_candidates(result.get("media_candidates", [])), sort_keys=True)),
             _db_text(result.get("content_type")),
             result.get("http_status"),
             int(result.get("redirect_count") or 0),
@@ -1602,6 +2261,7 @@ def _capture_single_asset_source_link_enrichment(
         "hero_image_url": str(result.get("hero_image_url") or ""),
         "hero_image_alt": str(result.get("hero_image_alt") or ""),
         "hero_text_excerpt": str(result.get("hero_text_excerpt") or ""),
+        "media_candidates": _normalize_media_candidates(result.get("media_candidates", [])),
         "promoted_source_url": promoted_url,
         "promoted_hero_image": promoted_hero,
     }

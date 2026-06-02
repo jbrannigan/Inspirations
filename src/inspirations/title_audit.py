@@ -22,6 +22,11 @@ _AERIAL_PREFIX_RE = re.compile(r"^An aerial view\s+(shows\s+|of\s+)?", re.IGNORE
 _PORTRAIT_PREFIX_RE = re.compile(r"^A portrait of\s+", re.IGNORECASE)
 _MIXED_ALNUM_RE = re.compile(r"[A-Za-z].*\d|\d.*[A-Za-z]")
 _HEXISH_RE = re.compile(r"^[0-9a-f]{8,}$", re.IGNORECASE)
+_FACEBOOK_ENGAGEMENT_PREFIX_RE = re.compile(
+    r"^\s*(?:(?:\d[\d.,]*\s*[kmb]?)\s*"
+    r"(?:views?|reactions?|shares?|comments?|likes?|saves?)\s*(?:[·•\-–—]\s*)?){1,5}\|\s*",
+    re.IGNORECASE,
+)
 
 _TRAILING_STOPWORDS = {
     "a",
@@ -169,6 +174,11 @@ def _title_case_words(text: str) -> str:
 
 def _clean_alt_text(value: str) -> str:
     return re.sub(r"^This may contain:\s*", "", str(value or "").strip(), flags=re.IGNORECASE).strip()
+
+
+def strip_facebook_engagement_prefix(value: str) -> str:
+    text = str(value or "").strip()
+    return _FACEBOOK_ENGAGEMENT_PREFIX_RE.sub("", text, count=1).strip()
 
 
 def _slug_tokens_from_segment(segment: str) -> list[str]:

@@ -1,5 +1,8 @@
 # UX Collaborator Checkpoint — 2026-03-11
 
+> Legacy note (2026-05-27): collaborator UX is retired from the active product.
+> Current designer handoff is standalone collection PDF export.
+
 ## Scope
 
 This checkpoint captures the collaborator-facing UX cleanup, adjacent 3DE control cleanup, and known pre-share hardening gaps as of 2026-03-11.

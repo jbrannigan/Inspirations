@@ -1,11 +1,16 @@
 # Authentication Specification — Inspirations
 
+> Legacy note (2026-05-27): the magic-link collaborator actor system is retired
+> from the active product. Current app sessions default to local owner mode, and
+> designer handoff happens through standalone collection PDFs. Keep this document
+> only as historical/compatibility reference while legacy schema remains.
+
 ## Overview
 
 Inspirations uses a dual-auth architecture:
 
 1. **Magic-link actor system** — for collaboration (browsing, annotating, triaging)
-2. **Admin password system** — for destructive operations (asset deletion)
+2. **Admin password system** — for privileged maintenance operations
 
 These are independent systems. An actor token identifies *who you are*; an admin token authorizes *dangerous actions*.
 
@@ -167,6 +172,15 @@ Non-owners never see hidden items regardless of query parameters. The filtering 
 2. File `{db_dir}/admin_password.txt` (fallback)
 3. Empty string if neither exists (admin endpoints return 503)
 
+### First-time setup
+
+Open `http://localhost:8001/app/admin.html` on the Mac itself. If no admin password exists, the page exposes a first-time setup form backed by:
+
+- `GET /api/admin/status`
+- `POST /api/admin/setup`
+
+Setup writes `{db_dir}/admin_password.txt` with `0600` permissions. The setup endpoint accepts requests only from a loopback client with a literal `localhost` or loopback Host header, and only while no password is configured. This blocks bootstrap through a public reverse proxy whose upstream connection happens to be local. After setup, enter the new password normally to start an admin session. LAN clients can log in after setup, but cannot bootstrap a password.
+
 ### Login flow
 
 `POST /api/admin/login` — `server.py:571-589`
@@ -197,9 +211,10 @@ Removes the token from `server.admin_tokens`.
 
 | Endpoint | Method | Requirements | Line |
 |----------|--------|-------------|------|
+| `/api/admin/media-repairs/refresh` | POST | `X-Admin-Token` | current |
 | `/api/admin/assets/delete` | POST | `X-Admin-Token` + `admin_mode: true` + `confirm: "DELETE"` | 597-615 |
 
-The delete endpoint also creates a database backup before proceeding.
+The media-repair refresh action retags replacement photos, re-embeds repaired items, and regenerates classification snapshots once per batch. Generated text cards intentionally skip visual tagging. The delete endpoint also creates a database backup before proceeding.
 
 ---
 

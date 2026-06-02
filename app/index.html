@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inspirations!</title>
-    <link rel="stylesheet" href="/app/styles.css?v=60" />
+    <link rel="stylesheet" href="/app/styles.css?v=79" />
     <script type="importmap">
       {
         "imports": {
@@ -111,7 +111,7 @@
             <button id="canvasKeep" class="canvas-action-btn canvas-action-keep" type="button" disabled>★ Keep</button>
             <button id="canvasHideLocal" class="canvas-action-btn canvas-action-hide-local" type="button" disabled>↘ Hide in this collection</button>
             <button id="canvasHideGlobal" class="canvas-action-btn canvas-action-hide-global" type="button" disabled>✗ Hide globally</button>
-            <button id="canvasFlag" class="canvas-action-btn canvas-action-flag" type="button" disabled>🚩 Flag</button>
+            <button id="canvasFlag" class="canvas-action-btn canvas-action-flag" type="button" disabled>⚑ Flag</button>
             <button id="canvasClear" class="canvas-action-btn" type="button">Clear</button>
           </div>
           <div class="canvas-mode-toggle">
@@ -137,17 +137,6 @@
             <path d="M11 5L7 9L11 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
         </button>
-        <div class="sidebar-section">
-          <h3 class="sidebar-heading">Status</h3>
-          <div id="statusChips" class="chip-group">
-            <button class="filter-chip active" data-triage="">All</button>
-            <button class="filter-chip" data-triage="pending">Pending</button>
-            <button class="filter-chip" data-triage="keeper">Keepers</button>
-            <button class="filter-chip" data-triage="hidden">Hidden</button>
-            <button class="filter-chip" data-triage="needs-comment">Needs comment</button>
-            <button class="filter-chip" data-triage="flagged" id="flaggedChip" hidden>Flagged</button>
-          </div>
-        </div>
         <div class="sidebar-section sidebar-collections-section" id="collectionSidebarSection">
           <h3 class="sidebar-heading">Collections</h3>
           <div id="collectionTree" class="catalog-tree">
@@ -166,8 +155,8 @@
         </div>
         <div class="sidebar-section">
           <button id="newCollection" class="new-item-btn" type="button">+ New Collection</button>
-          <button id="shareCollections" class="new-item-btn new-item-btn-secondary" type="button">Share Collections</button>
-          <button id="manageCollectionVisibility" class="new-item-btn new-item-btn-secondary" type="button">Manage Visibility</button>
+          <button id="manageCollections" class="new-item-btn new-item-btn-secondary" type="button">Manage Collections</button>
+          <button id="manageCollectionVisibility" class="new-item-btn new-item-btn-secondary" type="button">Manage Collection Archive</button>
         </div>
       </aside>
       <div id="sidebarResizeHandle" class="sidebar-resize-handle" title="Resize sidebar" aria-hidden="true"></div>
@@ -180,7 +169,18 @@
           <span id="actorContextChip" class="actor-context-chip" hidden></span>
           <span id="topCardFilterToolbar" class="top-filter-toolbar">
             <input id="canvasTextFilter" class="canvas-text-filter" type="search" autocomplete="off" placeholder="Type text to filter" aria-label="Filter cards text">
+            <select id="reviewQueueFilter" class="review-queue-filter" aria-label="Review queue">
+              <option value="">Review queue: All items</option>
+              <option value="pending">Pending</option>
+              <option value="keeper">Keepers</option>
+              <option value="hidden">Hidden</option>
+              <option value="hidden-manual">Hidden manually</option>
+              <option value="hidden-ai">Hidden by AI cleanup</option>
+              <option value="needs-comment">Needs comment</option>
+              <option value="flagged">Flagged</option>
+            </select>
           </span>
+          <button id="exportCollectionPdf" class="collection-pdf-export-btn" type="button" hidden>Export Collection PDF</button>
           <span id="explorerToolbarMount" class="explorer-toolbar-mount" hidden></span>
           <span id="canvasNarrative" class="stats-narrative"></span>
           <span id="filterSummary" class="stats-filter" hidden>
@@ -363,6 +363,7 @@
                 <span id="sourceSiteRow" hidden>
                   <a id="sourceSiteLink" href="#" target="_blank" rel="noopener" class="source-site-link">Original site ↗</a>
                 </span>
+                <button id="modalBrokenSourceBtn" class="modal-source-broken-btn" type="button" hidden>Broken link · hide item</button>
               </div>
             </div>
             <div class="modal-header-actions">
@@ -372,7 +373,6 @@
                 <button id="modalNextBtn" class="header-btn modal-utility-btn" type="button">Next</button>
               </div>
               <div id="modalShareGroup" class="modal-action-group modal-share-group">
-                <button id="modalSharePrimaryBtn" class="header-btn modal-utility-btn modal-share-primary" type="button">Copy Link</button>
                 <button id="printAssetBtn" class="header-btn modal-utility-btn" type="button">Print</button>
               </div>
             </div>
@@ -390,6 +390,38 @@
               <textarea id="floatingText" placeholder="Type note…"></textarea>
             </div>
             </div>
+            <details id="modalSourceCandidatePanel" class="modal-media-repair" hidden>
+              <summary>
+                <span>Repair media</span>
+                <span id="modalSourceCandidateSummary" class="modal-media-repair-summary"></span>
+              </summary>
+              <div class="modal-media-repair-body">
+                <div class="modal-media-repair-help">Find source media rechecks the original post for image choices. Nothing changes until you select a replacement and choose Use selected media.</div>
+                <div id="modalSourceCandidateStatus" class="modal-classification-status muted" hidden></div>
+                <div id="modalSourceCandidateGallery" class="modal-source-candidate-gallery"></div>
+                <details id="modalSourceCandidateDetails" class="modal-source-details" hidden>
+                  <summary>Captured source details</summary>
+                  <div class="modal-classification-rows">
+                    <div id="modalSourceCandidateTitleRow" class="modal-classification-row" hidden>
+                      <div class="modal-classification-label">Page title</div>
+                      <div id="modalSourceCandidateTitle" class="modal-classification-value"></div>
+                    </div>
+                    <div id="modalSourceCandidateHeroTextRow" class="modal-classification-row" hidden>
+                      <div class="modal-classification-label">Hero text</div>
+                      <div id="modalSourceCandidateHeroText" class="modal-classification-value"></div>
+                    </div>
+                    <div id="modalSourceCandidateTextRow" class="modal-classification-row" hidden>
+                      <div class="modal-classification-label">Page excerpt</div>
+                      <div id="modalSourceCandidateText" class="modal-classification-value"></div>
+                    </div>
+                  </div>
+                </details>
+                <div class="modal-title-actions">
+                  <button id="modalSourceCandidateCaptureBtn" class="header-btn modal-utility-btn" type="button">Find source media</button>
+                  <button id="modalSourceCandidatePromoteBtn" class="header-btn modal-utility-btn" type="button">Use selected media</button>
+                </div>
+              </div>
+            </details>
           </div>
           <div id="modalNotesColumn" class="notes">
             <div id="modalTitlePanel" class="modal-title-panel" hidden>
@@ -458,6 +490,8 @@
                 </div>
               </div>
               <div id="modalClassificationEditor" class="modal-title-editor" hidden>
+                <div class="modal-classification-save-hint">Changes below are staged until you choose a save button.</div>
+                <div id="modalClassificationDraftStatus" class="modal-classification-draft-status" hidden>Unsaved review changes. Save them or discard them before moving to another item.</div>
                 <label for="modalClassificationMoveTo" class="modal-title-edit-label">Set track to</label>
                 <select id="modalClassificationMoveTo" class="modal-classification-select">
                   <option value="style_product_decor">Style / Decor</option>
@@ -480,45 +514,32 @@
                 <label for="modalClassificationComment" class="modal-title-edit-label">Reason (optional)</label>
                 <textarea id="modalClassificationComment" class="modal-classification-comment" placeholder="Optional reason for this choice…"></textarea>
                 <div class="modal-title-actions">
-                  <button id="modalClassificationKeepBtn" class="header-btn modal-utility-btn" type="button">Keep current</button>
-                  <button id="modalClassificationSaveBtn" class="header-btn modal-utility-btn" type="button">Move</button>
-                  <button id="modalClassificationIrrelevantBtn" class="header-btn modal-utility-btn" type="button">Mark irrelevant</button>
+                  <button id="modalClassificationKeepBtn" class="header-btn modal-utility-btn" type="button">Save, keep track</button>
+                  <button id="modalClassificationSaveBtn" class="header-btn modal-utility-btn" type="button">Save and move</button>
+                  <button id="modalClassificationDiscardBtn" class="header-btn modal-utility-btn" type="button" hidden>Discard changes</button>
                 </div>
-              </div>
-            </div>
-            <div id="modalSourceCandidatePanel" class="modal-classification-panel" hidden>
-              <div class="sectionTitle">Source Candidate</div>
-              <div id="modalSourceCandidateStatus" class="modal-classification-status muted" hidden></div>
-              <div id="modalSourceCandidateImageWrap" class="modal-source-candidate-image-wrap" hidden>
-                <img id="modalSourceCandidateImage" class="modal-source-candidate-image" alt="" />
-              </div>
-              <div class="modal-classification-rows">
-                <div id="modalSourceCandidateTitleRow" class="modal-classification-row" hidden>
-                  <div class="modal-classification-label">Page title</div>
-                  <div id="modalSourceCandidateTitle" class="modal-classification-value"></div>
-                </div>
-                <div id="modalSourceCandidateHeroTextRow" class="modal-classification-row" hidden>
-                  <div class="modal-classification-label">Hero text</div>
-                  <div id="modalSourceCandidateHeroText" class="modal-classification-value"></div>
-                </div>
-                <div id="modalSourceCandidateTextRow" class="modal-classification-row" hidden>
-                  <div class="modal-classification-label">Page excerpt</div>
-                  <div id="modalSourceCandidateText" class="modal-classification-value"></div>
-                </div>
-              </div>
-              <div class="modal-title-actions">
-                <button id="modalSourceCandidateCaptureBtn" class="header-btn modal-utility-btn" type="button">Capture candidate</button>
-                <button id="modalSourceCandidatePromoteBtn" class="header-btn modal-utility-btn" type="button">Use candidate image</button>
+                <label class="modal-irrelevant-toggle" for="modalClassificationIrrelevantToggle">
+                  <span>
+                    <span class="modal-irrelevant-toggle-title">Exclude as irrelevant</span>
+                    <span class="modal-irrelevant-toggle-note">Staged until you save. Switch off to cancel before saving.</span>
+                  </span>
+                  <input id="modalClassificationIrrelevantToggle" type="checkbox" role="switch" />
+                  <span class="modal-switch-track" aria-hidden="true"><span class="modal-switch-thumb"></span></span>
+                </label>
               </div>
             </div>
             <div id="modalDescription" class="modal-description" hidden></div>
             <div id="modalHashtags" class="modal-hashtags" hidden></div>
+            <section id="modalTriageInfoSection" class="modal-side-section modal-triage-info" hidden>
+              <div class="sectionTitle">Hidden status</div>
+              <div id="modalTriageInfoSummary" class="modal-triage-info-summary"></div>
+              <div id="modalTriageInfoMeta" class="modal-triage-info-meta muted"></div>
+            </section>
             <section id="modalAnnotationsSection" class="modal-side-section">
               <div id="modalAnnotationsTitle" class="sectionTitle">Annotations</div>
               <div id="annList" class="list"></div>
               <div class="muted ann-hint-row">
                 <span id="annHintText">Click on the image to add a note.</span>
-                <label id="annQuestionLabel" class="ann-question-label"><input type="checkbox" id="annQuestionToggle"> Question</label>
               </div>
             </section>
             <section id="modalNotesSection" class="modal-side-section">
@@ -537,13 +558,13 @@
       </div>
     </div>
 
-    <!-- Collection share modal -->
+    <!-- Local collection details modal -->
     <div id="collectionShareModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="collectionShareTitle">
       <div class="modalContent collectionShareContent">
         <div class="modalHeader">
           <div>
-            <div id="collectionShareTitle" class="modalTitle">Share Collections</div>
-            <div class="muted">Choose a collection, set intent, assign collaborators, and generate collaborator-specific links.</div>
+            <div id="collectionShareTitle" class="modalTitle">Collection Details</div>
+            <div class="muted">Edit local collection metadata. Use Export Collection PDF for designer-ready sharing.</div>
           </div>
           <button id="closeCollectionShare" type="button">Close</button>
         </div>
@@ -553,24 +574,19 @@
               <h3>Collections</h3>
               <span id="collectionShareCount" class="muted">0 collections</span>
             </div>
-            <div class="collectionShareFilters" id="collectionShareFilters">
-              <button id="collectionShareFilterAll" class="collectionShareFilter is-active" type="button">All</button>
-              <button id="collectionShareFilterWorking" class="collectionShareFilter" type="button">Working</button>
-              <button id="collectionShareFilterShared" class="collectionShareFilter" type="button">Shared</button>
-            </div>
             <div id="collectionShareList" class="collectionBulkList"></div>
           </section>
           <section class="collectionBulkDetailSection">
             <div class="collectionBulkSectionHeader">
               <h3>Collection Details</h3>
-              <span id="collectionShareDetailStatus" class="muted">Select a collection to edit sharing.</span>
+              <span id="collectionShareDetailStatus" class="muted">Select a collection to edit.</span>
             </div>
-            <div id="collectionShareDetailEmpty" class="muted">Choose an active collection to edit its intent and sharing.</div>
+            <div id="collectionShareDetailEmpty" class="muted">Choose an active collection to edit its name and description.</div>
             <div id="collectionShareDetailForm" class="collectionDetailForm" hidden>
               <div id="collectionDetailSummary" class="collectionDetailSummary">
                 <div class="collectionDetailSummaryTop">
                   <div id="collectionDetailSummaryName" class="collectionDetailSummaryName">Collection</div>
-                  <span id="collectionDetailSummaryIntentBadge" class="collectionDetailSummaryBadge">Working</span>
+                  <span id="collectionDetailSummaryIntentBadge" class="collectionDetailSummaryBadge">Local</span>
                 </div>
                 <div id="collectionDetailSummaryMeta" class="collectionDetailSummaryMeta muted"></div>
                 <div id="collectionDetailSummaryDescription" class="collectionDetailSummaryDescription" hidden></div>
@@ -583,25 +599,6 @@
                 <span>Description</span>
                 <textarea id="collectionDetailDescription" rows="2" maxlength="500"></textarea>
               </label>
-              <label class="collectionDetailField">
-                <span>Intent</span>
-                <select id="collectionDetailIntent">
-                  <option value="working">Working</option>
-                  <option value="shared">Shared</option>
-                </select>
-              </label>
-              <div id="collectionDetailCollaboratorsWrap" class="collectionDetailField" hidden>
-                <span>People</span>
-                <div id="collectionDetailCollaboratorsHint" class="muted">Choose the named people who should receive this collection.</div>
-                <div id="collectionDetailCollaborators" class="collectionDetailCollaborators"></div>
-                <div id="collectionDetailCollaboratorsSummary" class="collectionDetailInlineSummary" hidden></div>
-                <div class="muted">Shared collections require at least one named collaborator. Questions are always enabled.</div>
-              </div>
-              <div id="collectionDetailLinksWrap" class="collectionDetailField">
-                <span>Collection links</span>
-                <div id="collectionDetailLinksHint" class="muted">Links are generated from the last saved shared state.</div>
-                <div id="collectionDetailLinks" class="collectionDetailLinks"></div>
-              </div>
               <div class="collectionDetailActions">
                 <span id="collectionDetailSaveStatus" class="muted"></span>
                 <button id="collectionDetailSaveBtn" type="button">Save changes</button>
@@ -620,8 +617,8 @@
       <div class="modalContent collectionBulkContent">
         <div class="modalHeader">
           <div>
-            <div id="collectionBulkTitle" class="modalTitle">Manage Visibility</div>
-            <div class="muted">Hide active collections, restore hidden ones, or permanently delete hidden collections.</div>
+            <div id="collectionBulkTitle" class="modalTitle">Manage Collection Archive</div>
+            <div class="muted">Archive active collection folders, restore archived ones, or permanently delete obsolete archive folders. Items inside are not hidden or deleted.</div>
           </div>
           <button id="closeCollectionBulk" type="button">Close</button>
         </div>
@@ -635,16 +632,16 @@
           </section>
           <section class="collectionBulkSection">
             <div class="collectionBulkSectionHeader">
-              <h3>Hidden Collections</h3>
+              <h3>Archived Collections</h3>
               <span id="collectionBulkHiddenCount" class="muted">0 collections</span>
             </div>
             <div id="collectionBulkHiddenList" class="collectionBulkList"></div>
           </section>
         </div>
         <div class="collectionBulkActions">
-          <button id="collectionBulkHideBtn" type="button">Hide selected</button>
+          <button id="collectionBulkHideBtn" type="button">Archive selected</button>
           <button id="collectionBulkRestoreBtn" type="button">Restore selected</button>
-          <button id="collectionBulkDeleteBtn" type="button">Delete hidden</button>
+          <button id="collectionBulkDeleteBtn" type="button">Delete archived</button>
           <button id="cancelCollectionBulk" type="button">Done</button>
         </div>
       </div>
@@ -786,9 +783,9 @@
 
     <div id="toastContainer" class="toast-container" aria-live="polite"></div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
-    <script src="/app/shared.js?v=3"></script>
+    <script src="/app/shared.js?v=4"></script>
     <script src="/app/explorer.js?v=2"></script>
-    <script src="/app/attractor-explorer.js?v=15"></script>
-    <script src="/app/app.js?v=116"></script>
+    <script src="/app/attractor-explorer.js?v=16"></script>
+    <script src="/app/app.js?v=142"></script>
   </body>
 </html>

@@ -2,7 +2,7 @@
 
 Local-first inspiration library for home design research.
 
-Inspirations scrapes Pinterest boards and Facebook saved items directly from the browser, enriches them with AI tagging (Gemini), and provides a local curation app for triaging, organizing, and sharing design inspiration collections.
+Inspirations scrapes Pinterest boards and Facebook saved items directly from the browser, enriches them with AI tagging (Gemini), and provides Jim's local curation/QC app for triaging, organizing, exploring, and exporting designer-ready collection PDFs.
 
 ## What The Project Does
 
@@ -11,7 +11,7 @@ Inspirations scrapes Pinterest boards and Facebook saved items directly from the
 3. **Tag** — Runs Gemini AI tagging for searchable labels, summaries, and embeddings
 4. **Triage** — Keeper/hidden workflow to curate collections: review items one-by-one, keep the good stuff, hide the rest
 5. **Organize** — Natural-language collection management ("move all kitchen items to a new collection")
-6. **Share** — Export curated collections as shareable HTML with clickable source links back to Pinterest/Facebook
+6. **Export** — Export one curated collection at a time as a standalone PDF with embedded local images and visible/clickable source URLs
 
 ## Data Sources
 
@@ -108,10 +108,28 @@ BASE_PATH=/inspirations-app PYTHONPATH=src python3 -m inspirations serve --port 
 - Add point-based notes directly on images
 - Notes persist with the asset across collections
 
-### Share Export
-- Generate shareable HTML galleries from curated collections
-- Clickable source links back to original Pinterest pins and Facebook posts
-- Works as a standalone file — no server needed for viewing
+### Admin Maintenance
+- Open **Admin** from the app header
+- On first use, open `http://localhost:8001/app/admin.html` on the Mac and choose an admin password
+- Replacement media is applied immediately; use **Refresh Search Evidence** in Admin to retag replacement photos, rebuild semantic embeddings, and refresh Explorer classification evidence in a deliberate batch
+- Generated text cards skip visual retagging and receive text embeddings only
+
+### Collection PDF Export
+- Use **+ New Collection** to create a collection
+- Use **Manage Collections** to rename collections and edit their descriptions
+- Use **Manage Collection Archive** to archive, restore, or permanently delete obsolete collection folders. Archiving a folder does not hide or delete its items.
+- Select exactly one collection in the sidebar, then click **Export Collection PDF** in the canvas header
+- CLI equivalent:
+```sh
+PYTHONPATH=src python3 -m inspirations export collection-pdf \
+  --collection-id <id> \
+  --out data/exports/<name>.pdf
+```
+- The exporter writes both `data/exports/<name>.md` and `data/exports/<name>.pdf`
+- Local images/previews are copied under `data/exports/<name>_media/` so the PDF does not depend on the running app or `store/`
+- Source URLs are visible and clickable, but only external `http`/`https` links are included; local app/media/store links are omitted
+- The PDF uses one item per page, with the image, source details, labels, notes, and annotation markers kept together
+- Requires local `pandoc` and `tectonic` for PDF rendering
 
 ## AI Tagging (Gemini)
 
@@ -144,17 +162,24 @@ ruff check src tests
 ## Current Status
 
 The scrape-first rebuild is complete. Current active work is UX refinement,
-especially Explorer filtering/grouping, iPad stability, and collaboration scope.
+especially Explorer filtering/grouping, iPad stability, source/QC cleanup, and
+the one-collection PDF handoff flow. The live collaborator/magic-link layer is
+retired from the active product; legacy schema remains for compatibility but is
+not presented in the UI. Obsolete `pins:` source-board mirrors and completed
+`Review:` workflow folders were removed after a local SQLite backup; live source
+board browsing now uses `assets.board` metadata directly.
 
 ## Future Work
 
-- **Consuming UX** — Design the viewing experience for people receiving shared collections (the decorator/designer). How they browse, filter, and interact with curated sets. See `docs/TODO_CONSUMING_UX.md`.
+- Improve PDF layout quality, ordering controls, and source-link completeness for designer handoffs.
+- Keep static HTML/portal exports as legacy/debug utilities unless intentionally revived.
 
 ## Docs
 
 - `docs/SCRAPE_REBUILD_SPEC.md` — Current implementation spec
 - `docs/EXPLORER_CONTROL_HANDOFF_2026-05-24.md` — Current Explorer control semantics and latest smoke-test notes
-- `docs/TODO_CONSUMING_UX.md` — Future work: shared collection viewer experience
+- `docs/COLLECTION_PDF_EXPORT_HANDOFF_2026-05-27.md` — Current PDF export and live-sharing retirement handoff
+- `docs/TODO_CONSUMING_UX.md` — Legacy consuming-UX notes, superseded by PDF handoff direction
 - `docs/archive/` — Historical documentation from the pre-rebuild system
 - `CLAUDE.md` — AI assistant guidance for working in this repo
 - `DECISIONS.md` — Architectural decision records

@@ -19,6 +19,50 @@ Typical failure modes:
 
 Workflow `A` is the implementation branch that makes this a first-class system capability instead of an ad hoc review habit.
 
+## Implemented Checkpoint - May 31, 2026
+
+The item modal now has a first-class `Repair media` gallery:
+
+- `Find source media` captures authenticated, post-scoped Facebook/Pinterest evidence.
+- The current saved image remains visible for comparison but is never treated as a proposed replacement.
+- Captured post images are shown as explicit selectable candidates.
+- A `Generated text card` option builds a local PNG from captured post text when text is the best representation.
+- `Use selected media` promotes only the human-selected candidate.
+- Generated cards use the normal local storage and thumbnail pathways, so Grid, detail view, and standalone collection PDF export use them without app-dependent links.
+- Promotion records provenance in `asset_field_provenance`.
+- Promotion archives stale machine evidence in `asset_media_repair_audit`, then clears old AI summaries, AI labels, embeddings, derived classification rows, and source-link QC rows for that asset.
+- Human overrides, annotations, notes, and non-AI labels are preserved.
+- Explorer PCA cache keys include embedding vectors, so refreshed embeddings produce refreshed coordinates.
+
+Important capture rule:
+- never borrow a visually prominent image from another feed post or nearby comment
+- a text-only anchored post should produce useful text evidence with no unrelated image candidate
+
+### Refresh after promotion
+
+Use `Admin` -> `Repaired Media Search Evidence` -> `Refresh Search Evidence` after accepting one or more repairs. The batch action is deliberate: accepting replacement media remains immediate and local, while Gemini work runs only when requested. Failed items stay in the pending queue.
+
+The Admin action applies these recipes automatically.
+
+Generated text card:
+
+```bash
+PYTHONPATH=src python3 -m inspirations ai embed --asset-id <asset-id>
+PYTHONPATH=src python3 -m inspirations curation track-gate-v2
+PYTHONPATH=src python3 -m inspirations curation axis-infer-v2
+```
+
+Selected source image:
+
+```bash
+PYTHONPATH=src python3 -m inspirations ai tag --provider gemini --asset-id <asset-id>
+PYTHONPATH=src python3 -m inspirations ai embed --asset-id <asset-id>
+PYTHONPATH=src python3 -m inspirations curation track-gate-v2
+PYTHONPATH=src python3 -m inspirations curation axis-infer-v2
+```
+
+The CLI commands remain useful as a manual fallback. The Admin action also regenerates the heuristic track and axis snapshots once per batch rather than once per repaired item.
+
 ## Goals
 
 1. Capture better source evidence automatically where possible.

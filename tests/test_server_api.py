@@ -127,6 +127,29 @@ class TestServerApi(unittest.TestCase):
             finally:
                 e.close()
 
+    def _raw_request(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        payload: dict | None = None,
+        headers: dict | None = None,
+    ):
+        req_headers = dict(headers or {})
+        data = None
+        if payload is not None:
+            data = json.dumps(payload).encode("utf-8")
+            req_headers.setdefault("Content-Type", "application/json")
+        req = urllib.request.Request(f"{self.base_url}{path}", method=method, data=data, headers=req_headers)
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status, resp.read(), dict(resp.headers.items())
+        except urllib.error.HTTPError as e:
+            try:
+                return e.code, e.read(), dict((e.headers or {}).items())
+            finally:
+                e.close()
+
     def _insert_asset(
         self,
         *,
@@ -263,6 +286,22 @@ class TestServerApi(unittest.TestCase):
                         "2026-03-07T06:01:01+00:00",
                     ),
                 )
+            db.exec(
+                """
+                insert into asset_labels (id, asset_id, label, confidence, source, model, run_id, created_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "label-a1-mission",
+                    "a1",
+                    "mission",
+                    0.8,
+                    "test",
+                    "test",
+                    "labels-run-test",
+                    "2026-03-07T06:02:00+00:00",
+                ),
+            )
 
     def test_remove_items_from_collection_endpoint(self):
         status, body = self._request(
@@ -285,6 +324,139 @@ class TestServerApi(unittest.TestCase):
         )
         self.assertEqual(status, 403)
         self.assertEqual(body.get("error"), "missing admin token")
+
+    def test_admin_setup_creates_local_password_then_allows_login(self):
+        with mock.patch.dict(os.environ, {"INSPIRATIONS_ADMIN_PASSWORD": ""}, clear=False):
+            status, body = self._request("/api/admin/status")
+            self.assertEqual(status, 200)
+            self.assertFalse(body.get("configured"))
+            self.assertTrue(body.get("setup_allowed"))
+
+            status, body = self._request(
+                "/api/admin/setup",
+                method="POST",
+                payload={"password": "local-secret", "confirm_password": "local-secret"},
+            )
+            self.assertEqual(status, 201)
+            self.assertTrue(body.get("configured"))
+            password_path = self.db_path.parent / "admin_password.txt"
+            self.assertEqual(password_path.read_text(encoding="utf-8").strip(), "local-secret")
+            self.assertEqual(password_path.stat().st_mode & 0o777, 0o600)
+
+            status, body = self._request("/api/admin/login", method="POST", payload={"password": "local-secret"})
+            self.assertEqual(status, 200)
+            self.assertTrue(body.get("token"))
+
+    def test_admin_setup_rejects_non_localhost_client(self):
+        with mock.patch.dict(os.environ, {"INSPIRATIONS_ADMIN_PASSWORD": ""}, clear=False), \
+             mock.patch.object(ApiHandler, "_is_loopback_client", return_value=False):
+            status, body = self._request(
+                "/api/admin/setup",
+                method="POST",
+                payload={"password": "local-secret", "confirm_password": "local-secret"},
+            )
+        self.assertEqual(status, 403)
+        self.assertIn("localhost", body.get("error", ""))
+        self.assertFalse((self.db_path.parent / "admin_password.txt").exists())
+
+    def test_admin_setup_rejects_public_host_even_when_proxy_is_local(self):
+        with mock.patch.dict(os.environ, {"INSPIRATIONS_ADMIN_PASSWORD": ""}, clear=False):
+            status, body = self._request(
+                "/api/admin/setup",
+                method="POST",
+                payload={"password": "local-secret", "confirm_password": "local-secret"},
+                headers={"Host": "inspirations.example.com"},
+            )
+        self.assertEqual(status, 403)
+        self.assertIn("localhost", body.get("error", ""))
+        self.assertFalse((self.db_path.parent / "admin_password.txt").exists())
+
+    def test_admin_media_repair_refresh_requires_login_and_reports_result(self):
+        status, body = self._request("/api/admin/media-repairs/refresh", method="POST")
+        self.assertEqual(status, 403)
+        self.assertEqual(body.get("error"), "missing admin token")
+
+        with mock.patch.dict(os.environ, {"INSPIRATIONS_ADMIN_PASSWORD": "secret"}, clear=False):
+            status, login = self._request("/api/admin/login", method="POST", payload={"password": "secret"})
+            self.assertEqual(status, 200)
+            with mock.patch.object(
+                ApiHandler,
+                "_refresh_pending_media_repairs",
+                return_value={"ok": True, "pending_before": 1, "refreshed": 1, "pending_after": 0, "failed": []},
+            ):
+                status, body = self._request(
+                    "/api/admin/media-repairs/refresh",
+                    method="POST",
+                    headers={"X-Admin-Token": str(login["token"])},
+                )
+        self.assertEqual(status, 200)
+        self.assertEqual(body.get("refreshed"), 1)
+
+    def test_admin_media_repair_refresh_runs_photo_tags_but_skips_text_card_tags(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            for provenance_id, asset_id, repair_kind in (
+                ("repair-status-a1", "a1", "source_image"),
+                ("repair-status-a2", "a2", "generated_text_card"),
+            ):
+                db.exec(
+                    """
+                    insert into asset_field_provenance
+                      (id, asset_id, field_name, field_value, origin_type, origin_ref, actor,
+                       confidence, created_at, is_current)
+                    values (?, ?, 'media_evidence_status', ?, 'media_repair', 'test', 'test',
+                            1.0, datetime('now'), 1)
+                    """,
+                    (provenance_id, asset_id, f"refresh_required:{repair_kind}"),
+                )
+
+        tagged_ids: list[str] = []
+        embedded_ids: list[str] = []
+
+        def fake_tag(db, **kwargs):
+            asset_id = str(kwargs["asset_id"])
+            tagged_ids.append(asset_id)
+            db.exec(
+                """
+                insert into asset_ai (id, asset_id, provider, model, summary, json, created_at)
+                values (?, ?, 'gemini', 'test', 'fresh tags', '{}', datetime('now'))
+                """,
+                (f"ai-{asset_id}", asset_id),
+            )
+            return {"attempted": 1, "labeled_assets": 1, "errors": []}
+
+        def fake_embed(db, **kwargs):
+            asset_id = str(kwargs["asset_id"])
+            embedded_ids.append(asset_id)
+            db.exec(
+                """
+                insert into asset_embeddings
+                  (id, asset_id, provider, model, input_text, vector_json, dimensions, created_at)
+                values (?, ?, 'gemini', 'gemini-embedding-001', 'fresh', '[0.1]', 1, datetime('now'))
+                """,
+                (f"embedding-{asset_id}", asset_id),
+            )
+            return {"attempted": 1, "embedded_assets": 1, "errors": []}
+
+        with mock.patch.dict(os.environ, {"INSPIRATIONS_ADMIN_PASSWORD": "secret"}, clear=False), \
+             mock.patch("inspirations.server._get_api_key", return_value="gemini-key"), \
+             mock.patch("inspirations.server.run_ai_labeler", side_effect=fake_tag), \
+             mock.patch("inspirations.server.run_gemini_text_embedder", side_effect=fake_embed), \
+             mock.patch("inspirations.server.run_track_gate_v2", return_value={"run_id": "track-refresh"}), \
+             mock.patch("inspirations.server.run_multi_axis_inference_v2", return_value={"run_id": "axis-refresh"}):
+            status, login = self._request("/api/admin/login", method="POST", payload={"password": "secret"})
+            self.assertEqual(status, 200)
+            status, body = self._request(
+                "/api/admin/media-repairs/refresh",
+                method="POST",
+                headers={"X-Admin-Token": str(login["token"])},
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body.get("refreshed"), 2)
+        self.assertEqual(body.get("pending_after"), 0)
+        self.assertEqual(tagged_ids, ["a1"])
+        self.assertEqual(embedded_ids, ["a1", "a2"])
 
     def test_admin_delete_cleans_db_and_files(self):
         with mock.patch.dict(os.environ, {"INSPIRATIONS_ADMIN_PASSWORD": "secret"}, clear=False):
@@ -377,7 +549,7 @@ class TestServerApi(unittest.TestCase):
         status, body = self._request("/api/explorer/attractor-data?dims=2&include_hidden=1")
         self.assertEqual(status, 200)
         ids_public = {a["id"] for a in body.get("assets", [])}
-        self.assertEqual(ids_public, {"a1"})
+        self.assertEqual(ids_public, {"a1", "a2"})
 
         status, body = self._request(
             "/api/explorer/attractor-data?dims=2&include_hidden=1",
@@ -402,6 +574,18 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual([a["id"] for a in body.get("assets", [])], ["a1"])
         self.assertEqual(body.get("total"), 1)
+
+    def test_assets_endpoint_filters_by_multiple_classification_facets(self):
+        self._seed_v2_classification()
+
+        status, body = self._request("/api/assets?facet=room:kitchen&facet=style_family:spanish&include_hidden=1")
+        self.assertEqual(status, 200)
+        self.assertEqual([a["id"] for a in body.get("assets", [])], ["a1"])
+        self.assertEqual(body.get("total"), 1)
+
+        status, body = self._request("/api/asset-ids?facet=track:style_product_decor&facet=style_family:spanish&include_hidden=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(body.get("ids"), ["a1"])
 
     def test_assets_endpoint_track_filter_honors_active_override(self):
         self._seed_v2_classification()
@@ -449,9 +633,11 @@ class TestServerApi(unittest.TestCase):
         classification_nodes = {node.get("label"): node for node in tree if node.get("type") == "classification"}
         self.assertIn("Track", classification_nodes)
         self.assertIn("Rooms", classification_nodes)
+        self.assertIn("Style", classification_nodes)
         self.assertIn("Construction Concerns", classification_nodes)
         self.assertIn("Style / Decor", [child.get("label") for child in classification_nodes["Track"].get("children", [])])
         self.assertIn("Kitchen", [child.get("label") for child in classification_nodes["Rooms"].get("children", [])])
+        self.assertIn("Spanish / Mission", [child.get("label") for child in classification_nodes["Style"].get("children", [])])
 
     def test_catalog_tree_track_counts_include_non_home_irrelevant_items(self):
         self._seed_v2_classification()
@@ -639,7 +825,7 @@ class TestServerApi(unittest.TestCase):
         status, body = self._request("/api/explorer/layout?method=pca&refresh=1&include_hidden=1")
         self.assertEqual(status, 200)
         ids_public = {n["id"] for n in body.get("nodes", [])}
-        self.assertEqual(ids_public, {"a1"})
+        self.assertEqual(ids_public, {"a1", "a2"})
 
         status, body = self._request(
             "/api/explorer/layout?method=pca&refresh=1&include_hidden=1",
@@ -716,7 +902,7 @@ class TestServerApi(unittest.TestCase):
             )
 
         status, _ = self._request("/api/assets/a2?include_hidden=1")
-        self.assertEqual(status, 404)
+        self.assertEqual(status, 200)
 
         status, _ = self._request(
             "/api/assets/a2?include_hidden=1",
@@ -730,6 +916,34 @@ class TestServerApi(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual((body.get("asset") or {}).get("id"), "a2")
+
+    def test_hidden_asset_detail_includes_triage_provenance(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec("update assets set triage_status='hidden' where id='a2'")
+            db.exec(
+                """
+                insert into triage_log (asset_id, old_status, new_status, reason, actor, created_at)
+                values (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "a2",
+                    "pending",
+                    "hidden",
+                    "backfill: AI reel triage (pre-audit-log)",
+                    "ai-reel-triage",
+                    "2026-02-25T04:09:07+00:00",
+                ),
+            )
+
+        status, body = self._request("/api/assets/a2?include_hidden=1")
+        self.assertEqual(status, 200)
+        info = (body.get("asset") or {}).get("triage_info") or {}
+        self.assertEqual(info.get("status"), "hidden")
+        self.assertEqual(info.get("previous_status"), "pending")
+        self.assertEqual(info.get("actor"), "ai-reel-triage")
+        self.assertEqual(info.get("reason"), "backfill: AI reel triage (pre-audit-log)")
+        self.assertEqual(info.get("created_at"), "2026-02-25T04:09:07+00:00")
 
     def test_assets_and_asset_ids_include_hidden_require_owner(self):
         with Db(self.db_path) as db:
@@ -746,7 +960,7 @@ class TestServerApi(unittest.TestCase):
 
         status, body = self._request("/api/assets?include_hidden=1")
         self.assertEqual(status, 200)
-        self.assertEqual({a["id"] for a in body.get("assets", [])}, {"a1"})
+        self.assertEqual({a["id"] for a in body.get("assets", [])}, {"a1", "a2"})
 
         status, body = self._request(
             "/api/assets?include_hidden=1",
@@ -764,7 +978,7 @@ class TestServerApi(unittest.TestCase):
 
         status, body = self._request("/api/asset-ids?include_hidden=1")
         self.assertEqual(status, 200)
-        self.assertEqual(set(body.get("ids", [])), {"a1"})
+        self.assertEqual(set(body.get("ids", [])), {"a1", "a2"})
 
         status, body = self._request(
             "/api/asset-ids?include_hidden=1",
@@ -779,6 +993,37 @@ class TestServerApi(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(set(body.get("ids", [])), {"a1", "a2"})
+
+    def test_assets_can_filter_hidden_items_by_latest_triage_actor(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec("update assets set triage_status='hidden' where id in ('a1', 'a2')")
+            db.exec(
+                """
+                insert into triage_log (asset_id, old_status, new_status, reason, actor, created_at)
+                values (?, ?, ?, ?, ?, ?)
+                """,
+                ("a1", None, "hidden", "manual review", "Jim", "2026-06-01T10:00:00+00:00"),
+            )
+            db.exec(
+                """
+                insert into triage_log (asset_id, old_status, new_status, reason, actor, created_at)
+                values (?, ?, ?, ?, ?, ?)
+                """,
+                ("a2", None, "hidden", "AI cleanup", "ai-reel-triage", "2026-06-01T10:00:00+00:00"),
+            )
+
+        status, body = self._request(
+            "/api/assets?triage_status=hidden&triage_actor=manual&include_hidden=1"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual({a["id"] for a in body.get("assets", [])}, {"a1"})
+
+        status, body = self._request(
+            "/api/asset-ids?triage_status=hidden&triage_actor=ai-reel-triage&include_hidden=1"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(set(body.get("ids", [])), {"a2"})
 
     def test_collections_include_hidden_requires_owner(self):
         with Db(self.db_path) as db:
@@ -804,7 +1049,7 @@ class TestServerApi(unittest.TestCase):
 
         status, body = self._request("/api/collections?include_hidden=1")
         self.assertEqual(status, 200)
-        self.assertEqual(body.get("collections", []), [])
+        self.assertEqual({c["id"] for c in body.get("collections", [])}, {"c1", "c2"})
 
         status, body = self._request(
             "/api/collections?include_hidden=1",
@@ -930,6 +1175,28 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(int(c1.get("count_visible") or 0), 0)
         self.assertEqual(int(c1.get("count_total") or 0), 2)
 
+    def test_collection_pdf_export_endpoint_returns_pdf_attachment(self):
+        pdf_path = self.tmp_path / "exported.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+        def fake_export(db, *, collection_id, out_path=None):
+            self.assertEqual(collection_id, "c1")
+            self.assertIsNone(out_path)
+            return {
+                "ok": True,
+                "path": str(pdf_path),
+                "markdown_path": str(pdf_path.with_suffix(".md")),
+                "collection_id": collection_id,
+            }
+
+        with mock.patch("inspirations.server.export_collection_pdf", side_effect=fake_export):
+            status, data, headers = self._raw_request("/api/collections/c1/export/pdf", method="POST", payload={})
+
+        self.assertEqual(status, 200)
+        self.assertEqual(data, b"%PDF-1.4\n%%EOF\n")
+        self.assertEqual(headers.get("Content-Type"), "application/pdf")
+        self.assertIn('filename="exported.pdf"', headers.get("Content-Disposition", ""))
+
     def test_collections_endpoint_exposes_provenance_for_cb_collection(self):
         with Db(self.db_path) as db:
             ensure_schema(db)
@@ -962,7 +1229,7 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(cb1.get("provenance_label"), "AI-derived representative")
         self.assertIn("Not a human-curated final selection", str(cb1.get("provenance_note") or ""))
 
-    def test_collection_creation_requires_owner_and_shared_collections_require_collaborator(self):
+    def test_collection_creation_allows_local_owner_and_legacy_shared_requires_collaborator(self):
         with Db(self.db_path) as db:
             ensure_schema(db)
             db.exec(
@@ -977,10 +1244,10 @@ class TestServerApi(unittest.TestCase):
         status, body = self._request(
             "/api/collections",
             method="POST",
-            payload={"name": "Client Share", "intent": "shared", "shared_actor_id": "collab-create"},
+            payload={"name": "Local Collection"},
         )
-        self.assertEqual(status, 403)
-        self.assertEqual(body.get("error"), "owner access required")
+        self.assertEqual(status, 201)
+        self.assertEqual((body.get("collection") or {}).get("name"), "Local Collection")
 
         status, body = self._request(
             "/api/collections",
@@ -1018,7 +1285,7 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(col.get("shared_actor_ids"), ["collab-create"])
         self.assertEqual(col.get("shared_actor_names"), ["Casey"])
 
-    def test_collaborator_only_sees_shared_collections_assigned_to_them(self):
+    def test_local_owner_sees_all_collections_and_legacy_collaborator_scope_still_filters(self):
         with Db(self.db_path) as db:
             ensure_schema(db)
             db.exec(
@@ -1069,7 +1336,7 @@ class TestServerApi(unittest.TestCase):
 
         status, body = self._request("/api/collections")
         self.assertEqual(status, 200)
-        self.assertEqual(body.get("collections", []), [])
+        self.assertTrue({"c1", "c-shared-alex", "c-shared-blair", "c-shared-both"}.issubset({c["id"] for c in body.get("collections", [])}))
 
         status, body = self._request(
             "/api/collections",
@@ -1129,23 +1396,10 @@ class TestServerApi(unittest.TestCase):
             )
         self.assertEqual([str(r["actor_id"]) for r in share_rows], ["collab-one", "collab-two"])
 
-    def test_owner_can_get_actor_list_for_collection_sharing(self):
-        with Db(self.db_path) as db:
-            ensure_schema(db)
-            db.exec(
-                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
-                ("owner-list", "Owner", "owner-list-token", "owner"),
-            )
-            db.exec(
-                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
-                ("collab-list", "Casey", "collab-list-token", "collaborator"),
-            )
-
-        status, body = self._request("/api/actors", headers={"X-Actor-Token": "owner-list-token"})
-        self.assertEqual(status, 200)
-        actor_map = {a["id"]: a for a in body.get("actors", [])}
-        self.assertIn("owner-list", actor_map)
-        self.assertIn("collab-list", actor_map)
+    def test_actors_endpoint_is_retired(self):
+        status, body = self._request("/api/actors")
+        self.assertEqual(status, 404)
+        self.assertEqual(body.get("error"), "live sharing is retired")
 
     def test_catalog_endpoints_include_hidden_require_owner(self):
         visible_id = "feedface-0000-0000-0000-000000000000"
@@ -1608,6 +1862,49 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(asset.get("display_title"), "Wisebird: Alpha Beta Guide")
         self.assertEqual(((asset.get("title_info") or {}).get("display_source") or ""), "suggested_title")
 
+    def test_assets_endpoint_suggests_facebook_title_without_engagement_prefix(self):
+        raw_title = "62K views - 1.8K reactions | Better Building Practices | Texas Signature Inspections"
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into assets (id, source, source_ref, title, imported_at)
+                values (?, ?, ?, ?, datetime('now'))
+                """,
+                ("fb-engagement-title-1", "facebook", "https://www.facebook.com/reel/123", raw_title),
+            )
+
+        status, body = self._request("/api/assets?source=facebook&include_hidden=1")
+        self.assertEqual(status, 200)
+        assets = {a["id"]: a for a in body.get("assets", [])}
+        asset = assets.get("fb-engagement-title-1") or {}
+        title_info = asset.get("title_info") or {}
+        self.assertEqual(asset.get("title"), raw_title)
+        self.assertEqual(title_info.get("suggested_title"), "Better Building Practices | Texas Signature Inspections")
+        self.assertEqual(title_info.get("suggestion_reason"), "strip_engagement_prefix")
+
+    def test_assets_endpoint_preserves_full_facebook_title_after_engagement_prefix(self):
+        cleaned_title = (
+            "Comment Drawer and I'll send you the link. Don't build a house without seeing my checklist. "
+            "You can get this system at Rev-A-Shelf or from your cabinet supplier."
+        )
+        raw_title = f"220K views · 16K reactions | {cleaned_title}"
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into assets (id, source, source_ref, title, imported_at)
+                values (?, ?, ?, ?, datetime('now'))
+                """,
+                ("fb-engagement-title-2", "facebook", "https://www.facebook.com/reel/456", raw_title),
+            )
+
+        status, body = self._request("/api/assets?source=facebook&include_hidden=1")
+        self.assertEqual(status, 200)
+        assets = {a["id"]: a for a in body.get("assets", [])}
+        title_info = (assets.get("fb-engagement-title-2") or {}).get("title_info") or {}
+        self.assertEqual(title_info.get("suggested_title"), cleaned_title)
+
     def test_owner_can_apply_suggested_working_title(self):
         with Db(self.db_path) as db:
             ensure_schema(db)
@@ -2038,6 +2335,49 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(bool((body.get("result") or {}).get("promoted")))
 
+    def test_owner_can_promote_selected_media_repair_candidate(self):
+        self._seed_v2_classification()
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into actors (id, name, token, role, created_at)
+                values (?, ?, ?, ?, datetime('now'))
+                """,
+                ("owner-media-repair", "Jim", "owner-media-repair-token", "owner"),
+            )
+
+        with mock.patch(
+            "inspirations.server.promote_media_repair_candidate_for_asset",
+            return_value={
+                "ok": True,
+                "asset_id": "a1",
+                "candidate_id": "text-card",
+                "kind": "text_card",
+                "promoted": True,
+            },
+        ) as promote, mock.patch.object(
+            ApiHandler,
+            "_get_asset_for_modal",
+            return_value={
+                "id": "a1",
+                "classification_review": {},
+                "source_link_candidate": {
+                    "fetch_status": "fetched",
+                    "media_candidates": [{"id": "text-card", "kind": "text_card", "selectable": True}],
+                },
+            },
+        ):
+            status, body = self._request(
+                "/api/assets/a1/source-link-candidate",
+                method="PUT",
+                payload={"action": "promote_candidate", "candidate_id": "text-card"},
+                headers={"X-Actor-Token": "owner-media-repair-token"},
+            )
+        self.assertEqual(status, 200)
+        self.assertTrue(bool((body.get("result") or {}).get("promoted")))
+        self.assertEqual(promote.call_args.kwargs.get("candidate_id"), "text-card")
+
     def test_classification_review_requires_owner(self):
         self._seed_v2_classification()
         with Db(self.db_path) as db:
@@ -2093,86 +2433,10 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual({a["id"] for a in body.get("assets", [])}, {"a1", "a2", "a3"})
 
-    def test_context_resolve_requires_authentication(self):
+    def test_context_resolve_endpoint_is_retired(self):
         status, body = self._request("/api/context/resolve?collection_id=c1&item_id=a1")
-        self.assertEqual(status, 401)
-        self.assertEqual(body.get("error"), "authentication required")
-
-    def test_context_resolve_found_and_missing_states(self):
-        with Db(self.db_path) as db:
-            ensure_schema(db)
-            db.exec(
-                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
-                ("collab-ctx-1", "Collab", "collab-ctx-token-1", "collaborator"),
-            )
-            db.exec("update collections set intent='shared', shared_actor_id='collab-ctx-1' where id='c1'")
-
-        status, body = self._request(
-            "/api/context/resolve?collection_id=c1&item_id=a1",
-            headers={"X-Actor-Token": "collab-ctx-token-1"},
-        )
-        self.assertEqual(status, 200)
-        self.assertTrue(body.get("found"))
-        self.assertEqual(body.get("collection_id"), "c1")
-        self.assertEqual(body.get("item_id"), "a1")
-
-        with Db(self.db_path) as db:
-            ensure_schema(db)
-            db.exec("delete from collection_items where collection_id='c1' and asset_id='a1'")
-
-        status, body = self._request(
-            "/api/context/resolve?collection_id=c1&item_id=a1",
-            headers={"X-Actor-Token": "collab-ctx-token-1"},
-        )
-        self.assertEqual(status, 200)
-        self.assertFalse(body.get("found"))
-        self.assertEqual(body.get("reason"), "item_not_in_collection")
-
-    def test_context_resolve_denies_collection_not_shared_with_actor(self):
-        with Db(self.db_path) as db:
-            ensure_schema(db)
-            db.exec(
-                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
-                ("collab-ctx-denied", "Collab", "collab-ctx-denied-token", "collaborator"),
-            )
-
-        status, body = self._request(
-            "/api/context/resolve?collection_id=c1&item_id=a1",
-            headers={"X-Actor-Token": "collab-ctx-denied-token"},
-        )
-        self.assertEqual(status, 200)
-        self.assertFalse(body.get("found"))
-        self.assertEqual(body.get("reason"), "collection_not_shared_with_actor")
-
-    def test_context_resolve_hidden_item_is_owner_only(self):
-        with Db(self.db_path) as db:
-            ensure_schema(db)
-            db.exec("update assets set triage_status='hidden' where id='a2'")
-            db.exec(
-                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
-                ("owner-ctx-1", "Owner", "owner-ctx-token-1", "owner"),
-            )
-            db.exec(
-                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
-                ("collab-ctx-2", "Collab", "collab-ctx-token-2", "collaborator"),
-            )
-            db.exec("update collections set intent='shared', shared_actor_id='collab-ctx-2' where id='c1'")
-
-        status, body = self._request(
-            "/api/context/resolve?collection_id=c1&item_id=a2",
-            headers={"X-Actor-Token": "collab-ctx-token-2"},
-        )
-        self.assertEqual(status, 200)
-        self.assertFalse(body.get("found"))
-        self.assertEqual(body.get("reason"), "item_hidden_for_role")
-
-        status, body = self._request(
-            "/api/context/resolve?collection_id=c1&item_id=a2",
-            headers={"X-Actor-Token": "owner-ctx-token-1"},
-        )
-        self.assertEqual(status, 200)
-        self.assertTrue(body.get("found"))
-        self.assertTrue(body.get("item_hidden"))
+        self.assertEqual(status, 404)
+        self.assertEqual(body.get("error"), "live sharing is retired")
 
     def test_collection_scoped_asset_endpoints_require_shared_collection_access(self):
         with Db(self.db_path) as db:
@@ -2215,27 +2479,10 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(set(body.get("ids", [])), {"a1", "a2"})
 
-    def test_me_prefers_query_actor_over_header_token(self):
-        with Db(self.db_path) as db:
-            ensure_schema(db)
-            db.exec(
-                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
-                ("owner-me-1", "Owner", "owner-me-token", "owner"),
-            )
-            db.exec(
-                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
-                ("collab-me-1", "Collab", "collab-me-token", "collaborator"),
-            )
-
-        status, body = self._request(
-            "/api/me?actor=owner-me-token",
-            headers={"X-Actor-Token": "collab-me-token"},
-        )
-        self.assertEqual(status, 200)
-        actor = body.get("actor") or {}
-        self.assertEqual(actor.get("name"), "Owner")
-        self.assertEqual(actor.get("role"), "owner")
-        self.assertEqual(actor.get("token"), "owner-me-token")
+    def test_me_endpoint_is_retired(self):
+        status, body = self._request("/api/me")
+        self.assertEqual(status, 404)
+        self.assertEqual(body.get("error"), "live sharing is retired")
 
     def test_annotation_edit_and_delete_permissions(self):
         with Db(self.db_path) as db:
@@ -2344,6 +2591,40 @@ class TestServerApi(unittest.TestCase):
             actor_name = db.query_value("select actor_name from annotations where id=?", (ann.get("id"),))
         self.assertEqual(actor_name, "Owner")
 
+    def test_local_owner_session_can_create_and_manage_annotations(self):
+        status, body = self._request(
+            "/api/annotations",
+            method="POST",
+            payload={"asset_id": "a1", "x": 0.25, "y": 0.45, "text": "local note"},
+        )
+        self.assertEqual(status, 201)
+        ann = body.get("annotation") or {}
+        self.assertEqual(ann.get("actor_id"), "local-owner")
+        self.assertEqual(ann.get("actor_name"), "Jim")
+
+        status, _ = self._request(
+            f"/api/annotations/{ann.get('id')}",
+            method="PUT",
+            payload={"text": "updated local note"},
+        )
+        self.assertEqual(status, 200)
+
+        # Legacy no-token annotations may have null actor columns. Local owner
+        # mode still needs to manage them after live sharing is retired.
+        status, _ = self._request(
+            "/api/annotations/ann1",
+            method="PUT",
+            payload={"text": "updated legacy note"},
+        )
+        self.assertEqual(status, 200)
+
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            local_text = db.query_value("select text from annotations where id=?", (ann.get("id"),))
+            legacy_text = db.query_value("select text from annotations where id='ann1'")
+        self.assertEqual(local_text, "updated local note")
+        self.assertEqual(legacy_text, "updated legacy note")
+
     def test_annotation_resolve_requires_owner(self):
         with Db(self.db_path) as db:
             ensure_schema(db)
@@ -2420,59 +2701,10 @@ class TestServerApi(unittest.TestCase):
             notes = db.query_value("select notes from assets where id='a1'")
         self.assertEqual(notes, "owner note")
 
-    def test_questions_dashboard_owner_only_and_lists_open_questions(self):
-        with Db(self.db_path) as db:
-            ensure_schema(db)
-            db.exec(
-                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
-                ("owner-qdash-1", "Leslie", "owner-qdash-token-1", "owner"),
-            )
-            db.exec(
-                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
-                ("collab-qdash-1", "Mark", "collab-qdash-token-1", "collaborator"),
-            )
-            db.exec(
-                """
-                insert into annotations
-                  (id, asset_id, x, y, text, created_at, updated_at, actor_id, actor_name, annotation_type, resolved)
-                values (?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?, ?, 'question', 0)
-                """,
-                ("ann-qdash-1", "a1", 0.12, 0.18, "Is this the right vanity?", "collab-qdash-1", "Mark"),
-            )
-            db.exec(
-                """
-                insert into annotations
-                  (id, asset_id, x, y, text, created_at, updated_at, actor_id, actor_name, annotation_type, resolved)
-                values (?, ?, ?, ?, ?, datetime('now'), datetime('now'), ?, ?, 'question', 1)
-                """,
-                ("ann-qdash-2", "a1", 0.35, 0.41, "Resolved question", "collab-qdash-1", "Mark"),
-            )
-
+    def test_questions_dashboard_endpoint_is_retired(self):
         status, body = self._request("/api/questions/dashboard")
-        self.assertEqual(status, 403)
-        self.assertEqual(body.get("error"), "owner access required")
-
-        status, body = self._request(
-            "/api/questions/dashboard",
-            headers={"X-Actor-Token": "collab-qdash-token-1"},
-        )
-        self.assertEqual(status, 403)
-        self.assertEqual(body.get("error"), "owner access required")
-
-        status, body = self._request(
-            "/api/questions/dashboard",
-            headers={"X-Actor-Token": "owner-qdash-token-1"},
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(int(body.get("total") or 0), 1)
-        questions = body.get("questions") or []
-        self.assertEqual(len(questions), 1)
-        q = questions[0]
-        self.assertEqual(q.get("id"), "ann-qdash-1")
-        self.assertEqual(q.get("actor_name"), "Mark")
-        self.assertEqual(q.get("asset_id"), "a1")
-        self.assertEqual(q.get("annotation_type"), "question")
-        self.assertEqual(int(q.get("resolved") or 0), 0)
+        self.assertEqual(status, 404)
+        self.assertEqual(body.get("error"), "collaborator questions are retired")
 
     def test_flag_is_owner_only_and_tag_workflow_retired(self):
         with Db(self.db_path) as db:
@@ -2495,8 +2727,7 @@ class TestServerApi(unittest.TestCase):
             method="POST",
             payload={"flagged": 1},
         )
-        self.assertEqual(status, 403)
-        self.assertEqual(body.get("error"), "flagging is restricted to owners")
+        self.assertEqual(status, 200)
 
         status, body = self._request(
             "/api/assets/a1/flag",
@@ -2597,6 +2828,48 @@ class TestServerApi(unittest.TestCase):
         with Db(self.db_path) as db:
             flagged_by = db.query_value("select flagged_by from assets where id='a1'")
         self.assertEqual(flagged_by, "Jim")
+
+    def test_broken_source_action_flags_hides_and_logs_reason(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
+                ("builder-broken-source", "Builder", "builder-broken-source-token", "builder"),
+            )
+
+        status, body = self._request(
+            "/api/assets/a2/broken-source",
+            method="POST",
+            payload={},
+            headers={"X-Actor-Token": "builder-broken-source-token"},
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(body.get("error"), "owner access required")
+
+        status, body = self._request("/api/assets/a2/broken-source", method="POST", payload={})
+        self.assertEqual(status, 200)
+        asset = body.get("asset") or {}
+        self.assertEqual(asset.get("triage_status"), "hidden")
+        self.assertEqual(asset.get("flagged"), 1)
+        self.assertEqual(asset.get("flagged_by"), "Jim")
+        self.assertEqual(asset.get("flagged_note"), "broken source link")
+
+        with Db(self.db_path) as db:
+            log = dict(
+                db.query(
+                    """
+                    select old_status, new_status, reason, actor
+                    from triage_log
+                    where asset_id='a2'
+                    order by id desc
+                    limit 1
+                    """
+                )[0]
+            )
+        self.assertIsNone(log.get("old_status"))
+        self.assertEqual(log.get("new_status"), "hidden")
+        self.assertEqual(log.get("reason"), "broken source link (UI)")
+        self.assertEqual(log.get("actor"), "Jim")
 
     def test_assets_endpoint_supports_label_mode_all(self):
         with Db(self.db_path) as db:
@@ -2771,6 +3044,53 @@ class TestServerApi(unittest.TestCase):
             self.assertEqual(resp.status, 200)
             self.assertIn("application/pdf", (resp.headers.get("Content-Type") or ""))
             self.assertEqual(body, pdf_bytes)
+
+    def test_media_video_uses_dedicated_stored_video_path(self):
+        video = self.store_dir / "originals" / "video" / "walkthrough.mp4"
+        poster = self.store_dir / "originals" / "video" / "walkthrough.jpg"
+        thumb = self.store_dir / "thumbs" / "video" / "walkthrough.jpg"
+        video.parent.mkdir(parents=True, exist_ok=True)
+        thumb.parent.mkdir(parents=True, exist_ok=True)
+        video_bytes = b"\x00\x00\x00\x18ftypmp42mock-video"
+        video.write_bytes(video_bytes)
+        poster.write_bytes(b"poster")
+        thumb.write_bytes(b"thumb")
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into assets
+                  (id, source, source_ref, title, imported_at, media_status, content_kind,
+                   stored_path, stored_video_path, thumb_path)
+                values (?, ?, ?, ?, datetime('now'), ?, ?, ?, ?, ?)
+                """,
+                (
+                    "video-1",
+                    "video",
+                    "clip-video://walkthrough",
+                    "Walkthrough",
+                    "video",
+                    "video",
+                    str(poster),
+                    str(video),
+                    str(thumb),
+                ),
+            )
+
+        status, body = self._request("/api/assets/video-1")
+        self.assertEqual(status, 200)
+        self.assertEqual((body.get("asset") or {}).get("stored_video_path"), str(video))
+        status, body = self._request("/api/assets?ids=video-1")
+        self.assertEqual(status, 200)
+        self.assertEqual((body.get("assets") or [{}])[0].get("stored_video_path"), str(video))
+
+        with urllib.request.urlopen(
+            urllib.request.Request(f"{self.base_url}/media/video-1?kind=video", method="GET"),
+            timeout=5,
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.headers.get("Content-Type"), "video/mp4")
+            self.assertEqual(resp.read(), video_bytes)
 
     def test_scan_doc_pdf_prefers_doc_scoped_pdf_when_doc_pages_exist(self):
         try:
@@ -3094,7 +3414,7 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(srv.imports_dir, self.app_dir.resolve().parent / "imports")
         self.assertEqual(srv.admin_tokens, {})
         self.assertTrue(srv.serve_forever_called)
-        seed.assert_called_once_with(self.db_path, "127.0.0.1", 9999)
+        seed.assert_not_called()
 
     def test_scan_pdf_upload_runs_import_and_thumbs(self):
         boundary = "----insp-test-boundary"
@@ -3291,7 +3611,7 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload.get("options", {}).get("title"), "Kitchen Batch")
         self.assertEqual(payload.get("options", {}).get("tags"), ["kitchen", "lighting"])
-        self.assertEqual(payload.get("options", {}).get("auto_tags"), ["actor:unknown", f"ingested_at:{imported_at}"])
+        self.assertEqual(payload.get("options", {}).get("auto_tags"), ["actor:Jim", f"ingested_at:{imported_at}"])
         self.assertEqual(payload.get("ingest_metadata", {}).get("updated_titles"), 1)
         self.assertEqual(payload.get("ingest_metadata", {}).get("applied_tags"), 4)
 
@@ -3301,7 +3621,7 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(str(title), "Kitchen Batch - doc 2 p1")
         self.assertCountEqual(
             self._labels_for_asset("scan-meta-1"),
-            [f"ingested_at:{imported_at}", "actor:unknown", "kitchen", "lighting"],
+            [f"ingested_at:{imported_at}", "actor:Jim", "kitchen", "lighting"],
         )
 
     def test_photo_upload_applies_title_and_tags_to_import_batch(self):
@@ -3352,7 +3672,7 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload.get("options", {}).get("title"), "Mudroom Concept")
         self.assertEqual(payload.get("options", {}).get("tags"), ["mudroom", "storage"])
-        self.assertEqual(payload.get("options", {}).get("auto_tags"), ["actor:unknown", f"ingested_at:{imported_at}"])
+        self.assertEqual(payload.get("options", {}).get("auto_tags"), ["actor:Jim", f"ingested_at:{imported_at}"])
         self.assertEqual(payload.get("ingest_metadata", {}).get("updated_titles"), 1)
         self.assertEqual(payload.get("ingest_metadata", {}).get("applied_tags"), 4)
 
@@ -3362,7 +3682,7 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(str(title), "Mudroom Concept")
         self.assertCountEqual(
             self._labels_for_asset("photo-meta-1"),
-            [f"ingested_at:{imported_at}", "actor:unknown", "mudroom", "storage"],
+            [f"ingested_at:{imported_at}", "actor:Jim", "mudroom", "storage"],
         )
 
     def test_scan_upload_auto_actor_tag_uses_authenticated_actor_name(self):
@@ -3467,7 +3787,7 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload.get("options", {}).get("title"), "Pantry Walkthrough")
         self.assertEqual(payload.get("options", {}).get("tags"), ["pantry", "storage"])
-        self.assertEqual(payload.get("options", {}).get("auto_tags"), ["actor:unknown", f"ingested_at:{imported_at}"])
+        self.assertEqual(payload.get("options", {}).get("auto_tags"), ["actor:Jim", f"ingested_at:{imported_at}"])
         self.assertEqual(payload.get("ingest_metadata", {}).get("updated_titles"), 1)
         self.assertEqual(payload.get("ingest_metadata", {}).get("applied_tags"), 4)
 
@@ -3477,7 +3797,7 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(str(title), "Pantry Walkthrough")
         self.assertCountEqual(
             self._labels_for_asset("video-meta-1"),
-            [f"ingested_at:{imported_at}", "actor:unknown", "pantry", "storage"],
+            [f"ingested_at:{imported_at}", "actor:Jim", "pantry", "storage"],
         )
 
 

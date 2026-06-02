@@ -1,5 +1,10 @@
 # Serve Inspirations to External Collaborators
 
+> Legacy note (2026-05-27): live collaborator sharing is retired from the
+> active product. Keep this runbook only for the infrastructure pattern if the
+> local app is intentionally exposed again. Current designer handoff is
+> standalone collection PDF export.
+
 ## Context
 
 Inspirations runs locally on `127.0.0.1:8001` — a pure-Python stdlib HTTP server with SQLite, serving vanilla HTML/JS and ~2 GB of image/thumb assets. You've bought `8499timberbridgeln.com` from Squarespace and want to share the app at `8499timberbridgeln.com/inspirations` with a handful of collaborators, keeping the door open to host other things (docs, etc.) at the same domain later.

@@ -78,7 +78,7 @@ EXPLORER_AXIS_SPECS: tuple[tuple[str, str], ...] = (
 )
 
 EXPLORER_LEGACY_SPECS: tuple[tuple[str, str, list[str], float], ...] = (
-    ("style_family", "Style Family", STYLES, 0.75),
+    ("style_family", "Style", STYLES, 0.75),
     ("materials", "Materials", MATERIALS, 0.80),
     ("colors", "Colors", COLORS, 0.70),
 )
@@ -102,6 +102,9 @@ _CLASSIFICATION_VALUE_LABELS = {
     "mep": "MEP",
     "zip_system": "ZIP System",
     "mid_century": "Mid-Century",
+    "art_deco": "Art Deco",
+    "french_country": "French Country",
+    "spanish": "Spanish / Mission",
 }
 
 _CLASSIFICATION_VALUE_ORDER = {
@@ -443,6 +446,97 @@ def _apply_text(vec: list[float], text: str, weight: float = 0.3) -> None:
     for pattern, dim_name in _TITLE_PATTERNS:
         if pattern.search(text_lower):
             _set_dim(vec, dim_name, weight)
+
+
+def build_legacy_facet_memberships(
+    db: Db,
+    asset_ids: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> dict[str, dict[str, set[str]]]:
+    """Return Explorer legacy facet memberships keyed by asset ID.
+
+    These are the Style/Material/Color signals used by the attractor map before
+    PCA/IDF weighting. Keeping this extraction shared prevents the sidebar from
+    drifting away from the Explorer categories.
+    """
+    selected_ids = {
+        str(asset_id or "").strip()
+        for asset_id in (asset_ids or [])
+        if str(asset_id or "").strip()
+    }
+    params: list[str] = []
+    where_sql = ""
+    if selected_ids:
+        placeholders = ",".join(["?"] * len(selected_ids))
+        where_sql = f" where a.id in ({placeholders})"
+        params.extend(sorted(selected_ids))
+
+    assets = db.query(
+        "select a.id, a.board, a.title, a.seo_alt_text, a.source_ref "
+        f"from assets a{where_sql} order by a.id",
+        tuple(params),
+    )
+    if not assets:
+        return {}
+
+    asset_id_set = {str(row["id"] or "").strip() for row in assets}
+
+    ai_rows = db.query("select asset_id, provider, json from asset_ai")
+    ai_by_asset: dict[str, list[tuple[str, dict]]] = {}
+    for row in ai_rows:
+        asset_id = str(row["asset_id"] or "").strip()
+        if asset_id not in asset_id_set:
+            continue
+        try:
+            parsed = json.loads(row["json"]) if isinstance(row["json"], str) else row["json"]
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            ai_by_asset.setdefault(asset_id, []).append((str(row["provider"] or ""), parsed))
+
+    label_rows = db.query("select asset_id, label from asset_labels")
+    labels_by_asset: dict[str, list[str]] = {}
+    for row in label_rows:
+        asset_id = str(row["asset_id"] or "").strip()
+        if asset_id not in asset_id_set:
+            continue
+        labels_by_asset.setdefault(asset_id, []).append(str(row["label"] or ""))
+
+    memberships: dict[str, dict[str, set[str]]] = {}
+    for asset in assets:
+        aid = str(asset["id"] or "").strip()
+        if not aid:
+            continue
+        legacy_vec = [0.0] * NUM_DIMS
+
+        for provider, ai_json in ai_by_asset.get(aid, []):
+            if provider == "gemini":
+                _apply_ai_json(legacy_vec, ai_json, weight=1.0)
+            elif provider == "gemini-video":
+                _apply_video_json(legacy_vec, ai_json, weight=0.9)
+
+        asset_labels = labels_by_asset.get(aid, [])
+        if asset_labels:
+            _apply_labels(legacy_vec, asset_labels, weight=0.8)
+
+        board = asset["board"] or ""
+        if board:
+            _apply_board(legacy_vec, board, weight=0.6)
+
+        title = asset["title"] or ""
+        seo = asset["seo_alt_text"] or ""
+        source_ref = asset["source_ref"] or ""
+        title_fallback = _fallback_title_from_source_ref(title, source_ref)
+        text = f"{title_fallback or title} {seo}".strip()
+        if text and not ai_by_asset.get(aid):
+            _apply_text(legacy_vec, text, weight=0.3)
+
+        for category_key, _label, dim_names, _weight in EXPLORER_LEGACY_SPECS:
+            for dim_name in dim_names:
+                legacy_idx = DIM_INDEX.get(dim_name)
+                if legacy_idx is not None and legacy_vec[legacy_idx] > 0:
+                    memberships.setdefault(aid, {}).setdefault(category_key, set()).add(dim_name)
+
+    return memberships
 
 
 def _apply_high_df_idf(

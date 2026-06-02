@@ -15,6 +15,8 @@ const state = {
   currentClassificationAxis: null,   // v2 browse axis filter (e.g. room, track)
   currentClassificationValue: null,  // optional v2 axis value (e.g. kitchen)
   currentClassificationLabel: "",    // display label for v2 classification scope
+  classificationFacets: {},     // stackable Refine By filters: axis -> [values]
+  classificationFacetLabels: {}, // display labels keyed as "axis:value"
   currentTreeNodeId: null,      // active sidebar tree node ID
   triageFilter: "",             // "" | "pending" | "keeper" | "hidden" | "needs-comment"
 
@@ -64,6 +66,8 @@ const state = {
   modalLoadSeq: 0,
   modalScopeAssetIds: [],
   modalScopeAssetIndex: -1,
+  modalSourceCandidateSelectedId: "",
+  modalClassificationDirty: false,
 
   // Imports
   scanImportBusy: false,
@@ -77,16 +81,16 @@ const state = {
   canvasReview: false,          // true when canvas review overlay is active
   canvasSelected: new Set(),    // set of selected asset IDs
 
-  // Actor / collaboration
-  actor: null,                  // { id, name, role, token } or null
+  // Local owner session. Legacy collaborator fields remain only for old data.
+  actor: null,                  // local owner identity
   hiddenTree: null,             // hidden items tree for sidebar (owners only)
   expandedTreeNodes: new Set(), // track which tree nodes are expanded by user
-  allItemsTreeCollapsed: null,  // collaborator default: collapse browse tree under "All Items"
-  collaboratorTreeUnlocked: false, // collaborator default: hide broader tree until explicit browse
-  collaboratorDefaultScopeApplied: false, // avoid re-applying collaborator default collection scope
-  sharedCollectionLandingId: "", // collaborator shared-link landing collection
-  lastCollaboratorBrowseUnlockAt: 0, // guards accidental follow-up taps right after browse unlock
-  openQuestions: [],             // open question annotations (owners only)
+  allItemsTreeCollapsed: null,
+  collaboratorTreeUnlocked: false, // legacy collaborator-mode flag; inactive in local owner mode
+  collaboratorDefaultScopeApplied: false,
+  sharedCollectionLandingId: "",
+  lastCollaboratorBrowseUnlockAt: 0,
+  openQuestions: [],             // legacy question dashboard; inactive in local owner mode
   questionPollTimer: null,
 };
 
@@ -117,7 +121,7 @@ const _B = Shared.basePath;
 const SIDEBAR_VISIBILITY_KEY = "inspirations.ui.sidebar.hidden.v1";
 const SIDEBAR_WIDTH_KEY = "inspirations.ui.sidebar.width.v1";
 const VIEW_MODE_KEY = "inspirations.ui.view.mode.v1";
-const CONTEXT_LINK_BANNER_DEFAULT = "Use this shared context link to review the referenced item.";
+const CONTEXT_LINK_BANNER_DEFAULT = "This local link opened a referenced item.";
 const CLASSIFICATION_TRACK_LABELS = {
   style_product_decor: "Style / Decor",
   construction_concern: "Construction",
@@ -205,9 +209,7 @@ const INGEST_TAG_GROUPS = [
 ];
 
 async function apiUpload(path, formData) {
-  const actorToken = typeof Shared.getActorToken === "function" ? Shared.getActorToken() : "";
-  const headers = actorToken ? { "X-Actor-Token": actorToken } : {};
-  const res = await fetch(_bp(path), { method: "POST", body: formData, headers });
+  const res = await fetch(_bp(path), { method: "POST", body: formData });
   if (!res.ok) { const t = await res.text(); throw new Error(t || res.statusText); }
   return res.json();
 }
@@ -223,9 +225,24 @@ function semanticQueryFromInput(value) {
   return "";
 }
 
+function _mediaVersionForAsset(asset) {
+  const raw = String(asset?.sha256 || asset?.stored_video_path || asset?.stored_path || asset?.thumb_path || "").trim();
+  if (!raw) return "";
+  let hash = 0;
+  for (let i = 0; i < raw.length; i += 1) hash = ((hash << 5) - hash + raw.charCodeAt(i)) | 0;
+  return Math.abs(hash).toString(36);
+}
+
+function _mediaUrlForAsset(asset, kind) {
+  const assetId = String(asset?.id || "").trim();
+  if (!assetId) return "";
+  const version = _mediaVersionForAsset(asset);
+  return `${_B}/media/${encodeURIComponent(assetId)}?kind=${encodeURIComponent(kind)}${version ? `&v=${version}` : ""}`;
+}
+
 function previewForAsset(a) {
-  if (a.thumb_path) return `${_B}/media/${a.id}?kind=thumb`;
-  if (a.stored_path && IMAGE_SUFFIX_RE.test(a.stored_path)) return `${_B}/media/${a.id}?kind=original`;
+  if (a.thumb_path) return _mediaUrlForAsset(a, "thumb");
+  if (a.stored_path && IMAGE_SUFFIX_RE.test(a.stored_path)) return _mediaUrlForAsset(a, "original");
   if (a.image_url && IMAGE_SUFFIX_RE.test(a.image_url)) return a.image_url;
   return "";
 }
@@ -241,8 +258,9 @@ function isVideoAsset(asset) {
 }
 
 function videoUrlForAsset(asset) {
-  if (!asset || !isVideoAsset(asset)) return "";
-  if (asset.stored_path) return `${_B}/media/${asset.id}?kind=original`;
+  if (!asset) return "";
+  if (asset.stored_video_path) return _mediaUrlForAsset(asset, "video");
+  if (asset.stored_path && VIDEO_SUFFIX_RE.test(asset.stored_path)) return _mediaUrlForAsset(asset, "original");
   if (asset.image_url && VIDEO_SUFFIX_RE.test(asset.image_url)) return asset.image_url;
   return "";
 }
@@ -444,16 +462,6 @@ function clearContextLinkBanner() {
   banner.classList.remove("context-link-banner-error");
 }
 
-function _contextLinkPayloadFromUrl() {
-  const params = new URLSearchParams(window.location.search || "");
-  const collectionId = (params.get("collection_id") || "").trim();
-  const itemId = (params.get("item_id") || "").trim();
-  if (!collectionId || !itemId) return null;
-  const openRaw = (params.get("open") || "").trim().toLowerCase();
-  const shouldAutoOpen = openRaw === "1" || openRaw === "true" || openRaw === "yes";
-  return { collectionId, itemId, shouldAutoOpen };
-}
-
 function _directItemLinkPayloadFromUrl() {
   const params = new URLSearchParams(window.location.search || "");
   const collectionId = (params.get("collection_id") || "").trim();
@@ -474,41 +482,6 @@ function _collectionScopeIdFromUrl() {
   }
 }
 
-function _contextLinkMessageForReason(reason) {
-  const key = String(reason || "").trim();
-  if (key === "item_not_in_collection") return "This item is no longer in this collection.";
-  if (key === "collection_not_found") return "This shared collection no longer exists.";
-  if (key === "collection_not_shared_with_actor") return "This shared collection is not available for your current sign-in.";
-  if (key === "item_hidden_for_role") return "This shared item is hidden for your role.";
-  if (key === "item_missing") return "This shared item is no longer available.";
-  return "This shared context could not be resolved.";
-}
-
-function _contextCollectionIdForModal() {
-  const ids = getCollectionFilterIds();
-  if (ids.length === 1) return ids[0];
-  return "";
-}
-
-function _buildContextLink(collectionId, itemId) {
-  const url = new URL(window.location.href);
-  url.search = "";
-  url.hash = "";
-  url.searchParams.set("collection_id", collectionId);
-  url.searchParams.set("item_id", itemId);
-  url.searchParams.set("open", "1");
-  return url.toString();
-}
-
-function _buildDirectItemLink(itemId) {
-  const url = new URL(window.location.href);
-  url.search = "";
-  url.hash = "";
-  url.searchParams.set("item_id", itemId);
-  url.searchParams.set("open", "1");
-  return url.toString();
-}
-
 function _setModalMediaStatus(message = "", { error = false } = {}) {
   const statusEl = $("#modalMediaStatus");
   if (!statusEl) return;
@@ -523,10 +496,10 @@ function _loadModalImageAsset(asset, seq) {
   const img = $("#modalImage");
   if (!img) return;
   const assetId = String(asset?.id || "").trim();
-  const thumbUrl = asset?.thumb_path ? `${_B}/media/${assetId}?kind=thumb` : "";
+  const thumbUrl = asset?.thumb_path ? _mediaUrlForAsset(asset, "thumb") : "";
   const originalUrl = asset?.stored_path
-    ? `${_B}/media/${assetId}?kind=original`
-    : (asset?.thumb_path ? `${_B}/media/${assetId}?kind=original` : String(asset?.image_url || "").trim());
+    ? _mediaUrlForAsset(asset, "original")
+    : (asset?.thumb_path ? _mediaUrlForAsset(asset, "original") : String(asset?.image_url || "").trim());
 
   const showUnavailable = () => {
     if (!_isCurrentModalLoad(assetId, seq)) return;
@@ -589,133 +562,48 @@ function _loadModalImageAsset(asset, seq) {
   loadOriginalDirect();
 }
 
-async function _copyText(value) {
-  const text = String(value || "");
-  if (!text) return;
-  try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(text);
-      return;
-    }
-  } catch (_) {
-    // fallback below
-  }
-  const ta = document.createElement("textarea");
-  ta.value = text;
-  ta.style.position = "fixed";
-  ta.style.left = "-1000px";
-  document.body.appendChild(ta);
-  ta.select();
-  try { document.execCommand("copy"); } finally { ta.remove(); }
-}
-
-function _modalShareCanUseSystemSheet(link) {
-  if (!link || !navigator || typeof navigator.share !== "function") return false;
-  if (typeof navigator.canShare === "function") {
-    try {
-      return navigator.canShare({ url: link });
-    } catch (_) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function _setShareButtonsDisabled(disabled, title = "") {
-  const shareBtn = $("#modalSharePrimaryBtn");
-  if (shareBtn) {
-    shareBtn.disabled = !!disabled;
-    shareBtn.title = title ? String(title) : "";
-  }
-}
-
-function wireModalShareActions(asset) {
-  const shareBtn = $("#modalSharePrimaryBtn");
-  if (!shareBtn) return;
-
-  if (!state.actor) {
-    _setShareButtonsDisabled(true, "Sign in to share context links.");
+function _loadModalVideoAsset(asset, seq, videoUrl) {
+  const img = $("#modalImage");
+  const video = $("#modalVideo");
+  if (!video || !videoUrl) {
+    _loadModalImageAsset(asset, seq);
     return;
   }
-
-  const itemId = String(asset?.id || "").trim();
-  if (!itemId) {
-    _setShareButtonsDisabled(true, "This item does not have a shareable link yet.");
-    return;
-  }
-
-  _setShareButtonsDisabled(false);
-  const collectionId = _contextCollectionIdForModal();
-  const link = collectionId ? _buildContextLink(collectionId, itemId) : _buildDirectItemLink(itemId);
-  const title = displayTitle(asset);
-  const summary = title ? `Please review: ${title}` : "Please review this item";
-  const useSystemShare = _modalShareCanUseSystemSheet(link);
-  shareBtn.textContent = useSystemShare ? "Share…" : "Copy Link";
-  shareBtn.title = collectionId
-    ? "Share a link that keeps this collection context."
-    : "Share a direct link to this item.";
-  shareBtn.onclick = async (e) => {
-    if (e) { e.preventDefault(); e.stopPropagation(); }
-    if (useSystemShare) {
-      try {
-        await navigator.share({ title: title || "Shared item", text: summary, url: link });
-        return;
-      } catch (err) {
-        if (err && err.name === "AbortError") return;
-      }
-    }
-    await _copyText(link);
-    Shared.showToast("Context link copied", { type: "success", duration: 1800 });
+  let fallbackTimer = 0;
+  const showPosterFallback = () => {
+    if (!_isCurrentModalLoad(asset.id, seq)) return;
+    window.clearTimeout(fallbackTimer);
+    video.onerror = null;
+    video.onloadedmetadata = null;
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    video.hidden = true;
+    _loadModalImageAsset(asset, seq);
   };
-}
 
-async function restoreContextLinkFromUrl() {
-  const payload = _contextLinkPayloadFromUrl();
-  if (!payload) return;
-  if (!state.actor) {
-    setContextLinkBanner("Please sign in to open this shared context link.", { error: true });
-    return;
+  _setModalMediaStatus("Loading video…");
+  if (img) {
+    img.removeAttribute("src");
+    img.style.display = "none";
+    img.onload = null;
+    img.onerror = null;
   }
-  let report = null;
-  try {
-    report = await api(
-      `/api/context/resolve?collection_id=${encodeURIComponent(payload.collectionId)}&item_id=${encodeURIComponent(payload.itemId)}`
-    );
-  } catch (e) {
-    setContextLinkBanner(`Unable to resolve shared context: ${formatApiError(e)}`, { error: true });
-    return;
-  }
-
-  const collectionName = String(
-    report?.collection_name
-    || (state.collections.find((c) => c.id === payload.collectionId)?.name || "")
-  );
-  if (!["collection_not_found", "collection_not_shared_with_actor"].includes(String(report?.reason || ""))) {
-    state.currentSource = null;
-    state.currentBoard = null;
-    state.currentContentKind = null;
-    clearCatalogFilter();
-    setCollectionFilterIds([payload.collectionId], { label: collectionName, nodeId: null });
-    if (isCollaboratorActor()) state.sharedCollectionLandingId = payload.collectionId;
-    state.offset = 0;
-    renderCatalogTree();
-    await loadAssets();
-  }
-
-  if (!report || !report.found) {
-    setContextLinkBanner(_contextLinkMessageForReason(report?.reason), { error: true });
-    return;
-  }
-
-  clearContextLinkBanner();
-  if (!payload.shouldAutoOpen) return;
-  let asset = state.assets.find((a) => a.id === payload.itemId);
-  if (!asset) asset = await fetchAssetForModal(payload.itemId);
-  if (!asset) {
-    setContextLinkBanner("Shared item could not be opened in this session.", { error: true });
-    return;
-  }
-  await openModal(asset);
+  video.onerror = showPosterFallback;
+  video.onloadedmetadata = () => {
+    if (!_isCurrentModalLoad(asset.id, seq)) return;
+    window.clearTimeout(fallbackTimer);
+    _setModalMediaStatus("");
+  };
+  video.src = videoUrl;
+  const poster = asset.thumb_path ? _mediaUrlForAsset(asset, "thumb") : "";
+  if (poster) video.poster = poster;
+  else video.removeAttribute("poster");
+  video.hidden = false;
+  video.load();
+  fallbackTimer = window.setTimeout(() => {
+    if (video.readyState === HTMLMediaElement.HAVE_NOTHING) showPosterFallback();
+  }, 2200);
 }
 
 async function restoreDirectItemLinkFromUrl() {
@@ -725,7 +613,7 @@ async function restoreDirectItemLinkFromUrl() {
   let asset = state.assets.find((a) => String(a?.id || "") === String(payload.itemId || ""));
   if (!asset) asset = await fetchAssetForModal(payload.itemId);
   if (!asset) {
-    setContextLinkBanner("This shared item is not available in this session.", { error: true });
+    setContextLinkBanner("This item is not available in this session.", { error: true });
     return;
   }
   clearContextLinkBanner();
@@ -737,12 +625,12 @@ function applyCollectionScopeFromUrl() {
   const collectionId = _collectionScopeIdFromUrl();
   if (!collectionId) return;
   if (!state.actor) {
-    setContextLinkBanner("Please sign in to open this shared collection link.", { error: true });
+    setContextLinkBanner("Local owner mode is still starting; try again in a moment.", { error: true });
     return;
   }
   const col = state.collections.find((c) => String(c.id || "") === collectionId);
   if (!col) {
-    setContextLinkBanner("This shared collection is not available for your current sign-in.", { error: true });
+    setContextLinkBanner("This collection is not available.", { error: true });
     return;
   }
   state.currentSource = null;
@@ -753,7 +641,7 @@ function applyCollectionScopeFromUrl() {
   if (isCollaboratorActor()) state.sharedCollectionLandingId = collectionId;
   if (Array.isArray(state.catalogTree) && state.catalogTree.length) renderCatalogTree();
   else updateSidebarModeVisibility();
-  if (!_contextLinkPayloadFromUrl()) clearContextLinkBanner();
+  clearContextLinkBanner();
 }
 
 function sourceKeyFromNode(node) {
@@ -962,6 +850,8 @@ function getReviewScopeInfo() {
 }
 
 function _currentTrackFilterValues() {
+  const facetValues = getClassificationFacetValues("track");
+  if (facetValues.length) return facetValues;
   if (String(state.currentClassificationAxis || "").trim() !== "track") return [];
   return String(state.currentClassificationValue || "")
     .split(",")
@@ -996,8 +886,7 @@ function _buildCurrentAssetQueryParams({ limit, offset = 0, ids = null } = {}) {
     if (state.currentSource) params.set("source", state.currentSource);
     if (state.currentBoard) params.set("board", state.currentBoard);
     if (state.currentContentKind) params.set("content_kind", state.currentContentKind);
-    if (state.currentClassificationAxis) params.set("classification_axis", state.currentClassificationAxis);
-    if (state.currentClassificationValue) params.set("classification_value", state.currentClassificationValue);
+    appendClassificationFacetParams(params);
     const collectionIds = getCollectionFilterIds();
     if (collectionIds.length) params.set("collection_id", collectionIds.join(","));
   }
@@ -1005,8 +894,8 @@ function _buildCurrentAssetQueryParams({ limit, offset = 0, ids = null } = {}) {
   if (state.triageFilter === "needs-comment") {
     params.set("needs_annotation", "1");
     params.set("include_hidden", "1");
-  } else if (state.triageFilter === "hidden") {
-    params.set("triage_status", "hidden");
+  } else if (_isHiddenReviewQueue()) {
+    _appendHiddenReviewQueueParams(params);
     params.set("include_hidden", "1");
   } else if (state.triageFilter === "flagged") {
     params.set("flagged", "1");
@@ -1023,8 +912,17 @@ function _buildCurrentCatalogQueryParams({ limit, offset = 0 } = {}) {
   for (const file of catalogFiles) params.append("file", file);
   if (limit != null) params.set("limit", String(limit));
   params.set("offset", String(offset));
-  if (state.triageFilter === "hidden" || state.triageFilter === "needs-comment" || state.triageFilter === "flagged") {
+  if (state.triageFilter === "needs-comment") {
+    params.set("needs_annotation", "1");
     params.set("include_hidden", "1");
+  } else if (_isHiddenReviewQueue()) {
+    _appendHiddenReviewQueueParams(params);
+    params.set("include_hidden", "1");
+  } else if (state.triageFilter === "flagged") {
+    params.set("flagged", "1");
+    params.set("include_hidden", "1");
+  } else if (state.triageFilter) {
+    params.set("triage_status", state.triageFilter);
   }
   return params;
 }
@@ -1083,11 +981,7 @@ async function _fetchAllAssetsForCurrentScope() {
 }
 
 function _reviewActorLabel() {
-  const actor = state.actor || null;
-  if (!actor) return "Reviewer: Not signed in";
-  const name = String(actor.name || "Unknown").trim() || "Unknown";
-  const role = String(actor.role || "").trim().toLowerCase();
-  return role ? `Reviewer: ${name} (${role})` : `Reviewer: ${name}`;
+  return "Reviewer: Jim";
 }
 
 function _actorRoleLabel(role) {
@@ -1113,15 +1007,11 @@ function _actorContextLabel() {
 }
 
 function updateActorContextChips() {
-  const role = String(state.actor?.role || "").trim().toLowerCase();
-  const roleClass = role === "owner" ? "role-owner" : (role ? "role-collaborator" : "role-neutral");
   for (const id of ["actorContextChip", "modalActorChip"]) {
     const el = document.getElementById(id);
     if (!el) continue;
-    el.hidden = false;
-    el.textContent = _actorContextLabel();
-    el.classList.remove("role-owner", "role-collaborator", "role-neutral");
-    el.classList.add(roleClass);
+    el.hidden = true;
+    el.textContent = "";
   }
 }
 
@@ -1151,10 +1041,87 @@ function hasCollectionFilter() {
 }
 
 function hasClassificationFilter() {
-  return !!String(state.currentClassificationAxis || "").trim();
+  return getClassificationFacetEntries().length > 0 || !!String(state.currentClassificationAxis || "").trim();
+}
+
+function _classificationFacetKey(axis, value = "") {
+  return `${String(axis || "").trim()}:${String(value || "").trim()}`;
+}
+
+function getClassificationFacetValues(axis) {
+  const cleanAxis = String(axis || "").trim();
+  if (!cleanAxis) return [];
+  const values = state.classificationFacets?.[cleanAxis];
+  return Array.isArray(values)
+    ? values.map((value) => String(value || "").trim()).filter(Boolean)
+    : [];
+}
+
+function getClassificationFacetEntries() {
+  const facets = state.classificationFacets || {};
+  const entries = [];
+  for (const [axis, values] of Object.entries(facets)) {
+    const cleanAxis = String(axis || "").trim();
+    if (!cleanAxis) continue;
+    if (Array.isArray(values) && values.length) {
+      for (const value of values) {
+        const cleanValue = String(value || "").trim();
+        if (cleanValue) entries.push({ axis: cleanAxis, value: cleanValue });
+      }
+    } else {
+      entries.push({ axis: cleanAxis, value: "" });
+    }
+  }
+  return entries;
+}
+
+function classificationFacetIsActive(axis, value = "") {
+  const cleanAxis = String(axis || "").trim();
+  const cleanValue = String(value || "").trim();
+  if (!cleanAxis) return false;
+  const values = getClassificationFacetValues(cleanAxis);
+  if (!cleanValue) return Object.prototype.hasOwnProperty.call(state.classificationFacets || {}, cleanAxis);
+  return values.includes(cleanValue);
+}
+
+function classificationFacetLabel(axis, value = "") {
+  const key = _classificationFacetKey(axis, value);
+  const label = String(state.classificationFacetLabels?.[key] || "").trim();
+  if (label) return label;
+  return String(value || axis || "").replace(/_/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+function _syncLegacyClassificationStateFromFacets() {
+  const entries = getClassificationFacetEntries();
+  if (entries.length === 1) {
+    const only = entries[0];
+    state.currentClassificationAxis = only.axis;
+    state.currentClassificationValue = only.value || null;
+    state.currentClassificationLabel = classificationFacetLabel(only.axis, only.value);
+    return;
+  }
+  state.currentClassificationAxis = null;
+  state.currentClassificationValue = null;
+  state.currentClassificationLabel = entries.length
+    ? entries.map((entry) => classificationFacetLabel(entry.axis, entry.value)).join(", ")
+    : "";
+}
+
+function appendClassificationFacetParams(params) {
+  const entries = getClassificationFacetEntries();
+  if (!entries.length && state.currentClassificationAxis) {
+    params.set("classification_axis", state.currentClassificationAxis);
+    if (state.currentClassificationValue) params.set("classification_value", state.currentClassificationValue);
+    return;
+  }
+  for (const entry of entries) {
+    params.append("facet", entry.value ? `${entry.axis}:${entry.value}` : entry.axis);
+  }
 }
 
 function clearClassificationFilter() {
+  state.classificationFacets = {};
+  state.classificationFacetLabels = {};
   state.currentClassificationAxis = null;
   state.currentClassificationValue = null;
   state.currentClassificationLabel = "";
@@ -1168,16 +1135,55 @@ function setClassificationFilter(axis, value = "", { label = "", nodeId = null }
     state.currentTreeNodeId = null;
     return;
   }
-  state.currentClassificationAxis = cleanAxis;
-  state.currentClassificationValue = cleanValue || null;
-  state.currentClassificationLabel = label || cleanValue || cleanAxis;
+  state.classificationFacets = { [cleanAxis]: cleanValue ? [cleanValue] : [] };
+  state.classificationFacetLabels = {};
+  if (label) state.classificationFacetLabels[_classificationFacetKey(cleanAxis, cleanValue)] = label;
+  _syncLegacyClassificationStateFromFacets();
   state.currentTreeNodeId = nodeId;
+}
+
+function toggleClassificationFacet(axis, value, { label = "" } = {}) {
+  const cleanAxis = String(axis || "").trim();
+  const cleanValue = String(value || "").trim();
+  if (!cleanAxis || !cleanValue) return;
+  const facets = { ...(state.classificationFacets || {}) };
+  const currentValues = Array.isArray(facets[cleanAxis]) ? [...facets[cleanAxis]] : [];
+  const existingIdx = currentValues.indexOf(cleanValue);
+  if (existingIdx >= 0) {
+    currentValues.splice(existingIdx, 1);
+  } else {
+    currentValues.push(cleanValue);
+  }
+  if (currentValues.length) facets[cleanAxis] = currentValues;
+  else delete facets[cleanAxis];
+  state.classificationFacets = facets;
+  state.classificationFacetLabels = { ...(state.classificationFacetLabels || {}) };
+  const key = _classificationFacetKey(cleanAxis, cleanValue);
+  if (existingIdx >= 0) delete state.classificationFacetLabels[key];
+  else state.classificationFacetLabels[key] = label || cleanValue;
+  _syncLegacyClassificationStateFromFacets();
+  state.currentTreeNodeId = null;
+}
+
+function clearClassificationFacetAxis(axis) {
+  const cleanAxis = String(axis || "").trim();
+  if (!cleanAxis) return;
+  const facets = { ...(state.classificationFacets || {}) };
+  delete facets[cleanAxis];
+  state.classificationFacets = facets;
+  const labels = { ...(state.classificationFacetLabels || {}) };
+  for (const key of Object.keys(labels)) {
+    if (key.startsWith(`${cleanAxis}:`)) delete labels[key];
+  }
+  state.classificationFacetLabels = labels;
+  _syncLegacyClassificationStateFromFacets();
 }
 
 function clearCollectionFilter() {
   state.currentCollection = null;
   state.currentCollectionIds = [];
   state.currentCollectionLabel = "";
+  syncCollectionPdfExportButton();
 }
 
 function isAllItemsScopeActive() {
@@ -1196,10 +1202,11 @@ function setCollectionFilterIds(ids, { label = "", nodeId = null } = {}) {
     state.currentCollectionLabel = label || "";
     state.currentTreeNodeId = nodeId;
   }
+  syncCollectionPdfExportButton();
 }
 
 function isCollaboratorActor() {
-  return !!(state.actor && state.actor.role !== "owner");
+  return false;
 }
 
 function _activeSharedCollectionLandingId() {
@@ -1369,13 +1376,42 @@ function renderModalSourceLinks(asset) {
     sourceSiteRow.hidden = true;
   }
 
+  const brokenSourceBtn = $("#modalBrokenSourceBtn");
+  if (brokenSourceBtn) {
+    brokenSourceBtn.hidden = !(isOwner() && asset.source !== "scan" && (isHttpRef || isHttpSite));
+    brokenSourceBtn.disabled = false;
+    brokenSourceBtn.onclick = () => { void markModalBrokenSourceLink(asset); };
+  }
+
   const sourceLinksWrap = $("#modalSourceLinks");
   if (sourceLinksWrap) {
     const primaryVisible = !!(sourceLink && !sourceLink.hidden);
     const secondaryVisible = !!(sourceSiteRow && !sourceSiteRow.hidden);
-    sourceLinksWrap.hidden = !(primaryVisible || secondaryVisible);
+    const brokenActionVisible = !!(brokenSourceBtn && !brokenSourceBtn.hidden);
+    sourceLinksWrap.hidden = !(primaryVisible || secondaryVisible || brokenActionVisible);
   }
 
+}
+
+async function markModalBrokenSourceLink(asset) {
+  if (!asset?.id || !isOwner()) return;
+  if (!window.confirm("Flag this item as a broken source link and hide it from the main library?")) return;
+  const button = $("#modalBrokenSourceBtn");
+  if (button) button.disabled = true;
+  try {
+    const data = await api(`/api/assets/${encodeURIComponent(asset.id)}/broken-source`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    if (data.asset) replaceAssetInState(data.asset);
+    closeModal();
+    await Promise.all([loadAssets(), loadCatalogTree(), loadReviewQueueCounts()]);
+    Shared.showToast("Broken source link flagged and hidden.", { type: "success", duration: 3000 });
+  } catch (e) {
+    Shared.showToast(`Unable to hide broken link: ${formatApiError(e)}`, { type: "error", duration: 3200 });
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 function _readSidebarHiddenPref() {
@@ -1612,14 +1648,13 @@ async function loadAssets(opts = {}) {
   if (state.currentBoard) params.set("board", state.currentBoard);
   if (state.currentContentKind) params.set("content_kind", state.currentContentKind);
   if (state.currentCollection) params.set("collection_id", state.currentCollection);
-  if (state.currentClassificationAxis) params.set("classification_axis", state.currentClassificationAxis);
-  if (state.currentClassificationValue) params.set("classification_value", state.currentClassificationValue);
+  appendClassificationFacetParams(params);
 
   if (state.triageFilter === "needs-comment") {
     params.set("needs_annotation", "1");
     params.set("include_hidden", "1");
-  } else if (state.triageFilter === "hidden") {
-    params.set("triage_status", "hidden");
+  } else if (_isHiddenReviewQueue()) {
+    _appendHiddenReviewQueueParams(params);
     params.set("include_hidden", "1");
   } else if (state.triageFilter === "flagged") {
     params.set("flagged", "1");
@@ -1637,10 +1672,7 @@ async function loadAssets(opts = {}) {
     const catalogFiles = getCatalogFilterFiles();
     if (catalogFiles.length) {
       // Catalog browsing: load items from one or more catalog files
-      const catParams = new URLSearchParams();
-      for (const file of catalogFiles) catParams.append("file", file);
-      catParams.set("limit", ASSETS_PAGE_SIZE);
-      catParams.set("offset", state.offset);
+      const catParams = _buildCurrentCatalogQueryParams({ limit: ASSETS_PAGE_SIZE, offset: state.offset });
       data = await api(`/api/catalog/items?${catParams}`);
     } else if (semQ) {
       const res = await fetch(_bp(`/api/search/similar?${params}`));
@@ -1698,6 +1730,7 @@ function syncTopFilterToolbar() {
   const input = $("#canvasTextFilter");
   const explorerActive = isExplorerViewActive();
 
+  syncCollectionPdfExportButton();
   if (cardToolbar) cardToolbar.hidden = explorerActive;
   if (explorerToolbar) {
     explorerToolbar.hidden = !explorerActive || explorerToolbar.children.length === 0;
@@ -1854,6 +1887,9 @@ function buildCard(a) {
   const quickStarHtml = isOwner()
     ? `<button class="card-quick-star${isKeeper ? " starred" : ""}" title="${isKeeper ? "Remove keeper" : "Mark as keeper"}" type="button">★</button>`
     : "";
+  const quickFlagHtml = canUseFlag()
+    ? `<button class="card-quick-flag${flagged ? " flagged" : ""}" title="${flagged ? "Remove flag" : "Flag for follow-up"}" type="button">⚑</button>`
+    : "";
 
   const selectedClass = state.canvasReview && state.canvasSelected.has(a.id) ? " canvas-selected" : "";
   el.className = "card" + selectedClass;
@@ -1874,6 +1910,7 @@ function buildCard(a) {
       <span class="source-badge source-${escapeHtml(a.source || "")}">${escapeHtml(sourceLabel)}</span>
       ${quickStarHtml}
       ${quickTagHtml}
+      ${quickFlagHtml}
       ${scanNavHtml}
     </div>
     <div class="card-footer">
@@ -1945,6 +1982,32 @@ function buildCard(a) {
         Shared.showToast(newTagged ? "Tagged for diagnosis" : "Tag removed", { type: "success", duration: 2000 });
       } catch (err) {
         Shared.showToast(`Tag failed: ${formatApiError(err)}`, { type: "error" });
+      }
+    });
+  }
+
+  // Quick-flag button wiring (owner follow-up marker)
+  const quickFlagBtn = el.querySelector(".card-quick-flag");
+  if (quickFlagBtn) {
+    quickFlagBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!canUseFlag()) {
+        Shared.showToast("Flagging is owner-only.", { type: "info" });
+        return;
+      }
+      const newFlagged = a.flagged ? 0 : 1;
+      try {
+        await api(`/api/assets/${encodeURIComponent(a.id)}/flag`, {
+          method: "POST",
+          body: JSON.stringify({ flagged: newFlagged }),
+        });
+        a.flagged = newFlagged;
+        quickFlagBtn.classList.toggle("flagged", !!newFlagged);
+        quickFlagBtn.title = newFlagged ? "Remove flag" : "Flag for follow-up";
+        renderGrid();
+        Shared.showToast(newFlagged ? "Flagged for follow-up." : "Flag removed.", { type: "success", duration: 1800 });
+      } catch (err) {
+        Shared.showToast(`Flag failed: ${formatApiError(err)}`, { type: "error" });
       }
     });
   }
@@ -2024,10 +2087,7 @@ async function refreshSidebarTrees() {
 function resetTriageFilter() {
   if (state.triageFilter) {
     state.triageFilter = "";
-    // Update status chip UI to reflect "All"
-    $$("[data-triage]").forEach((c) => {
-      c.classList.toggle("active", c.dataset.triage === "");
-    });
+    syncReviewQueueSelect();
   }
 }
 
@@ -2152,7 +2212,7 @@ function renderCatalogTree() {
     const groups = [
       {
         id: "browse-group:classification",
-        label: "Classification",
+        label: "Refine By",
         nodes: primaryClassificationNodes,
         defaultExpanded: true,
         builder: (node) => buildClassificationNode(node),
@@ -2198,6 +2258,15 @@ function renderCatalogTree() {
 function _treeNodeContainsActiveSelection(node) {
   if (!node) return false;
   if (state.currentTreeNodeId && state.currentTreeNodeId === node.id) return true;
+  if (node.type === "classification") {
+    const axisName = String(node.axis_name || "").trim();
+    if (classificationFacetIsActive(axisName)) return true;
+  }
+  if (node.type === "classification_item") {
+    const axisName = String(node.axis_name || "").trim();
+    const axisValue = String(node.axis_value || "").trim();
+    if (classificationFacetIsActive(axisName, axisValue)) return true;
+  }
   return Array.isArray(node.children) && node.children.some((child) => _treeNodeContainsActiveSelection(child));
 }
 
@@ -2287,7 +2356,6 @@ function buildSourceNode(node) {
     state.currentContentKind = null;
     clearCollectionFilter();
     clearCatalogFilter();
-    clearClassificationFilter();
     state.currentTreeNodeId = node.id;
     state.offset = 0;
     renderCatalogTree();
@@ -2316,7 +2384,6 @@ function buildSourceNode(node) {
       state.currentContentKind = subtypeKind || null;
       clearCollectionFilter();
       clearCatalogFilter();
-      clearClassificationFilter();
       state.currentTreeNodeId = child.id || null;
       state.offset = 0;
       renderCatalogTree();
@@ -2364,7 +2431,6 @@ function buildSourceNode(node) {
         state.currentContentKind = null;
         clearCollectionFilter();
         clearCatalogFilter();
-        clearClassificationFilter();
         state.currentTreeNodeId = child.id;
       }
       state.offset = 0;
@@ -2462,8 +2528,13 @@ function buildClassificationNode(node) {
 
   const nodeKey = node.id;
   const axisName = String(node.axis_name || "").trim();
-  const isActiveHeader = state.currentTreeNodeId === node.id
-    || (state.currentClassificationAxis === axisName && !state.currentClassificationValue);
+  const hasActiveChild = (node.children || []).some(
+    (child) => classificationFacetIsActive(
+      String(child.axis_name || "").trim(),
+      String(child.axis_value || "").trim(),
+    )
+  );
+  const isActiveHeader = hasActiveChild || classificationFacetIsActive(axisName);
   const toggle = document.createElement("button");
   toggle.className = `tree-toggle${isActiveHeader ? " active" : ""}`;
   toggle.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label">${escapeHtml(node.label)}</span><span class="tree-count">${node.count}</span>`;
@@ -2471,48 +2542,40 @@ function buildClassificationNode(node) {
   const children = document.createElement("div");
   children.className = "tree-children";
 
-  const hasActiveChild = (node.children || []).some(
-    (child) => (
-      state.currentClassificationAxis === String(child.axis_name || "").trim()
-      && state.currentClassificationValue === String(child.axis_value || "").trim()
-    )
-  );
   if (hasActiveChild || isActiveHeader) state.expandedTreeNodes.add(nodeKey);
   _setTreeNodeExpanded(nodeKey, toggle, children, state.expandedTreeNodes.has(nodeKey));
   _wireTreeArrowToggle(toggle, nodeKey, children);
 
   toggle.onclick = () => {
     if (shouldIgnorePostBrowseUnlockTreeClick()) return;
-    resetTriageFilter();
-    state.currentSource = null;
-    state.currentBoard = null;
-    state.currentContentKind = null;
-    clearCollectionFilter();
-    clearCatalogFilter();
-    setClassificationFilter(axisName, "", { label: node.label, nodeId: node.id });
-    state.offset = 0;
-    renderCatalogTree();
-    loadAssets();
+    _toggleTreeNodeExpanded(nodeKey, toggle, children);
   };
+
+  if (hasActiveChild || classificationFacetIsActive(axisName)) {
+    const clearBtn = document.createElement("button");
+    clearBtn.className = "tree-leaf tree-facet-clear";
+    clearBtn.type = "button";
+    clearBtn.innerHTML = `<span>Clear ${escapeHtml(node.label)}</span>`;
+    clearBtn.onclick = () => {
+      clearClassificationFacetAxis(axisName);
+      state.offset = 0;
+      renderCatalogTree();
+      loadAssets();
+    };
+    children.appendChild(clearBtn);
+  }
 
   for (const child of (node.children || [])) {
     const axisValue = String(child.axis_value || "").trim();
     const leaf = document.createElement("button");
-    const isActive = (
-      state.currentClassificationAxis === axisName
-      && state.currentClassificationValue === axisValue
-    );
-    leaf.className = `tree-leaf${isActive ? " active" : ""}`;
+    const isActive = classificationFacetIsActive(axisName, axisValue);
+    leaf.className = `tree-leaf${isActive ? " active facet-active" : ""}`;
+    leaf.type = "button";
+    leaf.setAttribute("aria-pressed", isActive ? "true" : "false");
     leaf.innerHTML = `<span>${escapeHtml(child.label)}</span><span class="tree-count">${child.count}</span>`;
     leaf.onclick = () => {
       if (shouldIgnorePostBrowseUnlockTreeClick()) return;
-      resetTriageFilter();
-      state.currentSource = null;
-      state.currentBoard = null;
-      state.currentContentKind = null;
-      clearCollectionFilter();
-      clearCatalogFilter();
-      setClassificationFilter(axisName, axisValue, { label: child.label, nodeId: child.id });
+      toggleClassificationFacet(axisName, axisValue, { label: child.label });
       state.offset = 0;
       renderCatalogTree();
       loadAssets();
@@ -2557,7 +2620,6 @@ function buildCollectionLeaf(child, selectedCollectionIds) {
     state.currentBoard = null;
     state.currentContentKind = null;
     clearCatalogFilter();
-    clearClassificationFilter();
     setCollectionFilterIds([child.collection_id], { label: child.label, nodeId: child.id });
     state.offset = 0;
     renderCatalogTree();
@@ -2595,7 +2657,6 @@ function buildCollectionBranchNode(node, selectedCollectionIds) {
     state.currentBoard = null;
     state.currentContentKind = null;
     clearCatalogFilter();
-    clearClassificationFilter();
     setCollectionFilterIds(collectDescendantCollectionIds(node), { label: node.label || "Collections", nodeId: node.id });
     state.offset = 0;
     renderCatalogTree();
@@ -2649,7 +2710,6 @@ function buildCollectionsGroupNode(node) {
     state.currentBoard = null;
     state.currentContentKind = null;
     clearCatalogFilter();
-    clearClassificationFilter();
     setCollectionFilterIds(
       focusedLandingId ? [focusedLandingId] : collectDescendantCollectionIds(node),
       { label: focusedLandingId ? (visibleChildren[0]?.label || "Shared Collection") : "All Collections", nodeId: node.id },
@@ -2759,7 +2819,6 @@ function setSourceFilter(source) {
   state.currentContentKind = null;
   clearCollectionFilter();
   clearCatalogFilter();
-  clearClassificationFilter();
   state.currentTreeNodeId = null;
   state.offset = 0;
   renderCatalogTree();
@@ -2772,7 +2831,6 @@ function setBoardFilter(board) {
   state.currentContentKind = null;
   clearCollectionFilter();
   clearCatalogFilter();
-  clearClassificationFilter();
   state.currentTreeNodeId = null;
   state.offset = 0;
   renderCatalogTree();
@@ -2811,106 +2869,143 @@ async function loadHiddenTree() {
   } catch {
     state.hiddenTree = null;
   }
+  void loadReviewQueueCounts();
 }
 
 function renderHiddenTree() {
   if (isReviewModeActive()) renderReviewSidebarSummary();
 }
 
-// ─── Question badge + polling (owner-only) ──────────────────────────────────────
+// ─── Legacy question dashboard (retired with live sharing) ─────────────────────
 
 async function pollQuestions() {
-  try {
-    const data = await api("/api/questions/dashboard");
-    state.openQuestions = data.questions || [];
-    renderQuestionBadge();
-  } catch {
-    // silent
-  }
+  state.openQuestions = [];
+  renderQuestionBadge();
 }
 
 function refreshQuestionsIfOwner() {
-  if (!isOwner()) return;
-  void pollQuestions();
+  state.openQuestions = [];
+  renderQuestionBadge();
 }
 
 function renderQuestionBadge() {
-  let badge = $("#questionBadge");
-  if (!badge) {
-    // Create badge element in header if it doesn't exist
-    const header = $(".top-bar") || $("header");
-    if (!header) return;
-    badge = document.createElement("button");
-    badge.id = "questionBadge";
-    badge.className = "question-badge";
-    badge.title = "Open questions from collaborators";
-    badge.onclick = toggleQuestionPanel;
-    header.appendChild(badge);
-  }
-  const count = state.openQuestions.length;
-  badge.hidden = count === 0;
-  badge.innerHTML = `<span class="question-badge-icon">?</span><span class="question-badge-count">${count}</span>`;
+  $("#questionBadge")?.remove();
+  $("#questionPanel")?.remove();
 }
 
 function toggleQuestionPanel() {
-  let panel = $("#questionPanel");
-  if (panel) {
-    panel.remove();
-    return;
-  }
-  panel = document.createElement("div");
-  panel.id = "questionPanel";
-  panel.className = "question-panel";
-
-  const header = document.createElement("div");
-  header.className = "question-panel-header";
-  header.innerHTML = `<strong>Open Questions (${state.openQuestions.length})</strong>`;
-  const closeBtn = document.createElement("button");
-  closeBtn.textContent = "\u00d7";
-  closeBtn.className = "question-panel-close";
-  closeBtn.onclick = () => panel.remove();
-  header.appendChild(closeBtn);
-  panel.appendChild(header);
-
-  if (!state.openQuestions.length) {
-    panel.innerHTML += '<div class="question-panel-empty">No open questions!</div>';
-  } else {
-    for (const q of state.openQuestions) {
-      const item = document.createElement("div");
-      item.className = "question-panel-item";
-      item.innerHTML = `
-        <div class="question-panel-item-meta">${escapeHtml(q.actor_name || "Anonymous")} &middot; ${escapeHtml(q.asset_title || "Untitled")}</div>
-        <div class="question-panel-item-text">${escapeHtml(q.text || "(no text)")}</div>
-      `;
-      item.onclick = () => {
-        panel.remove();
-        // Navigate to the asset
-        const asset = state.assets.find((a) => a.id === q.asset_id);
-        if (asset) { openModal(asset); }
-        else { Shared.showToast("Loading item...", { type: "info", duration: 2000 }); }
-      };
-      panel.appendChild(item);
-    }
-  }
-
-  const badge = $("#questionBadge");
-  if (badge) badge.parentElement.appendChild(panel);
-  else document.body.appendChild(panel);
+  renderQuestionBadge();
 }
 
-// ─── Triage status filter ───────────────────────────────────────────────────────
+// ─── Review queue filter ────────────────────────────────────────────────────────
 
-function wireStatusChips() {
-  const chips = $$("[data-triage]");
-  chips.forEach((chip) => {
-    chip.addEventListener("click", () => {
-      chips.forEach((c) => c.classList.remove("active"));
-      chip.classList.add("active");
-      state.triageFilter = chip.dataset.triage;
-      state.offset = 0;
-      renderCatalogTree();
-      loadAssets();
+const REVIEW_QUEUE_LABELS = {
+  "": "All items",
+  pending: "Pending",
+  keeper: "Keepers",
+  hidden: "Hidden",
+  "hidden-manual": "Hidden manually",
+  "hidden-ai": "Hidden by AI cleanup",
+  "needs-comment": "Needs comment",
+  flagged: "Flagged",
+};
+
+function _hiddenReviewQueueActor(value = state.triageFilter) {
+  if (value === "hidden-manual") return "manual";
+  if (value === "hidden-ai") return "ai-reel-triage";
+  return "";
+}
+
+function _isHiddenReviewQueue(value = state.triageFilter) {
+  return value === "hidden" || value === "hidden-manual" || value === "hidden-ai";
+}
+
+function _appendHiddenReviewQueueParams(params) {
+  params.set("triage_status", "hidden");
+  const triageActor = _hiddenReviewQueueActor();
+  if (triageActor) params.set("triage_actor", triageActor);
+}
+
+function syncReviewQueueSelect(counts = null) {
+  const select = $("#reviewQueueFilter");
+  if (!select) return;
+  select.value = state.triageFilter || "";
+  const countByValue = counts || select._reviewQueueCounts || {};
+  select._reviewQueueCounts = countByValue;
+  for (const option of select.options) {
+    const value = String(option.value || "");
+    const label = REVIEW_QUEUE_LABELS[value] || value;
+    const count = Number(countByValue[value]);
+    const suffix = Number.isFinite(count) ? ` · ${count}` : "";
+    option.textContent = value ? `${label}${suffix}` : `Review queue: ${label}${suffix}`;
+  }
+}
+
+async function loadReviewQueueCounts() {
+  if (!isOwner()) return;
+  try {
+    const data = await api("/api/triage/stats");
+    const overall = data?.overall || {};
+    syncReviewQueueSelect({
+      "": Number(overall.total || 0),
+      pending: Number(overall.pending || 0),
+      keeper: Number(overall.keepers || 0),
+      hidden: Number(overall.hidden || 0),
+      "hidden-manual": Number(overall.hidden_manual || 0),
+      "hidden-ai": Number(overall.hidden_ai_cleanup || 0),
+      "needs-comment": Number(overall.needs_comment || 0),
+      flagged: Number(overall.flagged || 0),
     });
+  } catch {
+    syncReviewQueueSelect();
+  }
+}
+
+function clearBrowseScopeForReviewQueue() {
+  const hadBrowseScope = !!(
+    state.q
+    || state.chatPrompt
+    || (state.chatItemIds && state.chatItemIds.length)
+    || state.currentSource
+    || state.currentBoard
+    || state.currentContentKind
+    || hasCollectionFilter()
+    || hasCatalogFilter()
+    || hasClassificationFilter()
+  );
+  state.q = "";
+  state.semanticMode = false;
+  state.chatPrompt = "";
+  state.chatItemIds = null;
+  state.currentSource = null;
+  state.currentBoard = null;
+  state.currentContentKind = null;
+  state.currentTreeNodeId = null;
+  window.clearTimeout(_canvasTextFilterTimer);
+  const textFilter = $("#canvasTextFilter");
+  if (textFilter) textFilter.value = "";
+  clearCatalogFilter();
+  clearClassificationFilter();
+  clearCollectionFilter();
+  return hadBrowseScope;
+}
+
+function wireReviewQueueFilter() {
+  const select = $("#reviewQueueFilter");
+  if (!select) return;
+  select.addEventListener("change", () => {
+    state.triageFilter = String(select.value || "");
+    const clearedBrowseScope = clearBrowseScopeForReviewQueue();
+    state.offset = 0;
+    renderCatalogTree();
+    updateFilterIndicator();
+    loadAssets();
+    if (clearedBrowseScope && state.triageFilter) {
+      Shared.showToast(
+        `Showing ${REVIEW_QUEUE_LABELS[state.triageFilter] || state.triageFilter} across the entire library.`,
+        { type: "info", duration: 2600 },
+      );
+    }
   });
 }
 
@@ -2956,18 +3051,7 @@ async function loadCollectionsForManager() {
 }
 
 async function loadCollectionActors() {
-  if (!isOwner()) {
-    state.collectionActors = [];
-    return;
-  }
-  try {
-    const data = await api("/api/actors");
-    const rows = Array.isArray(data.actors) ? data.actors : [];
-    state.collectionActors = rows.filter((actor) => String(actor?.role || "").trim().toLowerCase() !== "owner");
-  } catch (e) {
-    console.error("Failed to load actors:", e);
-    state.collectionActors = [];
-  }
+  state.collectionActors = [];
 }
 
 function _allManagerCollections() {
@@ -2995,10 +3079,8 @@ function _currentCollectionDetailFormState() {
   return {
     name: String($("#collectionDetailName")?.value || "").trim(),
     description: String($("#collectionDetailDescription")?.value || "").trim(),
-    intent: String($("#collectionDetailIntent")?.value || "working").trim().toLowerCase(),
-    shared_actor_ids: $$("#collectionDetailCollaborators input[type='checkbox'][data-actor-id]:checked")
-      .map((input) => String(input.getAttribute("data-actor-id") || "").trim())
-      .filter(Boolean),
+    intent: "working",
+    shared_actor_ids: [],
   };
 }
 
@@ -3013,7 +3095,7 @@ function _sameStringList(a, b) {
 }
 
 function _collectionIntentLabel(intent) {
-  return String(intent || "").trim().toLowerCase() === "shared" ? "Shared" : "Working";
+  return "Local";
 }
 
 function _collectionActorNamesByIds(actorIds) {
@@ -3026,18 +3108,11 @@ function _collectionActorNamesByIds(actorIds) {
 }
 
 function _sharedWithSummary(names) {
-  const clean = (Array.isArray(names) ? names : []).map((name) => String(name || "").trim()).filter(Boolean);
-  if (!clean.length) return "";
-  if (clean.length === 1) return `Shared with ${clean[0]}`;
-  if (clean.length === 2) return `Shared with ${clean[0]} and ${clean[1]}`;
-  return `Shared with ${clean[0]} +${clean.length - 1} more`;
+  return "";
 }
 
 function _buildSharedCollectionLink(collection, actor) {
-  const url = new URL(window.location.origin + window.location.pathname);
-  url.searchParams.set("actor", String(actor?.token || ""));
-  url.searchParams.set("collection_id", String(collection?.id || ""));
-  return url.toString();
+  return "";
 }
 
 const collectionBulkSelection = {
@@ -3047,16 +3122,8 @@ const collectionBulkSelection = {
 
 function _filteredShareCollections() {
   const rows = (state.collections || []).slice();
-  const filter = String(state.collectionShareFilter || "all");
   const byName = (left, right) => String(left?.name || "").localeCompare(String(right?.name || ""), undefined, { sensitivity: "base" });
-  if (filter === "working") return rows.filter((c) => String(c.intent || "working") !== "shared").sort(byName);
-  if (filter === "shared") return rows.filter((c) => String(c.intent || "working") === "shared").sort(byName);
-  return rows.sort((left, right) => {
-    const leftShared = String(left?.intent || "working").trim().toLowerCase() === "shared" ? 1 : 0;
-    const rightShared = String(right?.intent || "working").trim().toLowerCase() === "shared" ? 1 : 0;
-    if (leftShared !== rightShared) return rightShared - leftShared;
-    return byName(left, right);
-  });
+  return rows.sort(byName);
 }
 
 function _pruneCollectionBulkSelection() {
@@ -3081,10 +3148,10 @@ function _renderCollectionBulkList(kind) {
   }
   if (!listEl) return;
   if (!rows.length) {
-    listEl.innerHTML = `<div class="muted">${isHidden ? "No hidden collections." : "No active collections."}</div>`;
+    listEl.innerHTML = `<div class="muted">${isHidden ? "No archived collections." : "No active collections."}</div>`;
     return;
   }
-  listEl.innerHTML = rows.map((c) => {
+  const renderRow = (c) => {
     const id = String(c.id || "");
     const checked = selected.has(id) ? "checked" : "";
     const name = escapeHtml(String(c.name || "Untitled collection"));
@@ -3092,14 +3159,10 @@ function _renderCollectionBulkList(kind) {
     const provenanceBadge = escapeHtml(String(c.provenance_badge || ""));
     const provenanceLabel = escapeHtml(String(c.provenance_label || ""));
     const provenanceNote = escapeHtml(String(c.provenance_note || ""));
-    const intent = String(c.intent || "working").trim().toLowerCase();
-    const sharedNames = Array.isArray(c.shared_actor_names) ? c.shared_actor_names.filter(Boolean) : [];
-    const intentLabel = intent === "shared" ? "Shared" : "Working";
-    const intentMeta = intent === "shared" ? (_sharedWithSummary(sharedNames) || intentLabel) : intentLabel;
     const badgeHtml = provenanceBadge
       ? `<span class="collectionProvenanceBadge" title="${provenanceLabel}">${provenanceBadge}</span>`
       : "";
-    const metaBits = [intentMeta];
+    const metaBits = [];
     if (provenanceLabel) metaBits.push(provenanceLabel);
     if (provenanceNote) metaBits.push(provenanceNote);
     const metaHtml = `<span class="collectionBulkMeta">${escapeHtml(metaBits.filter(Boolean).join(" · "))}</span>`;
@@ -3111,7 +3174,30 @@ function _renderCollectionBulkList(kind) {
       + `<span class="collectionBulkCount">${count}</span>`
       + `</label>`
     );
-  }).join("");
+  };
+  if (isHidden) {
+    const archiveGroups = [
+      ["workflow_review", "Completed Reviews"],
+      ["source_mirror", "Imported Board Mirrors"],
+      ["legacy", "Legacy Folders"],
+    ];
+    listEl.innerHTML = archiveGroups.map(([groupKind, groupLabel]) => {
+      const groupRows = rows.filter((c) => (
+        groupKind === "legacy"
+          ? !["workflow_review", "source_mirror"].includes(String(c.provenance_kind || ""))
+          : String(c.provenance_kind || "") === groupKind
+      ));
+      if (!groupRows.length) return "";
+      return (
+        `<section class="collectionArchiveGroup">`
+        + `<div class="collectionArchiveGroupHeader"><span>${escapeHtml(groupLabel)}</span><span>${groupRows.length}</span></div>`
+        + groupRows.map(renderRow).join("")
+        + `</section>`
+      );
+    }).join("");
+  } else {
+    listEl.innerHTML = rows.map(renderRow).join("");
+  }
   listEl.querySelectorAll("input[type='checkbox'][data-id]").forEach((input) => {
     input.addEventListener("change", () => {
       const cid = String(input.getAttribute("data-id") || "");
@@ -3143,17 +3229,11 @@ function renderCollectionShareList() {
     const provenanceBadge = escapeHtml(String(c.provenance_badge || ""));
     const provenanceLabel = escapeHtml(String(c.provenance_label || ""));
     const provenanceNote = escapeHtml(String(c.provenance_note || ""));
-    const intent = String(c.intent || "working").trim().toLowerCase();
-    const sharedNames = Array.isArray(c.shared_actor_names) ? c.shared_actor_names.filter(Boolean) : [];
-    const intentLabel = intent === "shared" ? "Shared" : "Working";
-    const intentMeta = intent === "shared" && sharedNames.length ? `${intentLabel} · ${sharedNames.join(", ")}` : intentLabel;
     const badgeHtml = provenanceBadge
       ? `<span class="collectionProvenanceBadge" title="${provenanceLabel}">${provenanceBadge}</span>`
       : "";
-    const primaryMeta = intent === "shared"
-      ? (_sharedWithSummary(sharedNames) || "Shared collection")
-      : (String(c.description || "").trim() || "Internal working collection");
-    const metaBits = [intentMeta];
+    const primaryMeta = String(c.description || "").trim() || "Local collection";
+    const metaBits = [];
     if (provenanceLabel) metaBits.push(provenanceLabel);
     if (provenanceNote) metaBits.push(provenanceNote);
     const rowClass = [
@@ -3185,18 +3265,10 @@ function _updateCollectionDetailDerivedUI(selected) {
   const selectedDescription = String(selected.description || "").trim();
   const effectiveName = payload.name || selectedName || "Untitled collection";
   const effectiveDescription = payload.description || selectedDescription;
-  const effectiveIntent = String(payload.intent || selected.intent || "working").trim().toLowerCase() || "working";
-  const effectiveActorIds = effectiveIntent === "shared" ? payload.shared_actor_ids : [];
-  const effectiveActorNames = _collectionActorNamesByIds(effectiveActorIds);
-  const shareSelectionInvalid = effectiveIntent === "shared" && !effectiveActorIds.length;
-  const persistedIntent = String(selected.intent || "working").trim().toLowerCase() || "working";
-  const persistedActorIds = Array.isArray(selected.shared_actor_ids) ? selected.shared_actor_ids : [];
-  const persistedActorNames = Array.isArray(selected.shared_actor_names) ? selected.shared_actor_names.filter(Boolean) : [];
+  const effectiveIntent = "working";
   const shareDraftDirty =
     String(payload.name || "") !== selectedName
-    || String(payload.description || "") !== selectedDescription
-    || effectiveIntent !== persistedIntent
-    || !_sameStringList(effectiveActorIds, persistedActorIds);
+    || String(payload.description || "") !== selectedDescription;
 
   const summaryNameEl = $("#collectionDetailSummaryName");
   const summaryBadgeEl = $("#collectionDetailSummaryIntentBadge");
@@ -3210,11 +3282,7 @@ function _updateCollectionDetailDerivedUI(selected) {
   if (summaryMetaEl) {
     const metaParts = [`${Number(selected.count || 0)} items`];
     if (selected.provenance_label) metaParts.push(String(selected.provenance_label));
-    if (effectiveIntent === "shared") {
-      metaParts.push(_sharedWithSummary(effectiveActorNames) || "No recipients selected yet");
-    } else {
-      metaParts.push("Internal working collection");
-    }
+    metaParts.push("Designer PDF ready");
     summaryMetaEl.textContent = metaParts.join(" · ");
   }
   if (summaryDescriptionEl) {
@@ -3225,94 +3293,33 @@ function _updateCollectionDetailDerivedUI(selected) {
   const collaboratorsWrap = $("#collectionDetailCollaboratorsWrap");
   const collaboratorsHintEl = $("#collectionDetailCollaboratorsHint");
   const collaboratorsSummaryEl = $("#collectionDetailCollaboratorsSummary");
-  if (collaboratorsWrap) collaboratorsWrap.hidden = effectiveIntent !== "shared";
+  if (collaboratorsWrap) collaboratorsWrap.hidden = true;
   if (collaboratorsHintEl) {
-    collaboratorsHintEl.textContent = effectiveIntent === "shared"
-      ? "Choose the named people who should receive this collection."
-      : "Switch intent to Shared when you're ready to choose recipients.";
+    collaboratorsHintEl.textContent = "";
   }
   if (collaboratorsSummaryEl) {
-    if (effectiveIntent !== "shared") {
-      collaboratorsSummaryEl.hidden = true;
-      collaboratorsSummaryEl.textContent = "";
-      collaboratorsSummaryEl.removeAttribute("data-state");
-    } else if (effectiveActorNames.length) {
-      collaboratorsSummaryEl.hidden = false;
-      collaboratorsSummaryEl.textContent = `${_sharedWithSummary(effectiveActorNames)}.`;
-      collaboratorsSummaryEl.removeAttribute("data-state");
-    } else {
-      collaboratorsSummaryEl.hidden = false;
-      collaboratorsSummaryEl.textContent = "Choose at least one named collaborator to make this a shared collection.";
-      collaboratorsSummaryEl.setAttribute("data-state", "warning");
-    }
+    collaboratorsSummaryEl.hidden = true;
+    collaboratorsSummaryEl.textContent = "";
+    collaboratorsSummaryEl.removeAttribute("data-state");
   }
 
   const linksHintEl = $("#collectionDetailLinksHint");
   const linksEl = $("#collectionDetailLinks");
-  const linkedActors = state.collectionActors.filter((actor) => persistedActorIds.includes(String(actor.id || "")));
-  if (linksHintEl) {
-    if (shareDraftDirty) {
-      linksHintEl.textContent = "Save changes to refresh collection links.";
-    } else if (persistedIntent !== "shared") {
-      linksHintEl.textContent = "Shared links appear after you switch intent to Shared and save.";
-    } else if (!linkedActors.length) {
-      linksHintEl.textContent = "Select collaborators above, then save to generate collection links.";
-    } else {
-      linksHintEl.textContent = "Each person gets their own collection link.";
-    }
-  }
-  if (linksEl) {
-    if (shareDraftDirty) {
-      linksEl.innerHTML = `<div class="muted">Save this collection to generate updated collaborator links.</div>`;
-    } else if (persistedIntent !== "shared") {
-      linksEl.innerHTML = `<div class="muted">Set intent to Shared to generate collaborator links.</div>`;
-    } else if (!linkedActors.length) {
-      linksEl.innerHTML = `<div class="muted">Select one or more collaborators above to generate collection links.</div>`;
-    } else {
-      linksEl.innerHTML = linkedActors.map((actor) => {
-        const link = _buildSharedCollectionLink(selected, actor);
-        return (
-          `<div class="collectionDetailLinkRow">`
-          + `<div class="collectionDetailLinkMeta">`
-          + `<strong>${escapeHtml(String(actor.name || "Unnamed collaborator"))}</strong>`
-          + `<span class="collectionDetailLinkUrl">${escapeHtml(link)}</span>`
-          + `</div>`
-          + `<div class="collectionDetailLinkActions">`
-          + `<a class="header-btn modal-utility-btn" href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer">Open</a>`
-          + `<button type="button" class="header-btn modal-utility-btn" data-copy-share-link="${escapeHtml(link)}">Copy link</button>`
-          + `</div>`
-          + `</div>`
-        );
-      }).join("");
-      linksEl.querySelectorAll("button[data-copy-share-link]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          const link = String(btn.getAttribute("data-copy-share-link") || "");
-          if (!link) return;
-          await _copyText(link);
-          Shared.showToast("Collection link copied", { type: "success", duration: 1800 });
-        });
-      });
-    }
-  }
+  if (linksHintEl) linksHintEl.textContent = "";
+  if (linksEl) linksEl.innerHTML = "";
 
   const saveStatusEl = $("#collectionDetailSaveStatus");
   const saveBtn = $("#collectionDetailSaveBtn");
   if (saveStatusEl) {
-    if (shareSelectionInvalid) {
-      saveStatusEl.textContent = "Choose at least one collaborator before saving a shared collection.";
-      saveStatusEl.setAttribute("data-state", "warning");
-    } else if (shareDraftDirty) {
+    if (shareDraftDirty) {
       saveStatusEl.textContent = "Unsaved changes";
-      saveStatusEl.removeAttribute("data-state");
-    } else if (persistedIntent === "shared" && persistedActorNames.length) {
-      saveStatusEl.textContent = `Saved · shared with ${persistedActorNames.length} collaborator${persistedActorNames.length === 1 ? "" : "s"}`;
       saveStatusEl.removeAttribute("data-state");
     } else {
       saveStatusEl.textContent = "Saved";
       saveStatusEl.removeAttribute("data-state");
     }
   }
-  if (saveBtn) saveBtn.disabled = !shareDraftDirty || shareSelectionInvalid;
+  if (saveBtn) saveBtn.disabled = !shareDraftDirty;
 }
 
 function renderCollectionDetailEditor() {
@@ -3323,15 +3330,14 @@ function renderCollectionDetailEditor() {
   if (!selected) {
     if (emptyEl) emptyEl.hidden = false;
     if (formEl) formEl.hidden = true;
-    if (statusEl) statusEl.textContent = "Select a collection to edit sharing.";
+    if (statusEl) statusEl.textContent = "Select a collection to edit.";
     return;
   }
 
   if (emptyEl) emptyEl.hidden = true;
   if (formEl) formEl.hidden = false;
   if (statusEl) {
-    const intentLabel = String(selected.intent || "working") === "shared" ? "Shared collection" : "Working collection";
-    statusEl.textContent = `${intentLabel} · ${selected.name || "Untitled collection"}`;
+    statusEl.textContent = `Local collection · ${selected.name || "Untitled collection"}`;
   }
 
   const currentForm = _currentCollectionDetailFormState();
@@ -3342,34 +3348,13 @@ function renderCollectionDetailEditor() {
   const preserveDraft = currentEditingId === String(selected.id || "");
   if (nameEl) nameEl.value = preserveDraft && currentForm.name ? currentForm.name : String(selected.name || "");
   if (descEl) descEl.value = preserveDraft ? currentForm.description : String(selected.description || "");
-  if (intentEl) intentEl.value = preserveDraft && currentForm.intent ? currentForm.intent : String(selected.intent || "working");
+  if (intentEl) intentEl.value = "working";
   if (formEl) formEl.setAttribute("data-collection-id", String(selected.id || ""));
 
   const collaboratorsWrap = $("#collectionDetailCollaboratorsWrap");
   const collaboratorsEl = $("#collectionDetailCollaborators");
-  if (collaboratorsEl) {
-    if (!state.collectionActors.length) {
-      collaboratorsEl.innerHTML = `<div class="muted">No collaborators available yet.</div>`;
-    } else {
-      const effectiveActorIds = preserveDraft && currentForm.shared_actor_ids.length
-        ? currentForm.shared_actor_ids
-        : (Array.isArray(selected.shared_actor_ids) ? selected.shared_actor_ids : []);
-      collaboratorsEl.innerHTML = state.collectionActors.map((actor) => {
-        const actorId = String(actor.id || "");
-        const checked = effectiveActorIds.includes(actorId) ? "checked" : "";
-        return (
-          `<label class="collectionDetailCollaboratorRow">`
-          + `<input type="checkbox" data-actor-id="${escapeHtml(actorId)}" ${checked} />`
-          + `<span class="collectionDetailCollaboratorText">`
-          + `<span class="collectionDetailCollaboratorName">${escapeHtml(String(actor.name || "Unnamed collaborator"))}</span>`
-          + `<span class="collectionDetailCollaboratorMeta">${escapeHtml(String(actor.role || "collaborator"))} · receives a collection link</span>`
-          + `</span>`
-          + `</label>`
-        );
-      }).join("");
-    }
-  }
-  if (collaboratorsWrap) collaboratorsWrap.hidden = false;
+  if (collaboratorsEl) collaboratorsEl.innerHTML = "";
+  if (collaboratorsWrap) collaboratorsWrap.hidden = true;
   _updateCollectionDetailDerivedUI(selected);
 }
 
@@ -3392,24 +3377,8 @@ function renderCollectionBulkModal() {
 }
 
 function renderCollectionShareFilterButtons() {
-  const current = String(state.collectionShareFilter || "all");
-  const activeCollections = (state.collections || []).filter((row) => !row.hidden);
-  const counts = {
-    all: activeCollections.length,
-    working: activeCollections.filter((row) => String(row?.intent || "working").trim().toLowerCase() !== "shared").length,
-    shared: activeCollections.filter((row) => String(row?.intent || "working").trim().toLowerCase() === "shared").length,
-  };
-  const map = {
-    all: $("#collectionShareFilterAll"),
-    working: $("#collectionShareFilterWorking"),
-    shared: $("#collectionShareFilterShared"),
-  };
-  Object.entries(map).forEach(([key, el]) => {
-    if (!el) return;
-    el.classList.toggle("is-active", key === current);
-    const label = key === "all" ? "All" : key === "working" ? "Working" : "Shared";
-    el.textContent = `${label} (${counts[key] || 0})`;
-  });
+  const filters = $("#collectionShareFilters");
+  if (filters) filters.hidden = true;
 }
 
 function renderCollectionShareModal() {
@@ -3442,13 +3411,13 @@ async function bulkHideCollections() {
       body: JSON.stringify({ collection_ids: ids, hidden: true }),
     });
     const updated = Number(payload.updated || 0);
-    Shared.showToast(`Hidden ${updated} collection${updated === 1 ? "" : "s"}.`, { type: "success" });
+    Shared.showToast(`Archived ${updated} collection${updated === 1 ? "" : "s"}.`, { type: "success" });
     collectionBulkSelection.active.clear();
     await loadCollectionsForManager();
     renderCollectionBulkModal();
     await _refreshCollectionViewsAfterBulkChange();
   } catch (e) {
-    Shared.showToast(`Hide failed: ${formatApiError(e)}`, { type: "error" });
+    Shared.showToast(`Archive failed: ${formatApiError(e)}`, { type: "error" });
   }
 }
 
@@ -3474,7 +3443,7 @@ async function bulkRestoreCollections() {
 async function bulkDeleteHiddenCollections() {
   const ids = Array.from(collectionBulkSelection.hidden);
   if (!ids.length) return;
-  const ok = confirm(`Delete ${ids.length} hidden collection${ids.length === 1 ? "" : "s"} permanently? This cannot be undone.`);
+  const ok = confirm(`Delete ${ids.length} archived collection${ids.length === 1 ? "" : "s"} permanently? The folders will be removed, but their items will remain in the library.`);
   if (!ok) return;
   try {
     const payload = await api("/api/collections/bulk-delete", {
@@ -3484,9 +3453,9 @@ async function bulkDeleteHiddenCollections() {
     const deleted = Number(payload.deleted || 0);
     const skipped = Number(payload.skipped || 0);
     if (skipped > 0) {
-      Shared.showToast(`Deleted ${deleted}. Skipped ${skipped} (must already be hidden).`, { type: "info" });
+      Shared.showToast(`Deleted ${deleted}. Skipped ${skipped} (must already be archived).`, { type: "info" });
     } else {
-      Shared.showToast(`Deleted ${deleted} hidden collection${deleted === 1 ? "" : "s"}.`, { type: "success" });
+      Shared.showToast(`Deleted ${deleted} archived collection${deleted === 1 ? "" : "s"}.`, { type: "success" });
     }
     collectionBulkSelection.hidden.clear();
     await loadCollectionsForManager();
@@ -3520,7 +3489,7 @@ async function openCollectionShareModal() {
     Shared.showToast("Owner access required.", { type: "error" });
     return;
   }
-  await Promise.all([loadCollectionsForManager(), loadCollectionActors()]);
+  await loadCollectionsForManager();
   renderCollectionShareModal();
   $("#collectionShareModal")?.classList.remove("hidden");
 }
@@ -3547,10 +3516,6 @@ async function saveCollectionDetails() {
     Shared.showToast("Collection name is required.", { type: "error" });
     return;
   }
-  if (payload.intent === "shared" && !(payload.shared_actor_ids || []).length) {
-    Shared.showToast("Choose at least one collaborator before saving a shared collection.", { type: "info" });
-    return;
-  }
   try {
     const data = await api(`/api/collections/${encodeURIComponent(selected.id)}`, {
       method: "PUT",
@@ -3568,13 +3533,91 @@ async function saveCollectionDetails() {
   }
 }
 
+function _filenameFromDisposition(value, fallback) {
+  const text = String(value || "");
+  const star = text.match(/filename\*=UTF-8''([^;]+)/i);
+  if (star) {
+    try { return decodeURIComponent(star[1]); } catch {}
+  }
+  const plain = text.match(/filename="?([^";]+)"?/i);
+  return plain ? plain[1] : fallback;
+}
+
+function _collectionPdfFilename(collection) {
+  const name = String(collection?.name || "collection").trim().toLowerCase();
+  const slug = name.replace(/[^a-z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^[-._]+|[-._]+$/g, "") || "collection";
+  return `${slug}.pdf`;
+}
+
+function syncCollectionPdfExportButton() {
+  const btn = $("#exportCollectionPdf");
+  if (!btn) return;
+  const ids = getCollectionFilterIds();
+  const collection = ids.length === 1
+    ? (state.collections || []).find((c) => String(c.id || "") === ids[0]) || null
+    : null;
+  const collectionName = String(collection?.name || state.currentCollectionLabel || "selected collection").trim();
+  const canExport = isOwner() && ids.length === 1;
+  btn.hidden = !canExport;
+  if (canExport) {
+    btn.title = `Export "${collectionName}" as a standalone PDF. Active filters do not change the exported collection.`;
+    btn.setAttribute("aria-label", `Export ${collectionName} collection as PDF`);
+  } else {
+    btn.removeAttribute("title");
+    btn.removeAttribute("aria-label");
+  }
+}
+
+async function exportCurrentCollectionPdf() {
+  const ids = getCollectionFilterIds();
+  if (ids.length !== 1) {
+    Shared.showToast("Choose one collection in the sidebar before exporting a PDF.", { type: "info", duration: 4500 });
+    return;
+  }
+  const collectionId = ids[0];
+  const collection = (state.collections || []).find((c) => String(c.id || "") === collectionId) || null;
+  const btn = $("#exportCollectionPdf");
+  const originalText = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Exporting…";
+  }
+  try {
+    const res = await fetch(_bp(`/api/collections/${encodeURIComponent(collectionId)}/export/pdf`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(formatApiError(text || res.statusText));
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = _filenameFromDisposition(res.headers.get("Content-Disposition"), _collectionPdfFilename(collection));
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 2000);
+    Shared.showToast("Collection PDF exported.", { type: "success", duration: 3000 });
+  } catch (e) {
+    Shared.showToast(`PDF export failed: ${formatApiError(e)}`, { type: "error", duration: 8000 });
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = originalText || "Export Collection PDF";
+    }
+  }
+}
+
 function setCollectionFilter(collectionId) {
   if (collectionId) {
     state.currentSource = null;
     state.currentBoard = null;
     state.currentContentKind = null;
     clearCatalogFilter();
-    clearClassificationFilter();
     const col = state.collections.find((c) => c.id === collectionId);
     setCollectionFilterIds([collectionId], { label: col ? col.name : "", nodeId: null });
   } else {
@@ -3599,9 +3642,13 @@ $("#newCollection").addEventListener("click", async () => {
   }
 });
 
-const shareCollectionsBtn = $("#shareCollections");
-if (shareCollectionsBtn) {
-  shareCollectionsBtn.addEventListener("click", async () => {
+const exportCollectionPdfBtn = $("#exportCollectionPdf");
+if (exportCollectionPdfBtn) {
+  exportCollectionPdfBtn.addEventListener("click", exportCurrentCollectionPdf);
+}
+const manageCollectionsBtn = $("#manageCollections");
+if (manageCollectionsBtn) {
+  manageCollectionsBtn.addEventListener("click", async () => {
     await openCollectionShareModal();
   });
 }
@@ -3778,8 +3825,7 @@ async function _resolveCurrentScopeAssetIds() {
 
   const catalogFiles = getCatalogFilterFiles();
   if (catalogFiles.length) {
-    const params = new URLSearchParams();
-    for (const file of catalogFiles) params.append("file", file);
+    const params = _buildCurrentCatalogQueryParams();
     const data = await api(`/api/catalog/asset-ids?${params}`);
     return Array.isArray(data?.ids) ? data.ids : [];
   }
@@ -3789,15 +3835,14 @@ async function _resolveCurrentScopeAssetIds() {
   if (state.currentSource) params.set("source", state.currentSource);
   if (state.currentBoard) params.set("board", state.currentBoard);
   if (state.currentContentKind) params.set("content_kind", state.currentContentKind);
-  if (state.currentClassificationAxis) params.set("classification_axis", state.currentClassificationAxis);
-  if (state.currentClassificationValue) params.set("classification_value", state.currentClassificationValue);
+  appendClassificationFacetParams(params);
   const collectionIds = getCollectionFilterIds();
   if (collectionIds.length) params.set("collection_id", collectionIds.join(","));
   if (state.triageFilter === "needs-comment") {
     params.set("needs_annotation", "1");
     if (isOwner()) params.set("include_hidden", "1");
-  } else if (state.triageFilter === "hidden") {
-    params.set("triage_status", "hidden");
+  } else if (_isHiddenReviewQueue()) {
+    _appendHiddenReviewQueueParams(params);
     if (isOwner()) params.set("include_hidden", "1");
   } else if (state.triageFilter === "flagged") {
     params.set("flagged", "1");
@@ -3841,6 +3886,13 @@ async function _loadModalNavigation(assetId, seq) {
 }
 
 async function navigateModalBy(delta) {
+  if (state.modalClassificationDirty) {
+    Shared.showToast("Save or discard the pending review changes before leaving this item.", {
+      type: "info",
+      duration: 3200,
+    });
+    return;
+  }
   const ids = Array.isArray(state.modalScopeAssetIds) ? state.modalScopeAssetIds : [];
   const currentIndex = Number(state.modalScopeAssetIndex || 0);
   if (!ids.length || currentIndex < 0) return;
@@ -3963,22 +4015,85 @@ function renderModalSourceCandidatePanel(asset) {
   const heroText = String(candidate.hero_text_excerpt || "").trim();
   const textExcerpt = String(candidate.text_excerpt || "").trim();
   const error = String(candidate.error || "").trim();
+  const mediaCandidates = Array.isArray(candidate.media_candidates) ? candidate.media_candidates : [];
+  const currentMedia = mediaCandidates.find((item) => item && item.current) || null;
+  const currentRepresentationLabel = String(currentMedia?.representation_label || "").trim();
+  const evidenceStatus = String(currentMedia?.evidence_status || "").trim();
+  const replacementCandidates = mediaCandidates.filter((item) => item && !item.current);
+  const selectableIds = new Set(
+    replacementCandidates
+      .filter((item) => item && item.selectable)
+      .map((item) => String(item.id || "").trim())
+      .filter(Boolean),
+  );
+  if (!selectableIds.has(state.modalSourceCandidateSelectedId)) {
+    state.modalSourceCandidateSelectedId = "";
+  }
 
   panel.hidden = false;
+  const summaryEl = $("#modalSourceCandidateSummary");
+  if (summaryEl) {
+    summaryEl.textContent = currentRepresentationLabel
+      ? `Current: ${currentRepresentationLabel}`
+      : "Choose a replacement only if needed";
+  }
   const statusEl = $("#modalSourceCandidateStatus");
   if (statusEl) {
     const parts = [];
-    if (fetchStatus) parts.push(fetchStatus);
+    if (evidenceStatus.startsWith("refresh_required:")) {
+      parts.push("Search evidence is waiting for Admin refresh.");
+    }
+    if (fetchStatus === "fetched") {
+      const sourceImageCount = mediaCandidates.filter((item) => item?.kind === "post_image").length;
+      parts.push(sourceImageCount
+        ? "Source media found. Choose a post image or a generated text card."
+        : "Source text captured. Choose the generated text card if it best represents this post.");
+    } else if (fetchStatus) {
+      parts.push(fetchStatus);
+    }
     if (error) parts.push(error);
     statusEl.textContent = parts.join(" · ");
     statusEl.hidden = !parts.length;
   }
-  const imageWrap = $("#modalSourceCandidateImageWrap");
-  const imageEl = $("#modalSourceCandidateImage");
-  if (imageWrap) imageWrap.hidden = !heroImageUrl;
-  if (imageEl) {
-    imageEl.src = heroImageUrl || "";
-    imageEl.alt = heroImageAlt || pageTitle || "Source candidate";
+  const galleryEl = $("#modalSourceCandidateGallery");
+  if (galleryEl) {
+    galleryEl.innerHTML = replacementCandidates.map((item) => {
+      const candidateId = String(item?.id || "").trim();
+      const kind = String(item?.kind || "").trim();
+      const label = String(item?.label || "Source media").trim();
+      const text = String(item?.text || "").trim();
+      const rawPreviewUrl = String(item?.preview_url || "").trim();
+      const previewUrl = rawPreviewUrl.startsWith("/") ? _bp(rawPreviewUrl) : rawPreviewUrl;
+      const selectable = !!item?.selectable && !!candidateId;
+      const selected = selectable && candidateId === state.modalSourceCandidateSelectedId;
+      const cardTag = selectable ? "button" : "div";
+      const attrs = selectable
+        ? ` type="button" data-candidate-id="${escapeHtml(candidateId)}" aria-pressed="${selected ? "true" : "false"}"`
+        : "";
+      const preview = kind === "text_card"
+        ? `<div class="modal-source-candidate-text-card">${escapeHtml(text)}</div>`
+        : (previewUrl
+          ? `<img src="${escapeHtml(previewUrl)}" alt="${escapeHtml(String(item?.alt || label))}" />`
+          : "");
+      const hint = kind === "text_card"
+        ? "Built locally from the captured post text"
+        : (String(item?.source_page_url || "").trim()
+          ? "Captured from the linked source page"
+          : "Captured from the source post");
+      return `
+        <${cardTag} class="modal-source-candidate-card${selected ? " is-selected" : ""}"${attrs}>
+          <div class="modal-source-candidate-preview">${preview}</div>
+          <div class="modal-source-candidate-label">${escapeHtml(label)}</div>
+          <div class="modal-source-candidate-hint">${escapeHtml(hint)}</div>
+        </${cardTag}>
+      `;
+    }).join("");
+    galleryEl.querySelectorAll("button[data-candidate-id]").forEach((button) => {
+      button.onclick = () => {
+        state.modalSourceCandidateSelectedId = String(button.dataset.candidateId || "").trim();
+        renderModalSourceCandidatePanel(asset);
+      };
+    });
   }
   const titleRow = $("#modalSourceCandidateTitleRow");
   const titleEl = $("#modalSourceCandidateTitle");
@@ -3986,17 +4101,19 @@ function renderModalSourceCandidatePanel(asset) {
   if (titleEl) titleEl.textContent = pageTitle;
   const heroTextRow = $("#modalSourceCandidateHeroTextRow");
   const heroTextEl = $("#modalSourceCandidateHeroText");
-  if (heroTextRow) heroTextRow.hidden = !heroText;
+  if (heroTextRow) heroTextRow.hidden = !(heroImageUrl && heroText);
   if (heroTextEl) heroTextEl.textContent = heroText;
   const textRow = $("#modalSourceCandidateTextRow");
   const textEl = $("#modalSourceCandidateText");
   if (textRow) textRow.hidden = !textExcerpt;
   if (textEl) textEl.textContent = textExcerpt;
+  const detailsEl = $("#modalSourceCandidateDetails");
+  if (detailsEl) detailsEl.hidden = !(pageTitle || (heroImageUrl && heroText) || textExcerpt);
 
   const captureBtn = $("#modalSourceCandidateCaptureBtn");
   const promoteBtn = $("#modalSourceCandidatePromoteBtn");
   if (captureBtn) captureBtn.disabled = false;
-  if (promoteBtn) promoteBtn.disabled = !heroImageUrl;
+  if (promoteBtn) promoteBtn.disabled = !state.modalSourceCandidateSelectedId;
 }
 
 async function runModalSourceCandidateAction(action) {
@@ -4008,24 +4125,41 @@ async function runModalSourceCandidateAction(action) {
   }
   const captureBtn = $("#modalSourceCandidateCaptureBtn");
   const promoteBtn = $("#modalSourceCandidatePromoteBtn");
+  const selectedCandidateId = String(state.modalSourceCandidateSelectedId || "").trim();
+  if (action === "promote" && !selectedCandidateId) {
+    Shared.showToast("Choose source media before using it.", { type: "info" });
+    return;
+  }
   if (captureBtn) captureBtn.disabled = true;
   if (promoteBtn) promoteBtn.disabled = true;
   try {
+    const requestAction = action === "promote" ? "promote_candidate" : action;
     const data = await api(`/api/assets/${encodeURIComponent(asset.id)}/source-link-candidate`, {
       method: "PUT",
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ action: requestAction, candidate_id: selectedCandidateId }),
     });
     const updated = data.asset || null;
     if (!updated) throw new Error("Updated asset missing from response");
     replaceAssetInState(updated);
     state.modalAsset = updated;
+    state.modalSourceCandidateSelectedId = "";
     renderModalSourceCandidatePanel(updated);
     if (action === "promote") {
       renderGrid();
+      const promotedKind = String(data?.result?.kind || "").trim();
+      Shared.showToast(
+        promotedKind === "text_card"
+          ? "Generated text card is now in use. Search evidence is waiting for Admin refresh."
+          : "Selected source image is now in use. Search evidence is waiting for Admin refresh.",
+        { type: "success", duration: 4200 },
+      );
       await openModal(updated);
-      Shared.showToast("Candidate image promoted.", { type: "success", duration: 1800 });
+      const modalContent = document.querySelector("#modal .modalContent");
+      if (modalContent) modalContent.scrollTo({ top: 0, behavior: "smooth" });
     } else {
-      Shared.showToast("Source candidate captured.", { type: "success", duration: 1800 });
+      const panel = $("#modalSourceCandidatePanel");
+      if (panel) panel.open = true;
+      Shared.showToast("Source checked. Choose a replacement only if it is better.", { type: "success", duration: 2600 });
     }
   } catch (e) {
     Shared.showToast(formatApiError(e), { type: "error", duration: 3200 });
@@ -4055,6 +4189,68 @@ function _modalClassificationStatusText(review) {
     messages.push("Human review is saved and will persist.");
   }
   return messages.join(" ");
+}
+
+function _setModalClassificationDirty(dirty) {
+  state.modalClassificationDirty = !!dirty;
+  const draftStatus = $("#modalClassificationDraftStatus");
+  const discardBtn = $("#modalClassificationDiscardBtn");
+  if (draftStatus) {
+    const irrelevantToggle = $("#modalClassificationIrrelevantToggle");
+    const savedIrrelevant = irrelevantToggle?.dataset.savedIrrelevant === "true";
+    if (irrelevantToggle?.checked && !savedIrrelevant) {
+      draftStatus.textContent = "This item will be marked irrelevant when saved. Switch it off to cancel, or save before moving to another item.";
+    } else if (!irrelevantToggle?.checked && savedIrrelevant) {
+      draftStatus.textContent = "This item will be restored to the selected track when saved. Choose the track, or discard this change.";
+    } else {
+      draftStatus.textContent = "Unsaved review changes. Save them or discard them before moving to another item.";
+    }
+    draftStatus.hidden = !state.modalClassificationDirty;
+  }
+  if (discardBtn) discardBtn.hidden = !state.modalClassificationDirty;
+}
+
+function _syncModalClassificationControls() {
+  const irrelevantToggle = $("#modalClassificationIrrelevantToggle");
+  const moveTo = $("#modalClassificationMoveTo");
+  const keepBtn = $("#modalClassificationKeepBtn");
+  const saveBtn = $("#modalClassificationSaveBtn");
+  const savedIrrelevant = irrelevantToggle?.dataset.savedIrrelevant === "true";
+  const pendingIrrelevant = !!irrelevantToggle?.checked;
+  if (moveTo) moveTo.disabled = pendingIrrelevant;
+  if (keepBtn) {
+    keepBtn.disabled = pendingIrrelevant ? false : keepBtn.dataset.savedDisabled === "true";
+    keepBtn.textContent = pendingIrrelevant
+      ? "Save as irrelevant"
+      : (savedIrrelevant ? "Save restored track" : "Save, keep track");
+  }
+  if (saveBtn) {
+    saveBtn.textContent = "Save and move";
+    saveBtn.hidden = pendingIrrelevant || savedIrrelevant;
+  }
+}
+
+function _refreshModalClassificationDirty() {
+  const irrelevantToggle = $("#modalClassificationIrrelevantToggle");
+  const controls = [
+    $("#modalClassificationMoveTo"),
+    $("#modalClassificationFocusSelect"),
+    $("#modalClassificationMediaSelect"),
+    $("#modalClassificationComment"),
+  ];
+  const changedValue = controls.some((control) => (
+    control && String(control.value || "") !== String(control.dataset.savedValue || "")
+  ));
+  const changedIrrelevant = !!irrelevantToggle && (
+    irrelevantToggle.checked !== (irrelevantToggle.dataset.savedIrrelevant === "true")
+  );
+  _setModalClassificationDirty(changedValue || changedIrrelevant);
+}
+
+function discardModalClassificationChanges() {
+  if (!state.modalAsset) return;
+  renderModalClassificationPanel(state.modalAsset);
+  Shared.showToast("Pending review changes discarded.", { type: "info", duration: 1800 });
 }
 
 function renderModalClassificationPanel(asset) {
@@ -4147,16 +4343,38 @@ function renderModalClassificationPanel(asset) {
   const comment = $("#modalClassificationComment");
   const keepBtn = $("#modalClassificationKeepBtn");
   const saveBtn = $("#modalClassificationSaveBtn");
-  const irrelevantBtn = $("#modalClassificationIrrelevantBtn");
+  const discardBtn = $("#modalClassificationDiscardBtn");
+  const irrelevantToggle = $("#modalClassificationIrrelevantToggle");
   if (editor) editor.hidden = false;
   const defaultTrack = overrideTrack || (hasSourceConflict ? sourceTrack : currentTrack);
   if (moveTo) moveTo.value = _preferredMoveTrack(defaultTrack);
   if (focusSelect) focusSelect.value = overrideFocus && REVIEW_FOCUS_LABELS[overrideFocus] ? overrideFocus : "";
   if (mediaSelect) mediaSelect.value = overrideMedia && MEDIA_RELIABILITY_LABELS[overrideMedia] ? overrideMedia : "";
   if (comment) comment.value = cleanedOverrideNote || "";
-  if (keepBtn) keepBtn.disabled = !effectiveTrack;
+  for (const control of [moveTo, focusSelect, mediaSelect, comment]) {
+    if (control) control.dataset.savedValue = String(control.value || "");
+  }
+  if (moveTo) moveTo.onchange = _refreshModalClassificationDirty;
+  if (focusSelect) focusSelect.onchange = _refreshModalClassificationDirty;
+  if (mediaSelect) mediaSelect.onchange = _refreshModalClassificationDirty;
+  if (comment) comment.oninput = _refreshModalClassificationDirty;
+  if (discardBtn) discardBtn.onclick = discardModalClassificationChanges;
+  if (irrelevantToggle) {
+    irrelevantToggle.checked = effectiveTrack === "irrelevant";
+    irrelevantToggle.dataset.savedIrrelevant = effectiveTrack === "irrelevant" ? "true" : "false";
+    irrelevantToggle.onchange = () => {
+      _syncModalClassificationControls();
+      _refreshModalClassificationDirty();
+    };
+  }
+  if (keepBtn) {
+    keepBtn.dataset.savedDisabled = !effectiveTrack ? "true" : "false";
+    keepBtn.disabled = !effectiveTrack;
+  }
   if (saveBtn) saveBtn.disabled = false;
-  if (irrelevantBtn) irrelevantBtn.disabled = false;
+  if (irrelevantToggle) irrelevantToggle.disabled = false;
+  _syncModalClassificationControls();
+  _setModalClassificationDirty(false);
 }
 
 async function saveModalClassificationReview(opts = {}) {
@@ -4174,8 +4392,13 @@ async function saveModalClassificationReview(opts = {}) {
   const comment = $("#modalClassificationComment");
   const keepBtn = $("#modalClassificationKeepBtn");
   const saveBtn = $("#modalClassificationSaveBtn");
-  const irrelevantBtn = $("#modalClassificationIrrelevantBtn");
-  const track = String(opts.track || moveTo?.value || "").trim();
+  const discardBtn = $("#modalClassificationDiscardBtn");
+  const irrelevantToggle = $("#modalClassificationIrrelevantToggle");
+  const track = String(
+    irrelevantToggle?.checked
+      ? "irrelevant"
+      : (opts.keepCurrent && currentTrack !== "irrelevant" ? currentTrack : (opts.track || moveTo?.value || ""))
+  ).trim();
   const reviewFocus = String(opts.reviewFocus ?? focusSelect?.value ?? "").trim();
   const mediaReliability = String(opts.mediaReliability ?? mediaSelect?.value ?? "").trim();
   const note = String(comment?.value || "").trim();
@@ -4185,7 +4408,8 @@ async function saveModalClassificationReview(opts = {}) {
   }
   if (keepBtn) keepBtn.disabled = true;
   if (saveBtn) saveBtn.disabled = true;
-  if (irrelevantBtn) irrelevantBtn.disabled = true;
+  if (discardBtn) discardBtn.disabled = true;
+  if (irrelevantToggle) irrelevantToggle.disabled = true;
   if (moveTo) moveTo.disabled = true;
   if (focusSelect) focusSelect.disabled = true;
   if (mediaSelect) mediaSelect.disabled = true;
@@ -4199,22 +4423,30 @@ async function saveModalClassificationReview(opts = {}) {
     if (!updated) throw new Error("Updated asset missing from response");
     replaceAssetInState(updated);
     state.modalAsset = updated;
-    await Promise.all([loadCatalogTree(), loadAssets()]);
     renderModalClassificationPanel(updated);
-    Shared.showToast(
-      track === currentTrack ? "Kept current classification." : `Moved to ${classificationTrackLabel(track)}.`,
-      { type: "success", duration: 1800 }
+    _renderMediaReliabilityOverlay(
+      "#modalMediaOverlay",
+      updated?.classification_review?.active_media_reliability || ""
     );
+    Shared.showToast(
+      track === "irrelevant"
+        ? "Marked irrelevant."
+        : (track === currentTrack ? "Kept current classification." : `Moved to ${classificationTrackLabel(track)}.`),
+      { type: "success", duration: 2600 }
+    );
+    await Promise.all([loadCatalogTree(), loadAssets()]);
   } catch (e) {
     Shared.showToast(formatApiError(e), { type: "error", duration: 3200 });
   } finally {
     if (keepBtn) keepBtn.disabled = false;
     if (saveBtn) saveBtn.disabled = false;
-    if (irrelevantBtn) irrelevantBtn.disabled = false;
+    if (discardBtn) discardBtn.disabled = false;
+    if (irrelevantToggle) irrelevantToggle.disabled = false;
     if (moveTo) moveTo.disabled = false;
     if (focusSelect) focusSelect.disabled = false;
     if (mediaSelect) mediaSelect.disabled = false;
     if (comment) comment.disabled = false;
+    _syncModalClassificationControls();
   }
 }
 
@@ -4268,6 +4500,9 @@ async function openModal(asset, options = {}) {
   const shouldHydrate = options.hydrate !== false;
   const modalSeq = (Number(state.modalLoadSeq || 0) + 1);
   state.modalLoadSeq = modalSeq;
+  if (String(state.modalAsset?.id || "") !== String(asset?.id || "")) {
+    state.modalSourceCandidateSelectedId = "";
+  }
   state.modalAsset = asset;
 
   const title = displayTitle(asset);
@@ -4313,15 +4548,11 @@ async function openModal(asset, options = {}) {
   const classificationKeepBtn = $("#modalClassificationKeepBtn");
   if (classificationKeepBtn) {
     classificationKeepBtn.onclick = () => saveModalClassificationReview({
-      track: _effectiveClassificationTrack(state.modalAsset?.classification_review || {}),
+      keepCurrent: true,
     });
   }
   const classificationSaveBtn = $("#modalClassificationSaveBtn");
   if (classificationSaveBtn) classificationSaveBtn.onclick = () => saveModalClassificationReview();
-  const classificationIrrelevantBtn = $("#modalClassificationIrrelevantBtn");
-  if (classificationIrrelevantBtn) {
-    classificationIrrelevantBtn.onclick = () => saveModalClassificationReview({ track: "irrelevant" });
-  }
   const sourceCandidateCaptureBtn = $("#modalSourceCandidateCaptureBtn");
   if (sourceCandidateCaptureBtn) sourceCandidateCaptureBtn.onclick = () => runModalSourceCandidateAction("capture");
   const sourceCandidatePromoteBtn = $("#modalSourceCandidatePromoteBtn");
@@ -4335,23 +4566,12 @@ async function openModal(asset, options = {}) {
   const video = $("#modalVideo");
   const modalVideoUrl = videoUrlForAsset(asset);
   if (modalVideoUrl) {
-    _setModalMediaStatus("");
-    if (img) {
-      img.removeAttribute("src");
-      img.style.display = "none";
-      img.onload = null;
-      img.onerror = null;
-    }
-    if (video) {
-      video.src = modalVideoUrl;
-      const poster = asset.thumb_path ? `${_B}/media/${asset.id}?kind=thumb` : "";
-      if (poster) video.poster = poster;
-      else video.removeAttribute("poster");
-      video.hidden = false;
-    }
+    _loadModalVideoAsset(asset, modalSeq, modalVideoUrl);
   } else {
     if (video) {
       video.pause();
+      video.onerror = null;
+      video.onloadedmetadata = null;
       video.removeAttribute("src");
       video.hidden = true;
     }
@@ -4401,6 +4621,28 @@ async function openModal(asset, options = {}) {
       hashtagsEl.innerHTML = "";
       hashtagsEl.hidden = true;
     }
+  }
+
+  // Hidden status provenance
+  const triageSection = $("#modalTriageInfoSection");
+  const triageSummary = $("#modalTriageInfoSummary");
+  const triageMeta = $("#modalTriageInfoMeta");
+  if (triageSection && triageSummary && triageMeta) {
+    const triageInfo = asset.triage_info || {};
+    const status = String(asset.triage_status || triageInfo.status || "").trim().toLowerCase();
+    const actor = String(triageInfo.actor || "").trim();
+    const reason = String(triageInfo.reason || "").trim();
+    const createdAt = String(triageInfo.created_at || "").trim();
+    const hidden = status === "hidden";
+    const aiReelCleanup = actor === "ai-reel-triage";
+    triageSection.hidden = !hidden;
+    triageSummary.textContent = aiReelCleanup
+      ? "Hidden by AI reel cleanup"
+      : (actor ? `Hidden manually by ${actor}` : "Hidden from the main library");
+    const metaParts = [];
+    if (createdAt) metaParts.push(createdAt.slice(0, 10));
+    if (reason) metaParts.push(reason);
+    triageMeta.textContent = metaParts.join(" · ");
   }
 
   // Labels / tags
@@ -4458,8 +4700,6 @@ async function openModal(asset, options = {}) {
       printModalAsset(asset);
     };
   }
-  wireModalShareActions(asset);
-
   const annHintText = $("#annHintText");
   const annQuestionToggle = $("#annQuestionToggle");
   const annQuestionLabel = $("#annQuestionLabel");
@@ -4467,44 +4707,33 @@ async function openModal(asset, options = {}) {
   const stagePrompt = $("#modalStagePrompt");
   const notesSection = $("#modalNotesSection");
   const notesTitle = $("#modalNotesTitle");
-  const collaboratorOnlyQuestions = !!(state.actor && state.actor.role !== "owner");
+  const collaboratorOnlyQuestions = false;
   if (annHintText) {
-    annHintText.textContent = collaboratorOnlyQuestions
-      ? "Click on the image to ask a question."
-      : "Click on the image to add a note.";
+    annHintText.textContent = "Click on the image to add a note.";
   }
   if (annQuestionToggle) {
-    annQuestionToggle.checked = collaboratorOnlyQuestions ? true : !!annQuestionToggle.checked;
-    annQuestionToggle.disabled = collaboratorOnlyQuestions;
+    annQuestionToggle.checked = false;
+    annQuestionToggle.disabled = true;
   }
   if (annQuestionLabel) {
-    annQuestionLabel.hidden = collaboratorOnlyQuestions;
+    annQuestionLabel.hidden = true;
   }
   if (annotationsTitle) {
-    annotationsTitle.textContent = collaboratorOnlyQuestions ? "Questions" : "Annotations";
-    annotationsTitle.classList.toggle("sectionTitle-questions", collaboratorOnlyQuestions);
-    annotationsTitle.classList.toggle("sectionTitle-annotations", !collaboratorOnlyQuestions);
+    annotationsTitle.textContent = "Annotations";
+    annotationsTitle.classList.remove("sectionTitle-questions");
+    annotationsTitle.classList.add("sectionTitle-annotations");
   }
   if (notesTitle) {
-    notesTitle.textContent = collaboratorOnlyQuestions ? "Owner notes" : "Notes";
-    notesTitle.classList.toggle("sectionTitle-context", collaboratorOnlyQuestions);
+    notesTitle.textContent = "Notes";
+    notesTitle.classList.remove("sectionTitle-context");
   }
   if (stagePrompt) {
-    if (collaboratorOnlyQuestions) {
-      stagePrompt.innerHTML = `
-        <div class="modal-stage-prompt-title">Questions</div>
-        <div class="modal-stage-prompt-text">Click on the image to ask a question.</div>
-        <div class="modal-stage-prompt-subtle">Press Enter to save. Use Shift+Enter for a new line.</div>
-      `;
-      stagePrompt.hidden = false;
-    } else {
-      stagePrompt.hidden = true;
-      stagePrompt.innerHTML = "";
-    }
+    stagePrompt.hidden = true;
+    stagePrompt.innerHTML = "";
   }
   const annHintRow = annHintText ? annHintText.closest(".ann-hint-row") : null;
   if (annHintRow) {
-    annHintRow.hidden = collaboratorOnlyQuestions;
+    annHintRow.hidden = false;
   }
 
   // Notes
@@ -4525,9 +4754,7 @@ async function openModal(asset, options = {}) {
     if (notesSection) notesSection.classList.toggle("modal-side-section-readonly", !editable);
     if (notesHint) {
       notesHint.hidden = editable;
-      notesHint.textContent = editable
-        ? ""
-        : "Owner notes are read-only context for this item. Ask questions on the image if anything is unclear.";
+      notesHint.textContent = editable ? "" : "Notes are read-only in this view.";
     }
   }
 
@@ -4688,6 +4915,7 @@ async function addAssetsToCollections(assetIds, collectionIds) {
 }
 
 function closeModal() {
+  if (state.modalClassificationDirty && !window.confirm("Discard unsaved review changes?")) return;
   const currentAsset = state.modalAsset;
   const notesArea = $("#assetNotes");
   if (currentAsset && notesArea && canEditAssetNotes()) {
@@ -4701,6 +4929,8 @@ function closeModal() {
   clearActiveAnnotationSelection();
   $("#modal").classList.add("hidden");
   state.modalAsset = null;
+  state.modalSourceCandidateSelectedId = "";
+  state.modalClassificationDirty = false;
   state.annotations = [];
   state.activeAnnotationId = null;
   state.modalScopeAssetIds = [];
@@ -4710,6 +4940,8 @@ function closeModal() {
   const video = $("#modalVideo");
   if (video) {
     video.pause();
+    video.onerror = null;
+    video.onloadedmetadata = null;
     video.removeAttribute("src");
     video.hidden = true;
   }
@@ -4736,7 +4968,6 @@ async function _navModalScan(delta) {
   if (prevBtn) prevBtn.disabled = newIdx === 0;
   if (nextBtn) nextBtn.disabled = newIdx === state.modalScanPages.length - 1;
   renderModalSourceLinks(state.modalAsset);
-  wireModalShareActions(state.modalAsset);
   await loadAnnotations(siblingId);
   renderAnnotations();
   renderMarkers();
@@ -4769,21 +5000,21 @@ async function loadAnnotations(assetId) {
 
 function canManageAnnotation(ann) {
   if (!ann) return false;
-  if (state.actor && state.actor.role === "owner") return true;
+  if (isOwner()) return true;
   const actorId = String(state.actor?.id || "").trim();
   const annActorId = String(ann.actor_id || "").trim();
   return !!actorId && !!annActorId && actorId === annActorId;
 }
 
 function canEditAssetNotes() {
-  return !!(state.actor && state.actor.role === "owner");
+  return isOwner();
 }
 
 function annotationActorClass(ann) {
   if (!ann || !ann.actor_name) return "";
   const actorId = String(state.actor?.id || "").trim();
   const annActorId = String(ann.actor_id || "").trim();
-  if (state.actor?.role === "owner" && actorId && annActorId && actorId === annActorId) {
+  if (isOwner() && actorId && annActorId && actorId === annActorId) {
     return "ann-actor-owner";
   }
   if (actorId && annActorId && actorId === annActorId) {
@@ -4796,23 +5027,19 @@ function renderAnnotations() {
   const wrap = $("#annList");
   if (!wrap) return;
   wrap.innerHTML = "";
-  const collaboratorOnlyQuestions = !!(state.actor && state.actor.role !== "owner");
-  let questionNumber = 0;
   let annotationNumber = 0;
   state.annotations.forEach((ann, idx) => {
-    const isQuestion = ann.annotation_type === "question";
-    const isResolved = isQuestion && ann.resolved;
+    const isQuestion = false;
+    const isResolved = false;
     const canManage = canManageAnnotation(ann);
-    const displayNumber = isQuestion ? ++questionNumber : ++annotationNumber;
+    const displayNumber = ++annotationNumber;
     const el = document.createElement("div");
-    el.className = `listItem annItem${state.activeAnnotationId === ann.id ? " active" : ""}${isQuestion ? " ann-question" : ""}${isResolved ? " ann-resolved" : ""}${canManage ? "" : " ann-readonly"}`;
+    el.className = `listItem annItem${state.activeAnnotationId === ann.id ? " active" : ""}${canManage ? "" : " ann-readonly"}`;
 
-    const marker = isQuestion ? `?${displayNumber}` : `#${displayNumber}`;
+    const marker = `#${displayNumber}`;
     const actorCls = annotationActorClass(ann);
     const actorLabel = ann.actor_name ? `<span class="ann-actor ${actorCls}">${escapeHtml(ann.actor_name)}</span>` : "";
-    const resolveBtn = isQuestion && state.actor && state.actor.role === "owner"
-      ? `<button class="iconBtn ann-resolve" data-resolve="${ann.id}" title="${isResolved ? "Unresolve" : "Resolve"}" type="button">${isResolved ? "&#9745;" : "&#9744;"}</button>`
-      : "";
+    const resolveBtn = "";
     const deleteBtn = canManage
       ? `<button class="iconBtn danger" data-del="${ann.id}" type="button">\u00d7</button>`
       : "";
@@ -4871,15 +5098,10 @@ function renderAnnotations() {
   if (!wrap.childElementCount) {
     const empty = document.createElement("div");
     empty.className = "ann-empty-state";
-    empty.innerHTML = collaboratorOnlyQuestions
-      ? `
-        <div class="ann-empty-title">No questions yet</div>
-        <div class="ann-empty-body">Click on the image to ask the first question about this item.</div>
-      `
-      : `
-        <div class="ann-empty-title">No annotations yet</div>
-        <div class="ann-empty-body">Click on the image to add a note or question.</div>
-      `;
+    empty.innerHTML = `
+      <div class="ann-empty-title">No annotations yet</div>
+      <div class="ann-empty-body">Click on the image to add a note.</div>
+    `;
     wrap.appendChild(empty);
   }
 }
@@ -4999,18 +5221,13 @@ if (floatingTextEl) {
 }
 
 async function deleteAnnotationWithUndo(ann) {
-  const isQuestion = String(ann?.annotation_type || "").trim() === "question";
-  if (isQuestion) {
-    const ok = confirm("Delete this question?");
-    if (!ok) return;
-  }
   const { id, x, y, text } = ann;
   const assetId = state.modalAsset?.id;
   await api(`/api/annotations/${id}`, { method: "DELETE" });
   state.annotations = state.annotations.filter((a) => a.id !== id);
   if (state.activeAnnotationId === id) state.activeAnnotationId = null;
   renderAnnotations(); renderMarkers(); renderFloatingNote();
-  Shared.showToast(isQuestion ? "Question deleted" : "Annotation deleted", {
+  Shared.showToast("Annotation deleted", {
     type: "info", actionLabel: "Undo",
     onAction: async () => {
       if (!assetId) return;
@@ -5057,21 +5274,20 @@ function renderMarkers() {
   $$(".marker").forEach((m) => m.remove());
   const stage = $("#imageStage");
   if (!stage) return;
-  let questionNumber = 0;
   let annotationNumber = 0;
   state.annotations.forEach((ann, idx) => {
-    const isQuestion = ann.annotation_type === "question";
-    const isResolved = isQuestion && ann.resolved;
+    const isQuestion = false;
+    const isResolved = false;
     const canManage = canManageAnnotation(ann);
-    const displayNumber = isQuestion ? ++questionNumber : ++annotationNumber;
+    const displayNumber = ++annotationNumber;
     const m = document.createElement("div");
     m.className = `marker${isQuestion ? " marker-question" : ""}${isResolved ? " marker-resolved" : ""}`;
     const pt = normalizedToStagePoint(ann.x, ann.y);
     m.style.left = `${pt.left}px`;
     m.style.top = `${pt.top}px`;
     m.dataset.id = ann.id;
-    m.style.background = isQuestion ? "#e67e22" : markerColor(idx);
-    const markerLabel = isQuestion ? `?${displayNumber}` : `${displayNumber}`;
+    m.style.background = markerColor(idx);
+    const markerLabel = `${displayNumber}`;
     const markerActions = canManage
       ? `
       <div class="badgeIcons">
@@ -5126,16 +5342,12 @@ if (imageStageEl) {
     if (e.target.closest(".marker") || e.target.closest(".floatingNote")) return;
     const point = stagePointToNormalized(e.clientX, e.clientY);
     if (!point) return;
-    // Check if "question mode" toggle is active
-    const qToggle = $("#annQuestionToggle");
-    const annotation_type = qToggle && qToggle.checked ? "question" : "note";
     const res = await api("/api/annotations", {
       method: "POST",
-      body: JSON.stringify({ asset_id: state.modalAsset.id, x: point.x, y: point.y, text: "", annotation_type }),
+      body: JSON.stringify({ asset_id: state.modalAsset.id, x: point.x, y: point.y, text: "", annotation_type: "note" }),
     });
     state.annotations.push(res.annotation);
     setActiveAnnotation(res.annotation.id, { focusEditor: true });
-    if (annotation_type === "question") refreshQuestionsIfOwner();
   });
 
   imageStageEl.addEventListener("pointermove", async (e) => {
@@ -5198,7 +5410,13 @@ function printModalAsset(asset) {
   if (asset?.creator_name) metaParts.push(`by ${String(asset.creator_name)}`);
   const contextParts = [];
   if (state.currentCollectionLabel) contextParts.push(`Collection: ${state.currentCollectionLabel}`);
-  else if (state.currentClassificationLabel) contextParts.push(`Browse: ${state.currentClassificationLabel}`);
+  else if (hasClassificationFilter()) {
+    const facetLabel = getClassificationFacetEntries()
+      .map((entry) => classificationFacetLabel(entry.axis, entry.value))
+      .filter(Boolean)
+      .join(", ") || state.currentClassificationLabel;
+    contextParts.push(`Refine: ${facetLabel}`);
+  }
   else if (state.currentSource) contextParts.push(`Source: ${sourceDisplayName(state.currentSource)}`);
   const notesText = String(asset?.notes || "").trim();
   const sourceRef = String(asset?.source_ref || "").trim();
@@ -5207,20 +5425,23 @@ function printModalAsset(asset) {
     .filter(Boolean);
   const visibleLabels = labelTexts.slice(0, 12);
   const extraLabelCount = Math.max(0, labelTexts.length - visibleLabels.length);
-  const questionItems = [];
   const annotationItems = [];
-  let questionNumber = 0;
   let annotationNumber = 0;
+  const clampPrintPoint = (value) => {
+    const num = Number(value);
+    return Number.isFinite(num) ? Math.max(0, Math.min(1, num)) : 0;
+  };
   for (const ann of (Array.isArray(state.annotations) ? state.annotations : [])) {
-    const text = String(ann?.text || "").trim();
-    if (!text) continue;
-    if (String(ann?.annotation_type || "").trim() === "question") {
-      questionNumber += 1;
-      questionItems.push({ label: `?${questionNumber}`, text });
-    } else {
-      annotationNumber += 1;
-      annotationItems.push({ label: `#${annotationNumber}`, text });
-    }
+    annotationNumber += 1;
+    const text = String(ann?.text || "").trim() || "No annotation text.";
+    annotationItems.push({
+      label: `#${annotationNumber}`,
+      marker: String(annotationNumber),
+      text,
+      x: clampPrintPoint(ann?.x),
+      y: clampPrintPoint(ann?.y),
+      color: markerColor(annotationNumber - 1),
+    });
   }
   const safeMeta = escapeHtml(metaParts.join(" · "));
   const safeContext = escapeHtml(contextParts.join(" · "));
@@ -5231,13 +5452,18 @@ function printModalAsset(asset) {
     ? visibleLabels.map((label) => `<span class="label-chip">${escapeHtml(label)}</span>`).join("")
       + (extraLabelCount ? `<span class="label-chip label-chip-more">+${extraLabelCount} more</span>` : "")
     : "";
-  const questionMarkup = questionItems.length
-    ? questionItems.map((item) => `<li><span class="ann-num">${escapeHtml(item.label)}</span><span>${escapeHtml(item.text)}</span></li>`).join("")
-    : "";
   const annotationMarkup = annotationItems.length
     ? annotationItems.map((item) => `<li><span class="ann-num">${escapeHtml(item.label)}</span><span>${escapeHtml(item.text)}</span></li>`).join("")
     : "";
-  const hasSupplementary = !!(safeNotes || labelsMarkup || questionMarkup || annotationMarkup);
+  const markerMarkup = annotationItems.length
+    ? annotationItems.map((item) => {
+      const left = (item.x * 100).toFixed(3);
+      const top = (item.y * 100).toFixed(3);
+      const color = escapeHtml(item.color);
+      return `<span class="print-marker" style="left:${left}%;top:${top}%;background:${color};">${escapeHtml(item.marker)}</span>`;
+    }).join("")
+    : "";
+  const hasSupplementary = !!(safeNotes || labelsMarkup || annotationMarkup);
   const mediaMaxHeight = hasSupplementary ? "6.4in" : "7.25in";
   win.document.open();
   win.document.write(`<!doctype html>
@@ -5293,11 +5519,33 @@ function printModalAsset(asset) {
         overflow: hidden;
         min-height: 0;
       }
+      .image-wrap {
+        position: relative;
+        display: inline-block;
+        max-width: 100%;
+        line-height: 0;
+      }
       .frame img {
         display: block;
         max-width: 100%;
         max-height: ${mediaMaxHeight};
         object-fit: contain;
+      }
+      .print-marker {
+        position: absolute;
+        transform: translate(-50%, -50%);
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        border: 2px solid #fff;
+        box-shadow: 0 1px 5px rgba(44, 40, 37, 0.36);
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        font-weight: 800;
+        line-height: 1;
       }
       .detail-stack {
         display: grid;
@@ -5382,12 +5630,14 @@ function printModalAsset(asset) {
         ${safeSourceRef ? `<div class="source-ref">${safeSourceRef}</div>` : ""}
       </div>
       <div class="frame">
-        <img id="printImage" src="${safeUrl}" alt="Print item" />
+        <div class="image-wrap">
+          <img id="printImage" src="${safeUrl}" alt="Print item" />
+          ${markerMarkup}
+        </div>
       </div>
-      ${(safeNotes || labelsMarkup || questionMarkup || annotationMarkup) ? `<div class="detail-stack">
+      ${(safeNotes || labelsMarkup || annotationMarkup) ? `<div class="detail-stack">
         ${safeNotes ? `<div class="notes"><div class="notes-label">Notes</div><div class="notes-text">${safeNotes}</div></div>` : ""}
         ${labelsMarkup ? `<div class="labels"><div class="section-label">Labels</div><div class="labels-row">${labelsMarkup}</div></div>` : ""}
-        ${questionMarkup ? `<div class="annotations"><div class="section-label">Questions</div><ul class="ann-list">${questionMarkup}</ul></div>` : ""}
         ${annotationMarkup ? `<div class="annotations"><div class="section-label">Annotations</div><ul class="ann-list">${annotationMarkup}</ul></div>` : ""}
       </div>` : ""}
     </div>
@@ -6200,7 +6450,14 @@ function updateCanvasSelectionCount() {
   const hideGlobalBtn = $("#canvasHideGlobal");
   if (hideGlobalBtn) hideGlobalBtn.disabled = !hasSelection;
   const flagBtn = $("#canvasFlag");
-  if (flagBtn) flagBtn.disabled = !(hasSelection && canUseFlag());
+  if (flagBtn) {
+    flagBtn.disabled = !(hasSelection && canUseFlag());
+    const selectedAssets = Array.from(state.canvasSelected)
+      .map((id) => state.assets.find((asset) => asset.id === id))
+      .filter(Boolean);
+    const shouldUnflag = selectedAssets.length > 0 && selectedAssets.every((asset) => asset.flagged == 1);
+    flagBtn.textContent = shouldUnflag ? "⚐ Unflag" : "⚑ Flag";
+  }
   const tagBtn = $("#canvasTag");
   if (tagBtn) tagBtn.disabled = !(hasSelection && canUseTag());
 }
@@ -6268,23 +6525,28 @@ async function canvasBulkHideGlobal() {
   }
 }
 
-async function canvasBulkFlag() {
+async function canvasBulkToggleFlag() {
   if (!canUseFlag()) {
     Shared.showToast("Flagging is owner-only.", { type: "info" });
     return;
   }
   const ids = Array.from(state.canvasSelected);
   if (!ids.length) return;
+  const selectedAssets = ids.map((id) => state.assets.find((asset) => asset.id === id)).filter(Boolean);
+  const newFlagged = selectedAssets.length > 0 && selectedAssets.every((asset) => asset.flagged == 1) ? 0 : 1;
   try {
     await api("/api/assets/flag/bulk", {
       method: "POST",
-      body: JSON.stringify({ ids, flagged: 1 }),
+      body: JSON.stringify({ ids, flagged: newFlagged }),
     });
     ids.forEach((id) => {
       const a = state.assets.find((x) => x.id === id);
-      if (a) a.flagged = 1;
+      if (a) a.flagged = newFlagged;
     });
-    Shared.showToast(`${ids.length} item${ids.length === 1 ? "" : "s"} flagged for review.`, { type: "success" });
+    Shared.showToast(
+      `${ids.length} item${ids.length === 1 ? "" : "s"} ${newFlagged ? "flagged for follow-up" : "unflagged"}.`,
+      { type: "success" }
+    );
     clearCanvasSelection();
     renderGrid();
   } catch (e) {
@@ -6324,7 +6586,7 @@ if (canvasHideLocalBtn) canvasHideLocalBtn.addEventListener("click", canvasBulkH
 const canvasHideGlobalBtn = $("#canvasHideGlobal");
 if (canvasHideGlobalBtn) canvasHideGlobalBtn.addEventListener("click", canvasBulkHideGlobal);
 const canvasFlagBtn = $("#canvasFlag");
-if (canvasFlagBtn) canvasFlagBtn.addEventListener("click", canvasBulkFlag);
+if (canvasFlagBtn) canvasFlagBtn.addEventListener("click", canvasBulkToggleFlag);
 const canvasTagBtn = $("#canvasTag");
 if (canvasTagBtn) canvasTagBtn.addEventListener("click", canvasBulkTag);
 const canvasClearBtn = $("#canvasClear");
@@ -6807,9 +7069,7 @@ async function executeChatAction(action, params) {
       }
       if (params.triage_status !== undefined) {
         state.triageFilter = params.triage_status || "";
-        $$("[data-triage]").forEach((c) => {
-          c.classList.toggle("active", c.dataset.triage === (params.triage_status || ""));
-        });
+        syncReviewQueueSelect();
       }
       if (params.q !== undefined) {
         state.q = params.q || "";
@@ -6883,9 +7143,7 @@ async function executeChatAction(action, params) {
       state.currentTreeNodeId = null;
       state.triageFilter = "";
       state.q = "";
-      $$("[data-triage]").forEach((c) => {
-        c.classList.toggle("active", c.dataset.triage === "");
-      });
+      syncReviewQueueSelect();
       renderCatalogTree();
       await loadAssets();
       break;
@@ -6985,7 +7243,7 @@ let _explorerMode = "3d";   // "2d" | "3d"
 let _ExplorerImpl = null;
 let _disable3DForSession = false;
 let _explorer3DLoadPromise = null;
-const EXPLORER_3D_MODULE_URL = `${_B}/app/attractor-explorer-3d.js?v=59`;
+const EXPLORER_3D_MODULE_URL = `${_B}/app/attractor-explorer-3d.js?v=60`;
 // Hard refresh in Safari can cold-load Three.js from CDN; allow enough
 // headroom so we do not incorrectly drop into 2D fallback.
 const EXPLORER_3D_READY_WAIT_MS = 12000;
@@ -7435,7 +7693,7 @@ function _merge3DExplorerData(layoutData, attractorData) {
 }
 
 function _shouldExplorerIncludeHiddenData() {
-  return isOwner() && state.triageFilter === "hidden";
+  return isOwner() && _isHiddenReviewQueue();
 }
 
 async function _loadExplorerPayload(mode, includeHidden, payloadFilterIds = null) {
@@ -7778,15 +8036,14 @@ async function syncExplorerFilter() {
     if (state.currentSource) params.set("source", state.currentSource);
     if (state.currentBoard) params.set("board", state.currentBoard);
     if (state.currentContentKind) params.set("content_kind", state.currentContentKind);
-    if (state.currentClassificationAxis) params.set("classification_axis", state.currentClassificationAxis);
-    if (state.currentClassificationValue) params.set("classification_value", state.currentClassificationValue);
+    appendClassificationFacetParams(params);
     const collectionIds = getCollectionFilterIds();
     if (collectionIds.length) params.set("collection_id", collectionIds.join(","));
     if (state.triageFilter === "needs-comment") {
       params.set("needs_annotation", "1");
       if (isOwner()) params.set("include_hidden", "1");
-    } else if (state.triageFilter === "hidden") {
-      params.set("triage_status", "hidden");
+    } else if (_isHiddenReviewQueue()) {
+      _appendHiddenReviewQueueParams(params);
       if (_shouldExplorerIncludeHiddenData()) params.set("include_hidden", "1");
     } else if (state.triageFilter === "flagged") {
       params.set("flagged", "1");
@@ -7840,6 +8097,7 @@ function updateFilterIndicator() {
   const text = $("#filterSummaryText");
   const clearBtn = $("#clearFilterSummary");
   if (!bar || !text) return;
+  syncReviewQueueSelect();
 
   const davePrompt = String(state.chatPrompt || "").trim();
   const parts = [];
@@ -7872,9 +8130,18 @@ function updateFilterIndicator() {
     parts.push(`Catalog: ${catalogLabel}`);
   }
   if (hasClassificationFilter()) {
-    const axisLabel = String(state.currentClassificationAxis || "").trim().replace(/_/g, " ");
-    const scopeLabel = String(state.currentClassificationLabel || state.currentClassificationValue || axisLabel).trim();
-    parts.push(`Browse: ${scopeLabel}`);
+    const facetLabels = getClassificationFacetEntries()
+      .map((entry) => classificationFacetLabel(entry.axis, entry.value))
+      .filter(Boolean);
+    const visible = facetLabels.slice(0, 4).join(", ");
+    const extra = Math.max(0, facetLabels.length - 4);
+    const fallback = String(
+      state.currentClassificationLabel
+      || state.currentClassificationValue
+      || state.currentClassificationAxis
+      || ""
+    ).trim();
+    parts.push(`Refine: ${visible || fallback}${extra ? ` +${extra}` : ""}`);
   }
   if (collectionIds.length) {
     if (collectionIds.length === 1) {
@@ -7886,7 +8153,7 @@ function updateFilterIndicator() {
     }
   }
   if (state.triageFilter) {
-    const labels = { pending: "Pending", keeper: "Keepers", hidden: "Hidden", "needs-comment": "Needs comment", flagged: "Flagged" };
+    const labels = { pending: "Pending", keeper: "Keepers", hidden: "Hidden", "hidden-manual": "Hidden manually", "hidden-ai": "Hidden by AI cleanup", "needs-comment": "Needs comment", flagged: "Flagged" };
     parts.push(`Status: ${labels[state.triageFilter] || state.triageFilter}`);
   }
 
@@ -8333,12 +8600,12 @@ refreshIngestTagPickers();
 
 // ─── Init ─────────────────────────────────────────────────────────────────────────
 
-wireStatusChips();
+wireReviewQueueFilter();
 wireSidebarToggle();
 wireSidebarResize();
 
 function isOwner() {
-  return state.actor && state.actor.role === "owner";
+  return true;
 }
 
 function canUseFlag() {
@@ -8361,14 +8628,12 @@ function renderReviewSidebarSummary() {
   if (!section || !headingEl || !content) return;
   const scope = getReviewScopeInfo();
   const modeLabel = state.view === "review" ? "One-by-one review" : "Grid review";
-  const hiddenMarkup = _buildReviewHiddenMarkup();
   headingEl.textContent = "Review";
   content.innerHTML = `
     <div class="review-sidebar-summary">
       <div class="review-sidebar-row"><span class="muted">Scope</span><strong>${escapeHtml(scope.label || "Entire library")}</strong></div>
       <div class="review-sidebar-row"><span class="muted">Mode</span><strong>${escapeHtml(modeLabel)}</strong></div>
-      ${hiddenMarkup}
-      <div class="review-sidebar-note muted">Status filters apply to the current review scope. Normal browse folders are hidden while review is active.</div>
+      <div class="review-sidebar-note muted">Use Review queue above the cards to change workflow status. Normal browse folders are hidden while review is active.</div>
     </div>
   `;
   section.hidden = false;
@@ -8393,8 +8658,8 @@ function renderSharedSessionSidebarSummary() {
       <div class="shared-session-collection">${escapeHtml(collectionName)}</div>
       <div class="shared-session-meta">${itemCount} item${itemCount === 1 ? "" : "s"}</div>
       ${collectionDescription ? `<div class="shared-session-description">${escapeHtml(collectionDescription)}</div>` : ""}
-      <div class="shared-session-note">Questions stay enabled for this shared collection.</div>
-      <button id="sharedSessionRevealBtn" class="collection-shared-focus-action" type="button">Show other shared collections</button>
+      <div class="shared-session-note">Legacy shared-session mode is retired; use Export Collection PDF for designer handoff.</div>
+      <button id="sharedSessionRevealBtn" class="collection-shared-focus-action" type="button">Show all collections</button>
     </div>
   `;
   const btn = $("#sharedSessionRevealBtn");
@@ -8408,46 +8673,17 @@ function renderSharedSessionSidebarSummary() {
   section.hidden = false;
 }
 
-function _buildReviewHiddenMarkup() {
-  if (!isOwner() || !state.hiddenTree || !Number(state.hiddenTree.total || 0)) return "";
-  const sources = Array.isArray(state.hiddenTree.sources) ? state.hiddenTree.sources : [];
-  const rows = [
-    `<div class="review-hidden-row"><span class="review-hidden-label">All hidden</span><span class="tree-count">${Number(state.hiddenTree.total || 0)}</span></div>`,
-  ];
-  for (const src of sources) {
-    const sourceName = escapeHtml(sourceDisplayName(src.source) || String(src.source || ""));
-    rows.push(
-      `<div class="review-hidden-row review-hidden-source"><span class="review-hidden-label">${sourceName}</span><span class="tree-count">${Number(src.total || 0)}</span></div>`
-    );
-    for (const board of (src.boards || [])) {
-      rows.push(
-        `<div class="review-hidden-row review-hidden-board"><span class="review-hidden-label">${sourceName} / ${escapeHtml(String(board.board || ""))}</span><span class="tree-count">${Number(board.count || 0)}</span></div>`
-      );
-    }
-  }
-  return `
-    <div class="review-hidden-section">
-      <div class="review-sidebar-subtitle">Hidden</div>
-      <div class="review-hidden-list">
-        ${rows.join("")}
-      </div>
-    </div>
-  `;
-}
-
 function updateSidebarModeVisibility() {
   const owner = isOwner();
   const inReview = owner && isReviewModeActive();
   const focusedShared = _isFocusedSharedCollectionSession();
   const layout = $(".layout");
   const sidebar = $(".sidebar");
-  const statusSection = $("#statusChips")?.closest(".sidebar-section");
   const treeSection = $("#catalogTree")?.closest(".sidebar-section");
   const collectionsSection = $("#collectionTree")?.closest(".sidebar-section");
   const collectionActionsSection = $("#newCollection")?.closest(".sidebar-section");
   const collectionsHeading = $("#collectionSidebarSection .sidebar-heading");
 
-  if (statusSection) statusSection.hidden = !owner;
   if (treeSection) treeSection.hidden = inReview || focusedShared;
   if (collectionsSection) collectionsSection.hidden = inReview;
   if (collectionActionsSection) collectionActionsSection.hidden = inReview;
@@ -8483,18 +8719,16 @@ function applyRoleVisibility() {
   if (addMediaEl) addMediaEl.hidden = !owner;
   const adminEl = $(".adminLink");
   if (adminEl) adminEl.hidden = !owner;
-  const shareCollectionsEl = $("#shareCollections");
-  if (shareCollectionsEl) shareCollectionsEl.hidden = !owner;
+  syncCollectionPdfExportButton();
+  const manageCollectionsEl = $("#manageCollections");
+  if (manageCollectionsEl) manageCollectionsEl.hidden = !owner;
   const manageCollectionVisibilityEl = $("#manageCollectionVisibility");
   if (manageCollectionVisibilityEl) manageCollectionVisibilityEl.hidden = !owner;
 
-  // Share context actions — available to authenticated actors only
-  for (const id of ["modalSharePrimaryBtn", "printAssetBtn"]) {
-    const btn = document.getElementById(id);
-    if (btn) btn.hidden = !state.actor;
-  }
+  const printBtn = document.getElementById("printAssetBtn");
+  if (printBtn) printBtn.hidden = false;
   const shareGroup = $("#modalShareGroup");
-  if (shareGroup) shareGroup.hidden = !state.actor;
+  if (shareGroup) shareGroup.hidden = false;
 
   // Modal flag/tag buttons — scoped by named owner permissions
   const flagBtnEl = $("#modalFlagBtn");
@@ -8513,8 +8747,7 @@ function applyRoleVisibility() {
   const reviewFlagBtnEl = $("#reviewFlagBtn");
   if (reviewFlagBtnEl) reviewFlagBtnEl.hidden = !canUseFlag();
 
-  // Annotation question toggle — available to all (collaborators ask questions)
-  // Notes textarea — available to all
+  // Notes and image annotations are local corpus-management tools.
 
   // New collection button — owner-only
   const newCollBtn = $("#newCollection");
@@ -8524,22 +8757,9 @@ function applyRoleVisibility() {
   updateSidebarModeVisibility();
 }
 
-async function checkFlaggedCount() {
-  if (!isOwner()) return;
-  try {
-    const data = await api("/api/assets?flagged=1&limit=1");
-    const chip = $("#flaggedChip");
-    if (chip) chip.hidden = !(data.assets && data.assets.length > 0);
-  } catch { /* ignore */ }
-}
-
 (async () => {
   try {
-    // Resolve current actor identity (magic link)
-    try {
-      const meData = await api("/api/me");
-      state.actor = meData.actor || null;
-    } catch { state.actor = null; }
+    state.actor = { id: "local-owner", name: "Jim", role: "owner" };
 
     // Apply role-based visibility before rendering
     applyRoleVisibility();
@@ -8553,29 +8773,18 @@ async function checkFlaggedCount() {
     await loadAssets();
     await Promise.all([facetsPromise, catalogTreePromise]);
     const viewFromUrl = _readViewModeFromUrl();
-    const hasContextLink = !!_contextLinkPayloadFromUrl();
     let preferredView = viewFromUrl || _readViewModePref();
-    // Shared context links and collaborator entry should default to Grid unless
-    // the URL explicitly requests a specific view.
-    if (!viewFromUrl && (hasContextLink || isCollaboratorActor())) {
+    if (!viewFromUrl && isCollaboratorActor()) {
       preferredView = "grid";
     }
     if (preferredView === "explorer") {
       setViewMode("explorer", { persist: false });
     }
-    await restoreContextLinkFromUrl();
     await restoreDirectItemLinkFromUrl();
 
-    // Owner-only features: hidden tree + question polling + flagged check
+    // Owner-only local corpus tools.
     if (isOwner()) {
       loadHiddenTree();
-      pollQuestions();
-      state.questionPollTimer = setInterval(pollQuestions, 15000);
-      checkFlaggedCount();
-      window.addEventListener("focus", refreshQuestionsIfOwner);
-      document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible") refreshQuestionsIfOwner();
-      });
     }
   } catch (e) {
     const grid = $("#grid");

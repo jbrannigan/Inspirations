@@ -1,5 +1,8 @@
 # Sprint Spec: Collaborator Question Workflow
 
+> Legacy note (2026-05-27): collaborator question workflow is retired from the
+> active product. Image annotations remain local corpus/QC notes.
+
 Status: Sprint-ready
 Date: 2026-02-28
 Owner: Product + Builder

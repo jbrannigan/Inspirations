@@ -1,6 +1,9 @@
 # TODO: Consuming UX (Shared Collection Viewer)
 
-**Status:** Future work — not started.
+**Status:** Legacy planning note. Superseded on 2026-05-27 by the current
+direction: Jim keeps Inspirations as a local corpus/QC app and shares one
+collection at a time via standalone PDF export. See
+`docs/COLLECTION_PDF_EXPORT_HANDOFF_2026-05-27.md`.
 
 ## The Question
 

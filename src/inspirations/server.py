@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import gzip
+import ipaddress
 import mimetypes
 import os
 import re
@@ -21,9 +22,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .ai import DEFAULT_GEMINI_EMBEDDING_MODEL, run_similarity_search
+from .ai import (
+    DEFAULT_GEMINI_EMBEDDING_MODEL,
+    run_ai_labeler,
+    run_gemini_text_embedder,
+    run_similarity_search,
+)
 from .catalog import generate_catalog
 from .chat import process_chat_message
+from .classification_v2 import run_multi_axis_inference_v2, run_track_gate_v2
 from .db import Db, ensure_schema
 from .importers.scans import import_photos_inbox, import_scans_inbox, import_videos_inbox
 from .store import (
@@ -36,7 +43,6 @@ from .store import (
     create_annotation,
     create_collection,
     decorate_collection_record,
-    delete_actor,
     delete_annotation,
     delete_assets,
     get_actor_by_token,
@@ -51,7 +57,6 @@ from .store import (
     delete_collection,
     delete_hidden_collections,
     list_facets,
-    list_open_questions,
     list_tray,
     add_to_tray,
     remove_from_tray,
@@ -70,12 +75,17 @@ from .store import (
 )
 from .title_workflow import TitleConflictError, TitleNotFoundError, apply_working_title, enrich_assets_with_title_info
 from .explorer_layout import compute_layout
-from .feature_vectors import build_feature_vectors
+from .feature_vectors import EXPLORER_LEGACY_SPECS, build_feature_vectors, build_legacy_facet_memberships
+from .export import PdfRenderError, PdfToolUnavailableError, export_collection_pdf
 from .source_link_enrichment import (
     capture_source_link_candidate_for_asset,
     default_auth_browser_profile_dir,
     latest_source_link_enrichment_for_asset,
+    list_pending_media_repairs,
+    mark_media_repair_evidence_refreshed,
+    media_repair_gallery_for_asset,
     promote_latest_hero_image_for_asset,
+    promote_media_repair_candidate_for_asset,
 )
 from .thumbnails import generate_thumbnails
 
@@ -236,15 +246,30 @@ def _send(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
         handler.wfile.write(data)
 
 
+def _send_pdf(handler: BaseHTTPRequestHandler, path: Path, *, filename: str) -> None:
+    data = path.read_bytes()
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", filename).strip("-") or "collection.pdf"
+    if not safe_name.lower().endswith(".pdf"):
+        safe_name += ".pdf"
+    handler.send_response(200)
+    handler.send_header("Content-Type", "application/pdf")
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Content-Disposition", f'attachment; filename="{safe_name}"')
+    handler.send_header("Content-Length", str(len(data)))
+    handler.end_headers()
+    if handler.command != "HEAD":
+        handler.wfile.write(data)
+
+
 def _resolve_actor(handler: BaseHTTPRequestHandler) -> dict | None:
-    """Resolve actor token, preferring explicit magic-link query over header."""
+    """Resolve legacy actor tokens; default local sessions to owner mode."""
     parsed = urlparse(handler.path)
     q = parse_qs(parsed.query)
     token = (q.get("actor", [""])[0] or "").strip()
     if not token:
         token = (handler.headers.get("X-Actor-Token") or "").strip()
     if not token:
-        return None
+        return {"id": "local-owner", "name": "Jim", "role": "owner", "token": ""}
     with Db(handler.server.db_path) as db:
         ensure_schema(db)
         return get_actor_by_token(db, token=token)
@@ -351,6 +376,20 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return _send(self, 400, {"error": "asset_id required"})
             return self._serve_scan_doc_pdf(asset_id)
 
+        if parsed.path == "/api/admin/status":
+            configured = bool(self._admin_password())
+            pending = self._with_db(list_pending_media_repairs)
+            return _send(
+                self,
+                200,
+                {
+                    "configured": configured,
+                    "setup_allowed": bool(not configured and self._is_localhost_setup_request()),
+                    "pending_media_repairs": pending,
+                    "pending_media_repair_count": len(pending),
+                },
+            )
+
         if parsed.path == "/api/assets":
             q = parse_qs(parsed.query)
             include_hidden_req = _parse_bool_param(q.get("include_hidden", [""])[0], default=False)
@@ -377,6 +416,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 creator=q.get("creator", [""])[0],
                 collection_id=q.get("collection_id", [""])[0],
                 triage_status=q.get("triage_status", [""])[0],
+                triage_actor=q.get("triage_actor", [""])[0],
                 category=category,
                 needs_annotation=_parse_bool_param(q.get("needs_annotation", [""])[0], default=False),
                 flagged_only=_parse_bool_param(q.get("flagged", [""])[0], default=False),
@@ -384,6 +424,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 include_hidden=include_hidden,
                 classification_axis=q.get("classification_axis", [""])[0],
                 classification_value=q.get("classification_value", [""])[0],
+                classification_filters=q.get("facet", []),
                 exclude_tracks=exclude_tracks,
                 viewer_role=actor_role,
                 viewer_actor_id=actor_id,
@@ -437,12 +478,14 @@ class ApiHandler(BaseHTTPRequestHandler):
                 board=q.get("board", [""])[0],
                 collection_id=q.get("collection_id", [""])[0],
                 triage_status=q.get("triage_status", [""])[0],
+                triage_actor=q.get("triage_actor", [""])[0],
                 category=category,
                 needs_annotation=_parse_bool_param(q.get("needs_annotation", [""])[0], default=False),
                 flagged_only=_parse_bool_param(q.get("flagged", [""])[0], default=False),
                 include_hidden=include_hidden,
                 classification_axis=q.get("classification_axis", [""])[0],
                 classification_value=q.get("classification_value", [""])[0],
+                classification_filters=q.get("facet", []),
                 exclude_tracks=exclude_tracks,
                 viewer_role=actor_role,
                 viewer_actor_id=actor_id,
@@ -661,6 +704,10 @@ class ApiHandler(BaseHTTPRequestHandler):
                 ids=ids_str,
                 category=category,
                 exclude_tracks=exclude_tracks,
+                triage_status=q.get("triage_status", [""])[0],
+                triage_actor=q.get("triage_actor", [""])[0],
+                needs_annotation=_parse_bool_param(q.get("needs_annotation", [""])[0], default=False),
+                flagged_only=_parse_bool_param(q.get("flagged", [""])[0], default=False),
                 include_hidden=include_hidden,
                 limit=limit + 1,
                 offset=offset,
@@ -705,6 +752,10 @@ class ApiHandler(BaseHTTPRequestHandler):
                 ids=",".join(short_ids),
                 category=category,
                 exclude_tracks=exclude_tracks,
+                triage_status=q.get("triage_status", [""])[0],
+                triage_actor=q.get("triage_actor", [""])[0],
+                needs_annotation=_parse_bool_param(q.get("needs_annotation", [""])[0], default=False),
+                flagged_only=_parse_bool_param(q.get("flagged", [""])[0], default=False),
                 include_hidden=include_hidden,
             )
             return _send(self, 200, {"ids": ids})
@@ -725,34 +776,8 @@ class ApiHandler(BaseHTTPRequestHandler):
             anns = self._with_db(list_annotations, asset_id=asset_id)
             return _send(self, 200, {"annotations": anns})
 
-        if parsed.path == "/api/context/resolve":
-            actor = _resolve_actor(self)
-            if not actor:
-                return _send(self, 401, {"error": "authentication required"})
-            q = parse_qs(parsed.query)
-            collection_id = (q.get("collection_id", [""])[0] or "").strip()
-            item_id = (q.get("item_id", [""])[0] or "").strip()
-            if not collection_id or not item_id:
-                return _send(self, 400, {"error": "collection_id and item_id required"})
-            report = self._with_db(
-                self._resolve_context_link,
-                collection_id=collection_id,
-                item_id=item_id,
-                actor_role=str(actor.get("role") or ""),
-                actor_id=str(actor.get("id") or ""),
-            )
-            return _send(self, 200, report)
-
-        if parsed.path == "/api/me":
-            actor = _resolve_actor(self)
-            return _send(self, 200, {"actor": actor})
-
-        if parsed.path == "/api/actors":
-            actor = _resolve_actor(self)
-            if not actor or actor.get("role") != "owner":
-                return _send(self, 403, {"error": "owner access required"})
-            actors = self._with_db(list_actors)
-            return _send(self, 200, {"actors": actors})
+        if parsed.path in {"/api/context/resolve", "/api/me", "/api/actors"}:
+            return _send(self, 404, {"error": "live sharing is retired"})
 
         if parsed.path == "/api/hidden/tree":
             actor = _resolve_actor(self)
@@ -762,11 +787,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             return _send(self, 200, tree)
 
         if parsed.path == "/api/questions/dashboard":
-            actor = _resolve_actor(self)
-            if not actor or actor.get("role") != "owner":
-                return _send(self, 403, {"error": "owner access required"})
-            questions = self._with_db(list_open_questions)
-            return _send(self, 200, {"questions": questions, "total": len(questions)})
+            return _send(self, 404, {"error": "collaborator questions are retired"})
 
         self.send_error(404)
 
@@ -783,6 +804,27 @@ class ApiHandler(BaseHTTPRequestHandler):
             body = _json_body(self)
         except Exception as e:
             return _send(self, 400, {"error": str(e)})
+
+        m = re.match(r"^/api/collections/([^/]+)/export/pdf$", parsed.path)
+        if m:
+            try:
+                report = self._with_db(
+                    export_collection_pdf,
+                    collection_id=m.group(1),
+                    out_path=None,
+                )
+            except FileNotFoundError:
+                return _send(self, 404, {"error": "collection not found"})
+            except ValueError as e:
+                return _send(self, 400, {"error": str(e)})
+            except PdfToolUnavailableError as e:
+                return _send(self, 503, {"error": str(e)})
+            except PdfRenderError as e:
+                return _send(self, 500, {"error": f"PDF render failed: {e}"})
+            pdf_path = Path(str(report.get("path") or ""))
+            if not pdf_path.exists():
+                return _send(self, 500, {"error": "PDF export did not produce a file"})
+            return _send_pdf(self, pdf_path, filename=pdf_path.name)
 
         if parsed.path == "/api/collections":
             actor = _resolve_actor(self)
@@ -875,6 +917,23 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return _send(self, 400, {"error": str(e)})
             return _send(self, 201, {"collection": col})
 
+        if parsed.path == "/api/admin/setup":
+            if self._admin_password():
+                return _send(self, 409, {"error": "admin password is already configured"})
+            if not self._is_localhost_setup_request():
+                return _send(self, 403, {"error": "first-time admin setup is only allowed from localhost on the Mac"})
+            password = str(body.get("password") or "").strip()
+            confirm_password = str(body.get("confirm_password") or "").strip()
+            if len(password) < 8:
+                return _send(self, 400, {"error": "admin password must be at least 8 characters"})
+            if password != confirm_password:
+                return _send(self, 400, {"error": "password confirmation does not match"})
+            try:
+                self._write_admin_password(password)
+            except OSError as e:
+                return _send(self, 500, {"error": f"could not save admin password: {e}"})
+            return _send(self, 201, {"ok": True, "configured": True})
+
         if parsed.path == "/api/admin/login":
             expected = self._admin_password()
             if not expected:
@@ -919,6 +978,18 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return _send(self, 500, {"error": f"backup failed: {e}"})
             report = self._delete_assets_and_files(asset_ids)
             report["backup_path"] = backup_path
+            return _send(self, 200, report)
+
+        if parsed.path == "/api/admin/media-repairs/refresh":
+            _token, token_error = self._require_admin_token()
+            if token_error:
+                return _send(self, 403, {"error": token_error})
+            try:
+                report = self._refresh_pending_media_repairs()
+            except ValueError as e:
+                return _send(self, 503, {"error": str(e)})
+            except Exception as e:
+                return _send(self, 500, {"error": f"media repair refresh failed: {e}"})
             return _send(self, 200, report)
 
         m = re.match(r"^/api/collections/([^/]+)/items/remove$", parsed.path)
@@ -1021,6 +1092,36 @@ class ApiHandler(BaseHTTPRequestHandler):
             )
             return _send(self, 200, {"ok": True})
 
+        m = re.match(r"^/api/assets/([^/]+)/broken-source$", parsed.path)
+        if m:
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
+            asset_id = m.group(1)
+            actor_name = str(actor.get("name") or "").strip() or "ui"
+
+            def mark_broken_source(db: Db) -> dict | None:
+                exists = db.query_value("select 1 from assets where id=? limit 1", (asset_id,))
+                if not exists:
+                    return None
+                db.exec(
+                    "update assets set flagged=1, flagged_by=?, flagged_note=? where id=?",
+                    (actor_name, "broken source link", asset_id),
+                )
+                set_triage_status(
+                    db,
+                    asset_id,
+                    "hidden",
+                    reason="broken source link (UI)",
+                    actor=actor_name,
+                )
+                return self._get_asset_for_modal(db, asset_id=asset_id, include_hidden=True)
+
+            updated_asset = self._with_db(mark_broken_source)
+            if not updated_asset:
+                return _send(self, 404, {"error": "asset not found"})
+            return _send(self, 200, {"ok": True, "asset": updated_asset})
+
         m = re.match(r"^/api/assets/([^/]+)/flag$", parsed.path)
         if m:
             asset_id = m.group(1)
@@ -1092,8 +1193,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return _send(self, 400, {"error": "asset_id, x, y required"})
             actor = _resolve_actor(self)
             annotation_type = (body.get("annotation_type") or "note").strip()
-            if annotation_type not in ("note", "question"):
-                annotation_type = "note"
+            if annotation_type != "note":
+                return _send(self, 400, {"error": "collaborator questions are retired; use note annotations"})
             ann = self._with_db(
                 create_annotation,
                 asset_id=asset_id,
@@ -1104,23 +1205,10 @@ class ApiHandler(BaseHTTPRequestHandler):
                 actor_name=actor["name"] if actor else None,
                 annotation_type=annotation_type,
             )
-            # Fire-and-forget notification for questions
-            if annotation_type == "question":
-                _notify_question(actor, body.get("text") or "")
             return _send(self, 201, {"annotation": ann})
 
         if parsed.path == "/api/actors":
-            actor = _resolve_actor(self)
-            if not actor or actor.get("role") != "owner":
-                return _send(self, 403, {"error": "owner access required"})
-            name = (body.get("name") or "").strip()
-            if not name:
-                return _send(self, 400, {"error": "name required"})
-            role = (body.get("role") or "collaborator").strip()
-            if role not in ("owner", "collaborator"):
-                role = "collaborator"
-            new_actor = self._with_db(create_actor, name=name, role=role)
-            return _send(self, 201, {"actor": new_actor})
+            return _send(self, 404, {"error": "live sharing is retired"})
 
         self.send_error(404)
 
@@ -1493,7 +1581,15 @@ class ApiHandler(BaseHTTPRequestHandler):
             browser = bool(body.get("browser", True))
             notes = str(body.get("notes") or "").strip()
             try:
-                if action == "promote":
+                if action == "promote_candidate":
+                    result = self._with_db(
+                        promote_media_repair_candidate_for_asset,
+                        asset_id=asset_id,
+                        candidate_id=str(body.get("candidate_id") or "").strip(),
+                        store_dir=Path(self.server.store_dir).resolve(),
+                        notes=notes,
+                    )
+                elif action == "promote":
                     result = self._with_db(
                         promote_latest_hero_image_for_asset,
                         asset_id=asset_id,
@@ -1593,11 +1689,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             return _send(self, 200, {"ok": True})
         m = re.match(r"^/api/actors/([^/]+)$", parsed.path)
         if m:
-            actor = _resolve_actor(self)
-            if not actor or actor.get("role") != "owner":
-                return _send(self, 403, {"error": "owner access required"})
-            self._with_db(delete_actor, actor_id=m.group(1))
-            return _send(self, 200, {"ok": True})
+            return _send(self, 404, {"error": "live sharing is retired"})
         self.send_error(404)
 
     def _delete_assets_and_files(self, asset_ids: list[str]) -> dict:
@@ -1623,6 +1715,38 @@ class ApiHandler(BaseHTTPRequestHandler):
             return (pw_file.read_text(encoding="utf-8") or "").strip()
         return ""
 
+    def _is_loopback_client(self) -> bool:
+        try:
+            return ipaddress.ip_address(str(self.client_address[0])).is_loopback
+        except ValueError:
+            return False
+
+    def _is_localhost_setup_request(self) -> bool:
+        if not self._is_loopback_client():
+            return False
+        raw_host = str(self.headers.get("Host") or "").strip()
+        try:
+            hostname = urlparse(f"//{raw_host}").hostname or ""
+            return hostname == "localhost" or ipaddress.ip_address(hostname).is_loopback
+        except ValueError:
+            return False
+
+    def _write_admin_password(self, password: str) -> None:
+        pw_file = self._admin_password_file()
+        pw_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = pw_file.with_name(f".{pw_file.name}.{uuid.uuid4().hex}.tmp")
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(password + "\n")
+            os.chmod(tmp_path, 0o600)
+            os.replace(tmp_path, pw_file)
+        finally:
+            try:
+                tmp_path.unlink()
+            except FileNotFoundError:
+                pass
+
     def _require_admin_token(self) -> tuple[str | None, str | None]:
         token = (self.headers.get("X-Admin-Token") or "").strip()
         if not token:
@@ -1636,6 +1760,114 @@ class ApiHandler(BaseHTTPRequestHandler):
             return None, "admin token expired"
         self.server.admin_tokens[token] = now + 3600
         return token, None
+
+    def _asset_refresh_state(self, db: Db, *, asset_id: str) -> dict[str, bool]:
+        return {
+            "has_gemini_tags": bool(
+                db.query_value("select count(*) from asset_ai where asset_id=? and provider='gemini'", (asset_id,))
+            ),
+            "has_embedding": bool(
+                db.query_value(
+                    "select count(*) from asset_embeddings where asset_id=? and provider='gemini' and model=?",
+                    (asset_id, DEFAULT_GEMINI_EMBEDDING_MODEL),
+                )
+            ),
+        }
+
+    def _refresh_pending_media_repairs(self) -> dict:
+        pending = self._with_db(list_pending_media_repairs)
+        if not pending:
+            return {"ok": True, "pending_before": 0, "refreshed": 0, "failed": [], "items": []}
+        api_key = _get_api_key("GEMINI_API_KEY", "inspirations_gemini_api_key")
+        if not api_key:
+            raise ValueError(
+                "Gemini API key required; set GEMINI_API_KEY or store it in macOS Keychain "
+                "service inspirations_gemini_api_key"
+            )
+
+        ready: list[dict[str, str]] = []
+        failed: list[dict[str, str]] = []
+        items: list[dict[str, object]] = []
+        for repair in pending:
+            asset_id = str(repair["asset_id"])
+            repair_kind = str(repair["repair_kind"])
+            item_report: dict[str, object] = {
+                "asset_id": asset_id,
+                "title": repair.get("title") or "",
+                "repair_kind": repair_kind,
+                "steps": [],
+            }
+            try:
+                state = self._with_db(self._asset_refresh_state, asset_id=asset_id)
+                if repair_kind != "generated_text_card" and not state["has_gemini_tags"]:
+                    tag_report = self._with_db(
+                        run_ai_labeler,
+                        provider="gemini",
+                        asset_id=asset_id,
+                        store_dir=Path(self.server.store_dir).resolve(),
+                        preflight=False,
+                    )
+                    item_report["steps"].append({"step": "image_tagging", "report": tag_report})
+                    state = self._with_db(self._asset_refresh_state, asset_id=asset_id)
+                    if not state["has_gemini_tags"]:
+                        raise RuntimeError("Gemini image tagging did not produce tags")
+                else:
+                    item_report["steps"].append({"step": "image_tagging", "skipped": True})
+
+                if not state["has_embedding"]:
+                    embed_report = self._with_db(
+                        run_gemini_text_embedder,
+                        api_key=api_key,
+                        asset_id=asset_id,
+                    )
+                    item_report["steps"].append({"step": "embedding", "report": embed_report})
+                    state = self._with_db(self._asset_refresh_state, asset_id=asset_id)
+                    if not state["has_embedding"]:
+                        raise RuntimeError("Gemini embedding did not produce an embedding")
+                else:
+                    item_report["steps"].append({"step": "embedding", "skipped": True})
+                ready.append(repair)
+            except Exception as e:
+                error = str(e)
+                item_report["error"] = error
+                failed.append({"asset_id": asset_id, "error": error})
+            items.append(item_report)
+
+        classification: dict[str, object] = {}
+        if ready:
+            try:
+                track_report = self._with_db(run_track_gate_v2, notes="admin media-repair refresh")
+                axis_report = self._with_db(
+                    run_multi_axis_inference_v2,
+                    track_run_id=str(track_report.get("run_id") or ""),
+                    notes="admin media-repair refresh",
+                )
+                classification = {"track_gate": track_report, "axis_inference": axis_report}
+                for repair in ready:
+                    self._with_db(
+                        mark_media_repair_evidence_refreshed,
+                        asset_id=str(repair["asset_id"]),
+                        repair_kind=str(repair["repair_kind"]),
+                        origin_ref="api:/api/admin/media-repairs/refresh",
+                    )
+            except Exception as e:
+                classification = {"error": str(e)}
+                failed.extend(
+                    {"asset_id": str(repair["asset_id"]), "error": f"classification refresh failed: {e}"}
+                    for repair in ready
+                )
+                ready = []
+
+        remaining = self._with_db(list_pending_media_repairs)
+        return {
+            "ok": not failed,
+            "pending_before": len(pending),
+            "refreshed": len(ready),
+            "pending_after": len(remaining),
+            "failed": failed,
+            "items": items,
+            "classification": classification,
+        }
 
     def _backup_primary_db(self) -> str:
         db_path = Path(self.server.db_path).resolve()
@@ -2102,19 +2334,45 @@ class ApiHandler(BaseHTTPRequestHandler):
                     if str(row.get("id") or ""):
                         collections_node["children"].append(_collection_tree_child(row))
                 if hidden_rows:
-                    hidden_children = [
-                        _collection_tree_child(row)
-                        for row in hidden_rows
-                        if str(row.get("id") or "")
-                    ]
-                    if hidden_children:
+                    archive_groups = (
+                        ("workflow_review", "Completed Reviews"),
+                        ("source_mirror", "Imported Board Mirrors"),
+                        ("legacy", "Legacy Folders"),
+                    )
+                    archive_children = []
+                    for group_kind, group_label in archive_groups:
+                        grouped_rows = [
+                            row
+                            for row in hidden_rows
+                            if (
+                                str(row.get("provenance_kind") or "") == group_kind
+                                if group_kind != "legacy"
+                                else str(row.get("provenance_kind") or "") not in {"workflow_review", "source_mirror"}
+                            )
+                        ]
+                        grouped_children = [
+                            _collection_tree_child(row)
+                            for row in grouped_rows
+                            if str(row.get("id") or "")
+                        ]
+                        if grouped_children:
+                            archive_children.append(
+                                {
+                                    "id": f"collections:archived:{group_kind}",
+                                    "label": group_label,
+                                    "count": len(grouped_children),
+                                    "type": "collection_archive_category",
+                                    "children": grouped_children,
+                                }
+                            )
+                    if archive_children:
                         collections_node["children"].append(
                             {
-                                "id": "collections:hidden",
-                                "label": "Hidden",
-                                "count": len(hidden_children),
+                                "id": "collections:archived",
+                                "label": "Archived Collections",
+                                "count": len(hidden_rows),
                                 "type": "collections_hidden_group",
-                                "children": hidden_children,
+                                "children": archive_children,
                             }
                         )
                 if collections_node["children"]:
@@ -2148,6 +2406,10 @@ class ApiHandler(BaseHTTPRequestHandler):
             "entryway": "Entry",
             "mep": "MEP",
             "zip_system": "ZIP System",
+            "mid_century": "Mid-Century",
+            "art_deco": "Art Deco",
+            "french_country": "French Country",
+            "spanish": "Spanish / Mission",
         }
         if value in special:
             return special[value]
@@ -2237,14 +2499,14 @@ class ApiHandler(BaseHTTPRequestHandler):
             return sections
 
         axis_specs = [
-            ("space_context", "Space Context", "style_product_decor", 10),
-            ("subject_type", "Subject Type", "style_product_decor", 10),
-            ("room", "Rooms", "style_product_decor", 16),
-            ("product_focus", "Style Product Focus", "style_product_decor", 16),
-            ("concern_domain", "Construction Concerns", "construction_concern", 12),
-            ("product_system_focus", "Construction Systems", "construction_concern", 12),
+            ("space_context", "Space Context", "style_product_decor"),
+            ("subject_type", "Subject Type", "style_product_decor"),
+            ("room", "Rooms", "style_product_decor"),
+            ("product_focus", "Style Product Focus", "style_product_decor"),
+            ("concern_domain", "Construction Concerns", "construction_concern"),
+            ("product_system_focus", "Construction Systems", "construction_concern"),
         ]
-        for axis_name, label, track_filter, max_children in axis_specs:
+        for axis_name, label, track_filter in axis_specs:
             track_sql = " and aam.track = ?"
             base_params = [str(axis_run_id), axis_name, *visible_params, track_filter]
             total = db.query_value(
@@ -2272,9 +2534,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                   {track_sql}
                 group by aam.axis_value
                 order by n desc, aam.axis_value asc
-                limit ?
                 """,
-                tuple([*base_params, int(max_children)]),
+                tuple(base_params),
             )
             children = [
                 {
@@ -2295,6 +2556,64 @@ class ApiHandler(BaseHTTPRequestHandler):
                     "id": f"classification:{axis_name}",
                     "label": label,
                     "count": int(total or 0),
+                    "type": "classification",
+                    "axis_name": axis_name,
+                    "children": children,
+                }
+            )
+
+        try:
+            visible_home_ids = [
+                str(row["id"] or "").strip()
+                for row in db.query(
+                    f"select a.id from assets a where {home_visible_sql}",
+                    tuple(visible_params),
+                )
+                if str(row["id"] or "").strip()
+            ]
+            legacy_memberships = build_legacy_facet_memberships(db, visible_home_ids)
+        except Exception:
+            legacy_memberships = {}
+
+        legacy_labels = {
+            "style_family": "Style",
+            "materials": "Materials",
+            "colors": "Colors",
+        }
+        for axis_name, default_label, dim_names, _weight in EXPLORER_LEGACY_SPECS:
+            counts = {dim_name: 0 for dim_name in dim_names}
+            total_asset_ids: set[str] = set()
+            dim_name_set = set(dim_names)
+            for asset_id, axes in legacy_memberships.items():
+                values = set(axes.get(axis_name, set())).intersection(dim_name_set)
+                if not values:
+                    continue
+                total_asset_ids.add(asset_id)
+                for value in values:
+                    counts[value] = counts.get(value, 0) + 1
+
+            children = [
+                {
+                    "id": f"classification_item:{axis_name}:{value}",
+                    "label": self._classification_value_label(axis_name, value),
+                    "count": count,
+                    "type": "classification_item",
+                    "axis_name": axis_name,
+                    "axis_value": value,
+                }
+                for value, count in sorted(
+                    counts.items(),
+                    key=lambda item: (-int(item[1] or 0), self._classification_value_label(axis_name, item[0])),
+                )
+                if int(count or 0) > 0
+            ]
+            if not children:
+                continue
+            sections.append(
+                {
+                    "id": f"classification:{axis_name}",
+                    "label": legacy_labels.get(axis_name, default_label),
+                    "count": len(total_asset_ids),
                     "type": "classification",
                     "axis_name": axis_name,
                     "children": children,
@@ -2628,11 +2947,11 @@ class ApiHandler(BaseHTTPRequestHandler):
                 pass
 
     def _serve_media(self, asset_id: str, kind: str) -> None:
-        kind = kind if kind in ("thumb", "original", "pdf") else "thumb"
+        kind = kind if kind in ("thumb", "original", "video", "pdf") else "thumb"
         with Db(self.server.db_path) as db:
             ensure_schema(db)
             row = db.query(
-                "select id, source, source_ref, stored_path, thumb_path from assets where id=?",
+                "select id, source, source_ref, stored_path, stored_video_path, thumb_path from assets where id=?",
                 (asset_id,),
             )
             if not row:
@@ -2649,6 +2968,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                     path = str(scan_pdf_path)
             elif kind == "thumb":
                 path = r["thumb_path"]
+            elif kind == "video":
+                path = r["stored_video_path"]
             else:
                 path = r["stored_path"]
             if not path:
@@ -2677,7 +2998,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         rows = db.query(
             """
             select a.id, a.source, a.source_ref, a.title, a.description, a.board,
-                   a.created_at, a.imported_at, a.image_url, a.stored_path, a.thumb_path,
+                   a.created_at, a.imported_at, a.image_url, a.stored_path, a.stored_video_path, a.thumb_path, a.sha256,
                    a.triage_status, a.needs_annotation, a.source_url, a.seo_alt_text,
                    a.post_text, a.hashtags, a.engagement_json, a.dominant_color,
                    coalesce(
@@ -2700,6 +3021,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         enrich_assets_with_title_info(db, [asset])
         asset["classification_review"] = self._classification_review_payload(db, asset_id=asset_id)
         asset["source_link_candidate"] = self._source_link_candidate_payload(db, asset_id=asset_id)
+        asset["triage_info"] = self._triage_info_payload(db, asset_id=asset_id)
         if include_hidden:
             return asset
         if str(asset.get("triage_status") or "").strip().lower() == "hidden":
@@ -2715,6 +3037,27 @@ class ApiHandler(BaseHTTPRequestHandler):
             if in_hidden:
                 return None
         return asset
+
+    def _triage_info_payload(self, db: Db, *, asset_id: str) -> dict[str, object]:
+        rows = db.query(
+            """
+            select old_status, new_status, coalesce(reason, '') as reason,
+                   coalesce(actor, '') as actor, created_at
+            from triage_log
+            where asset_id=?
+            order by created_at desc, id desc
+            limit 1
+            """,
+            (asset_id,),
+        )
+        row = dict(rows[0]) if rows else {}
+        return {
+            "status": str(row.get("new_status") or "").strip(),
+            "previous_status": str(row.get("old_status") or "").strip(),
+            "reason": str(row.get("reason") or "").strip(),
+            "actor": str(row.get("actor") or "").strip(),
+            "created_at": str(row.get("created_at") or "").strip(),
+        }
 
     def _classification_review_payload(self, db: Db, *, asset_id: str) -> dict[str, object]:
         track_row = db.query(
@@ -2810,8 +3153,6 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def _source_link_candidate_payload(self, db: Db, *, asset_id: str) -> dict[str, object]:
         row = latest_source_link_enrichment_for_asset(db, asset_id=asset_id)
-        if not row:
-            return {}
         return {
             "run_id": str(row.get("run_id") or "").strip(),
             "input_url": str(row.get("input_url") or "").strip(),
@@ -2825,6 +3166,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             "fetch_status": str(row.get("fetch_status") or "").strip(),
             "error": str(row.get("error") or "").strip(),
             "created_at": str(row.get("created_at") or "").strip(),
+            "media_candidates": media_repair_gallery_for_asset(db, asset_id=asset_id),
         }
 
     def _apply_modal_classification_review(
@@ -3241,9 +3583,7 @@ def run_server(*, host: str, port: int, db_path: Path, app_dir: Path, store_dir:
     else:
         _server_log("No catalog found yet — chat will build one on first use")
 
-    # Seed default actors (Jim + Leslie) and print magic link URLs
-    print("\nMagic link URLs:", flush=True)
-    _seed_default_actors(db_path, host, port)
+    _server_log("Local owner mode enabled; live magic-link sharing is retired")
 
     stopping = {"requested": False}
     previous_handlers: dict[int, object] = {}

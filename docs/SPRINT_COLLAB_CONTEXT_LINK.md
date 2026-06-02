@@ -1,5 +1,9 @@
 # Sprint Spec: Collaboration Context Links
 
+> Legacy note (2026-05-27): collaborator context links are retired from the
+> active product. Do not implement this sprint unless the product direction
+> changes again.
+
 Status: Sprint-ready
 Date: 2026-02-28
 Owner: Product + Builder

@@ -62,6 +62,15 @@ class TestAiSemantic(unittest.TestCase):
         text = _build_embedding_input_text(row)
         self.assertIn("title: 10K views · 266 reactions | Keep exact title for non-facebook sources", text)
 
+    def test_build_embedding_input_text_strips_dash_separated_facebook_engagement_prefix(self):
+        row = {
+            "source": "facebook",
+            "title": "62K views - 1.8K reactions | Better Building Practices",
+        }
+        text = _build_embedding_input_text(row)
+        self.assertIn("title: Better Building Practices", text)
+        self.assertNotIn("62K views", text)
+
     def test_cosine_similarity(self):
         self.assertAlmostEqual(_cosine_similarity([1.0, 0.0], [1.0, 0.0]), 1.0, places=6)
         self.assertLess(_cosine_similarity([1.0, 0.0], [0.0, 1.0]), 0.01)
@@ -191,6 +200,30 @@ class TestAiSemantic(unittest.TestCase):
                 )
                 self.assertEqual(len(row), 1)
                 self.assertEqual(int(row[0]["dimensions"]), 3)
+
+    def test_run_gemini_text_embedder_can_scope_to_one_repaired_asset(self):
+        with tempfile.TemporaryDirectory() as td:
+            with Db(Path(td) / "t.sqlite") as db:
+                ensure_schema(db)
+                db.exec(
+                    "insert into assets (id, source, source_ref, title, imported_at) values ('a1', 'facebook', 'fb://1', 'Grass', datetime('now'))"
+                )
+                db.exec(
+                    "insert into assets (id, source, source_ref, title, imported_at) values ('a2', 'facebook', 'fb://2', 'Cabinetry', datetime('now'))"
+                )
+                with mock.patch("inspirations.ai._gemini_embed_text", return_value=[0.1, 0.2]):
+                    report = run_gemini_text_embedder(
+                        db,
+                        api_key="fake",
+                        asset_id="a1",
+                    )
+                embedded_ids = [
+                    str(row["asset_id"])
+                    for row in db.query("select asset_id from asset_embeddings order by asset_id")
+                ]
+
+        self.assertEqual(report["embedded_assets"], 1)
+        self.assertEqual(embedded_ids, ["a1"])
 
     def test_run_similarity_search_orders_scores(self):
         with tempfile.TemporaryDirectory() as td:
