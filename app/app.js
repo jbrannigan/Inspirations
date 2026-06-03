@@ -1784,7 +1784,9 @@ async function loadAssets(opts = {}) {
       updateLoadMoreBtn();
       updateStats();
       scheduleAutoLoadMore();
-      if (state.pendingAssetsReload && !append) {
+      // A scope change can arrive while an automatic append request is active.
+      // Always honor the queued full reload once the in-flight request finishes.
+      if (state.pendingAssetsReload) {
         state.pendingAssetsReload = false;
         loadAssets();
       }
@@ -3941,6 +3943,172 @@ function replaceAssetInState(updatedAsset) {
   if (state.modalAsset && state.modalAsset.id === next.id) state.modalAsset = next;
 }
 
+function assetMatchesActiveItemView(asset) {
+  const status = String(asset?.triage_status || "").trim().toLowerCase();
+  if (state.triageFilter === "flagged") return asset?.flagged == 1;
+  if (state.triageFilter === "needs-comment") return asset?.needs_annotation == 1;
+  if (_isHiddenReviewQueue()) return status === "hidden";
+  if (state.triageFilter) return status === state.triageFilter;
+  if (state.showDiscarded) return true;
+  return status !== "hidden";
+}
+
+function setModalCurationBusy(busy) {
+  for (const id of ["modalKeepBtn", "modalDiscardBtn", "modalFlagBtn"]) {
+    const btn = document.getElementById(id);
+    if (btn) btn.disabled = !!busy;
+  }
+}
+
+function renderModalTriageInfo(asset) {
+  const triageSection = $("#modalTriageInfoSection");
+  const triageSummary = $("#modalTriageInfoSummary");
+  const triageMeta = $("#modalTriageInfoMeta");
+  if (!triageSection || !triageSummary || !triageMeta) return;
+
+  const triageInfo = asset?.triage_info || {};
+  const status = String(asset?.triage_status || triageInfo.status || "").trim().toLowerCase();
+  const actor = String(triageInfo.actor || "").trim();
+  const reason = String(triageInfo.reason || "").trim();
+  const createdAt = String(triageInfo.created_at || "").trim();
+  const hidden = status === "hidden";
+  const aiReelCleanup = actor === "ai-reel-triage";
+  triageSection.hidden = !hidden;
+  triageSummary.textContent = aiReelCleanup
+    ? "Discarded by AI reel cleanup"
+    : (actor ? `Discarded manually by ${actor}` : "Discarded from ordinary browsing");
+  const metaParts = [];
+  if (createdAt) metaParts.push(createdAt.slice(0, 10));
+  if (reason) metaParts.push(reason);
+  triageMeta.textContent = metaParts.join(" · ");
+}
+
+async function refreshAfterModalCuration(updatedAsset, { refreshTree = false } = {}) {
+  if (assetMatchesActiveItemView(updatedAsset)) {
+    renderGrid();
+  } else {
+    await loadAssets();
+  }
+  if (refreshTree) {
+    await loadCatalogTree();
+    if (isOwner()) await loadHiddenTree();
+  }
+}
+
+async function setModalTriageStatus(status, { reason, toastText } = {}) {
+  const asset = state.modalAsset;
+  if (!asset?.id) return;
+  if (!isOwner()) {
+    Shared.showToast("Curation actions are owner-only.", { type: "info" });
+    return;
+  }
+
+  setModalCurationBusy(true);
+  try {
+    await api(`/api/assets/${encodeURIComponent(asset.id)}/triage`, {
+      method: "POST",
+      body: JSON.stringify({ status, reason: reason || "detail modal curation" }),
+    });
+    const triageInfo = status === "hidden"
+      ? {
+          status: "hidden",
+          actor: String(state.actor?.name || "Jim"),
+          reason: reason || "detail modal curation",
+          created_at: new Date().toISOString(),
+        }
+      : null;
+    const updated = { ...asset, triage_status: status, triage_info: triageInfo };
+    replaceAssetInState(updated);
+    renderModalTriageInfo(updated);
+    await refreshAfterModalCuration(updated, { refreshTree: true });
+    if (state.modalAsset?.id === updated.id) renderModalCurationActions(state.modalAsset);
+    Shared.showToast(toastText || "Curation status updated.", { type: "success", duration: 1800 });
+  } catch (e) {
+    Shared.showToast(`Curation update failed: ${formatApiError(e)}`, { type: "error" });
+  } finally {
+    if (state.modalAsset?.id === asset.id) setModalCurationBusy(false);
+  }
+}
+
+async function toggleModalFlag() {
+  const asset = state.modalAsset;
+  if (!asset?.id) return;
+  if (!canUseFlag()) {
+    Shared.showToast("Flagging is owner-only.", { type: "info" });
+    return;
+  }
+
+  const newFlagged = asset.flagged ? 0 : 1;
+  setModalCurationBusy(true);
+  try {
+    await api(`/api/assets/${encodeURIComponent(asset.id)}/flag`, {
+      method: "POST",
+      body: JSON.stringify({ flagged: newFlagged }),
+    });
+    const updated = { ...asset, flagged: newFlagged };
+    replaceAssetInState(updated);
+    await refreshAfterModalCuration(updated);
+    if (state.modalAsset?.id === updated.id) renderModalCurationActions(state.modalAsset);
+    Shared.showToast(newFlagged ? "Flagged for follow-up." : "Flag removed.", {
+      type: "success",
+      duration: 1800,
+    });
+  } catch (e) {
+    Shared.showToast(`Flag update failed: ${formatApiError(e)}`, { type: "error" });
+  } finally {
+    if (state.modalAsset?.id === asset.id) setModalCurationBusy(false);
+  }
+}
+
+function renderModalCurationActions(asset) {
+  const group = $("#modalCurationGroup");
+  const keepBtn = $("#modalKeepBtn");
+  const discardBtn = $("#modalDiscardBtn");
+  const flagBtn = $("#modalFlagBtn");
+  const owner = isOwner();
+  if (group) group.hidden = !owner;
+  if (!owner || !asset) return;
+
+  const status = String(asset.triage_status || "").trim().toLowerCase();
+  const keeper = status === "keeper";
+  const discarded = status === "hidden";
+  if (keepBtn) {
+    keepBtn.disabled = false;
+    keepBtn.classList.toggle("active", keeper);
+    keepBtn.textContent = keeper ? "★ Keeper" : "★ Keep";
+    keepBtn.title = keeper ? "Remove keeper status" : "Mark as keeper";
+    keepBtn.onclick = () => {
+      void setModalTriageStatus(keeper ? null : "keeper", {
+        reason: keeper ? "keeper removed from detail modal" : "marked keeper from detail modal",
+        toastText: keeper ? "Keeper removed." : "Marked as keeper.",
+      });
+    };
+  }
+  if (discardBtn) {
+    discardBtn.disabled = false;
+    discardBtn.classList.toggle("restore", discarded);
+    discardBtn.textContent = discarded ? "↟ Restore" : "✗ Discard";
+    discardBtn.title = discarded ? "Restore to ordinary browsing" : "Discard from ordinary browsing";
+    discardBtn.onclick = () => {
+      if (!discarded && !confirmGlobalHideBulk(1)) {
+        Shared.showToast("Discard canceled.", { type: "info" });
+        return;
+      }
+      void setModalTriageStatus(discarded ? null : "hidden", {
+        reason: discarded ? "restored from detail modal" : "discarded from detail modal",
+        toastText: discarded ? "Restored to ordinary browsing." : "Discarded from ordinary browsing.",
+      });
+    };
+  }
+  if (flagBtn) {
+    flagBtn.disabled = false;
+    flagBtn.classList.toggle("active", !!asset.flagged);
+    flagBtn.textContent = asset.flagged ? "⚐ Unflag" : "⚑ Flag";
+    flagBtn.title = asset.flagged ? "Remove follow-up flag" : "Flag for follow-up";
+    flagBtn.onclick = () => { void toggleModalFlag(); };
+  }
+}
+
 function setTitleRow(rowId, valueId, metaId, value, meta) {
   const row = $(rowId);
   const valueEl = $(valueId);
@@ -4743,6 +4911,7 @@ async function openModal(asset, options = {}) {
   renderModalTitlePanel(asset);
   renderModalClassificationPanel(asset);
   renderModalSourceCandidatePanel(asset);
+  renderModalCurationActions(asset);
   renderModalNavigation();
   _renderMediaReliabilityOverlay("#modalMediaOverlay", asset?.classification_review?.active_media_reliability || "");
   const titleSaveBtn = $("#modalTitleSaveBtn");
@@ -4827,27 +4996,7 @@ async function openModal(asset, options = {}) {
     }
   }
 
-  // Hidden status provenance
-  const triageSection = $("#modalTriageInfoSection");
-  const triageSummary = $("#modalTriageInfoSummary");
-  const triageMeta = $("#modalTriageInfoMeta");
-  if (triageSection && triageSummary && triageMeta) {
-    const triageInfo = asset.triage_info || {};
-    const status = String(asset.triage_status || triageInfo.status || "").trim().toLowerCase();
-    const actor = String(triageInfo.actor || "").trim();
-    const reason = String(triageInfo.reason || "").trim();
-    const createdAt = String(triageInfo.created_at || "").trim();
-    const hidden = status === "hidden";
-    const aiReelCleanup = actor === "ai-reel-triage";
-    triageSection.hidden = !hidden;
-    triageSummary.textContent = aiReelCleanup
-      ? "Discarded by AI reel cleanup"
-      : (actor ? `Discarded manually by ${actor}` : "Discarded from ordinary browsing");
-    const metaParts = [];
-    if (createdAt) metaParts.push(createdAt.slice(0, 10));
-    if (reason) metaParts.push(reason);
-    triageMeta.textContent = metaParts.join(" · ");
-  }
+  renderModalTriageInfo(asset);
 
   // Labels / tags
   const labelsEl = $("#modalLabels");
@@ -4960,90 +5109,6 @@ async function openModal(asset, options = {}) {
       notesHint.hidden = editable;
       notesHint.textContent = editable ? "" : "Notes are read-only in this view.";
     }
-  }
-
-  // Flag button
-  const flagBtn = $("#modalFlagBtn");
-  if (flagBtn) {
-    flagBtn.classList.toggle("active", !!asset.flagged);
-    flagBtn.textContent = asset.flagged ? "🚩 Flagged" : "🚩 Flag";
-    flagBtn.onclick = async () => {
-      if (!canUseFlag()) {
-        Shared.showToast("Flagging is owner-only.", { type: "info" });
-        return;
-      }
-      const newFlagged = asset.flagged ? 0 : 1;
-      try {
-        await api(`/api/assets/${encodeURIComponent(asset.id)}/flag`, {
-          method: "POST",
-          body: JSON.stringify({ flagged: newFlagged }),
-        });
-        asset.flagged = newFlagged;
-        flagBtn.classList.toggle("active", !!newFlagged);
-        flagBtn.textContent = newFlagged ? "🚩 Flagged" : "🚩 Flag";
-        // Update card badge
-        const card = $(`[data-id="${asset.id}"]`);
-        if (card) {
-          const oldBadge = card.querySelector(".triage-badge.flagged");
-          if (oldBadge) oldBadge.remove();
-          if (newFlagged) {
-            const badge = document.createElement("span");
-            badge.className = "triage-badge flagged";
-            badge.title = "Flagged for review";
-            card.querySelector(".card-image").prepend(badge);
-          }
-        }
-        if (isReviewStatusFilterActive("flagged") && !newFlagged) await loadAssets();
-        Shared.showToast(newFlagged ? "Flagged for review" : "Flag removed", { type: "success" });
-      } catch (e) {
-        Shared.showToast(`Failed: ${formatApiError(e)}`, { type: "error" });
-      }
-    };
-  }
-
-  // Tag button (diagnosis marker)
-  const tagBtn = $("#modalTagBtn");
-  if (tagBtn) {
-    tagBtn.classList.toggle("active", !!asset.tagged);
-    tagBtn.textContent = asset.tagged ? "🏷️ Tagged" : "🏷️ Tag";
-    tagBtn.onclick = async () => {
-      if (!canUseTag()) {
-        Shared.showToast("Tag workflow retired.", { type: "info" });
-        return;
-      }
-      const newTagged = asset.tagged ? 0 : 1;
-      try {
-        await api(`/api/assets/${encodeURIComponent(asset.id)}/tag`, {
-          method: "POST",
-          body: JSON.stringify({ tagged: newTagged }),
-        });
-        asset.tagged = newTagged;
-        tagBtn.classList.toggle("active", !!newTagged);
-        tagBtn.textContent = newTagged ? "🏷️ Tagged" : "🏷️ Tag";
-
-        const card = $(`[data-id="${asset.id}"]`);
-        if (card) {
-          const cardImg = card.querySelector(".card-image");
-          const oldBadge = card.querySelector(".triage-badge.tagged");
-          if (oldBadge) oldBadge.remove();
-          if (newTagged && cardImg) {
-            const badge = document.createElement("span");
-            badge.className = "triage-badge tagged";
-            badge.title = "Tagged for diagnosis";
-            cardImg.prepend(badge);
-          }
-          const quickTagBtn = card.querySelector(".card-quick-tag");
-          if (quickTagBtn) {
-            quickTagBtn.classList.toggle("tagged", !!newTagged);
-            quickTagBtn.title = newTagged ? "Remove tag" : "Tag for diagnosis";
-          }
-        }
-
-        Shared.showToast(newTagged ? "Tagged for diagnosis" : "Tag removed", { type: "success", duration: 2000 });
-      } catch (e) {
-        Shared.showToast(`Tag failed: ${formatApiError(e)}`, { type: "error" });
-      }
-    };
   }
 
   // Scan page nav
@@ -9072,11 +9137,9 @@ function applyRoleVisibility() {
   const shareGroup = $("#modalShareGroup");
   if (shareGroup) shareGroup.hidden = false;
 
-  // Modal flag/tag buttons — scoped by named owner permissions
-  const flagBtnEl = $("#modalFlagBtn");
-  if (flagBtnEl) flagBtnEl.hidden = !canUseFlag();
-  const tagBtnEl = $("#modalTagBtn");
-  if (tagBtnEl) tagBtnEl.hidden = !canUseTag();
+  // Full detail/QC always keeps the same owner curation controls.
+  const modalCurationGroup = $("#modalCurationGroup");
+  if (modalCurationGroup) modalCurationGroup.hidden = !owner;
 
   const canvasFlagBtnEl = $("#canvasFlag");
   if (canvasFlagBtnEl) canvasFlagBtnEl.hidden = !canUseFlag();

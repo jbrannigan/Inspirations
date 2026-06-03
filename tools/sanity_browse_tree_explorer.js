@@ -221,7 +221,32 @@
     );
   }
 
-  // ─── 5. Explorer mode checks ──────────────────────────────────────
+  // ─── 5. Detail modal curation controls ────────────────────────────
+
+  console.log("\n--- Detail modal checks ---");
+  const firstCard = document.querySelector("main .card");
+  assert("Grid has a card for detail-modal check", !!firstCard);
+  if (firstCard) {
+    firstCard.click();
+    await waitFor(() => {
+      const modal = document.getElementById("modal");
+      return modal && !modal.classList.contains("hidden");
+    }, 3000, "detail modal");
+    const curationIds = ["modalKeepBtn", "modalDiscardBtn", "modalFlagBtn"];
+    assert(
+      "Detail modal shows consistent curation controls",
+      curationIds.every((id) => {
+        const el = document.getElementById(id);
+        return el && !el.hidden && el.offsetParent !== null;
+      }),
+      curationIds.join(", ")
+    );
+    const closeBtn = document.getElementById("closeModal");
+    if (closeBtn) closeBtn.click();
+    await sleep(200);
+  }
+
+  // ─── 6. Explorer mode checks ──────────────────────────────────────
 
   console.log("\n--- Explorer mode checks ---");
 

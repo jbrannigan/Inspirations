@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inspirations!</title>
-    <link rel="stylesheet" href="/app/styles.css?v=85" />
+    <link rel="stylesheet" href="/app/styles.css?v=86" />
     <script type="importmap">
       {
         "imports": {
@@ -386,6 +386,12 @@
               </div>
             </div>
             <div class="modal-header-actions">
+              <div id="modalCurationGroup" class="modal-action-group modal-curation-group">
+                <span class="modal-action-group-label">Curation</span>
+                <button id="modalKeepBtn" class="header-btn modal-utility-btn modal-curation-btn" type="button">★ Keep</button>
+                <button id="modalDiscardBtn" class="header-btn modal-utility-btn modal-curation-btn" type="button">✗ Discard</button>
+                <button id="modalFlagBtn" class="header-btn modal-utility-btn modal-curation-btn" type="button">⚑ Flag</button>
+              </div>
               <div id="modalNavGroup" class="modal-action-group modal-nav-group" hidden>
                 <button id="modalPrevBtn" class="header-btn modal-utility-btn" type="button">Prev</button>
                 <span id="modalNavStatus" class="modal-action-group-label">1 of 1</span>
@@ -840,6 +846,6 @@
     <script src="/app/shared.js?v=5"></script>
     <script src="/app/explorer.js?v=2"></script>
     <script src="/app/attractor-explorer.js?v=16"></script>
-    <script src="/app/app.js?v=155"></script>
+    <script src="/app/app.js?v=156"></script>
   </body>
 </html>

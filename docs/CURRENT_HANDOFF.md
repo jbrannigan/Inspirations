@@ -108,12 +108,15 @@ Card interaction rules:
 - entering Explorer closes Make Collection selection mode
 
 The full detail/QC modal includes title editing, media repair, annotations,
-notes, and normal detail navigation. Edits made there must remain visible when
-returning to one-by-one review.
+notes, normal detail navigation, and the same compact `Keep`,
+`Discard / Restore`, and `Flag / Unflag` curation controls in every scope.
+Edits made there must remain visible when returning to one-by-one review.
 
 The Grid automatically requests the next asset page before the curator reaches
 the bottom. `Load More` remains a fallback and must show a loading state rather
-than appearing inert on slower LAN/iPad requests.
+than appearing inert on slower LAN/iPad requests. If the curator changes scope
+while an automatic append request is active, the queued full reload must run as
+soon as that request finishes so the selector and visible cards cannot disagree.
 
 ## Collection And Data Baseline
 
@@ -213,7 +216,7 @@ git diff --check
 ruff check src tests
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 
-Ran 376 tests in 57.301s
+Ran 378 tests in 60.278s
 OK
 ```
 

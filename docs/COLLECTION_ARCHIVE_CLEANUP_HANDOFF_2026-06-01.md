@@ -88,6 +88,8 @@ deliberately different meanings:
   within the current collection, text-search, and tree-filter scope
 - clicking a card always opens the same full detail/QC modal, regardless of the
   selected `Show` item view
+- that full detail/QC modal always keeps compact `Keep`, `Discard / Restore`,
+  and `Flag / Unflag` actions available
 - the explicit `One-by-one` action opens the fast triage screen
 - one-by-one review offers `Edit title / media` to open the full detail/QC modal
   for title repair, media repair, annotations, and notes
@@ -121,6 +123,9 @@ The browse-first collection workflow is now implemented:
   slower iPad/LAN requests do not look inert
 - `Load More` now reliably re-enables after an asset page fetch; the frontend
   must clear `state.loadingAssets` before refreshing that button state
+- scope changes queued during an automatic append load now trigger a full reload
+  after the append finishes, so the `Show` selector cannot disagree with the
+  visible cards
 
 This intentionally keeps creative collection building separate from Review/QC.
 The next collection UX pass can focus on ordering items for the PDF and

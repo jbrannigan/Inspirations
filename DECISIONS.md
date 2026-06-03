@@ -329,7 +329,9 @@ header remains stable when modes change; Review and Make Collection add
 contextual action rows inside the curation bar instead. The `Show` selector
 changes item visibility only: card clicks always open the same full detail/QC
 modal. Review checkboxes are for bulk actions, and the explicit `One-by-one`
-action is the route to fast triage.
+action is the route to fast triage. The full detail/QC modal always retains a
+compact curation group for `Keep`, `Discard / Restore`, and `Flag / Unflag`;
+making detail behavior consistent must not remove those durable item actions.
 
 ---
 
