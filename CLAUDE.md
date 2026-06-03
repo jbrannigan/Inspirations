@@ -6,12 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Local-first inspiration library for home design research. Browser-scraped data from Pinterest and Facebook, plus local scans, with keeper/hidden triage, Explorer, Dave/chat, collection management, source/QC tools, and one-collection standalone PDF export for designer handoffs. The frontend is a vanilla JS web app served by Python's standard library HTTP server.
 
-## Current State: Post-Rebuild (Feb 2026)
+Start with `docs/CURRENT_HANDOFF.md` after a reboot, branch switch, or lost
+conversation context.
 
-The scrape-first rebuild is complete. The database has been rebuilt from browser-scraped data:
+## Current State: Post-Rebuild (updated Jun 2026)
 
-- **6,295 assets total**: 3,783 Pinterest pins, 2,405 Facebook saved items, 107 scans
-- **6,070 thumbnails** generated
+The scrape-first rebuild is complete. The current live database contains:
+
+- **5,340 assets total**: 3,783 Pinterest pins, 1,190 Facebook saved items, 226 Houzz items, 141 scans
+- **5,340 thumbnail paths** populated
 - **15 active collection folders**: 12 AI-derived `CB:` starting sets and 3 architect-scan workflow cohorts
 - **986 bad Facebook images** nulled (duplicate SHA256 captures replaced with thumbnail_url fallback)
 
@@ -20,14 +23,21 @@ The scrape-first rebuild is complete. The database has been rebuilt from browser
   - Sidebar filters and text search define the base Explorer item scope
   - Category chips now have explicit `Filter / Group` semantics: filter narrows the visible set; group arranges the current scope without changing global/sidebar filters
   - 3D includes a `Group by` shortcut, visible active grouping chips, and restored `Categories` drawer
-  - Explorer controls live in the top stats toolbar, with editable numeric values beside tuning sliders for iPad usability
+  - Explorer controls live in the persistent curation bar, with editable numeric values beside tuning sliders for iPad usability
   - iPad/mobile-constrained broad sets use `iPad lite: 2D map`; filtered subsets switch back to 3D when a measured per-session WebGL budget allows it
   - The mode/count hint now updates when filters are applied, including 2D iPad fallback mode
-- **Designer PDF export** — selected collection exports as standalone PDF plus audit Markdown under `data/exports/`; embedded local previews and direct external source URLs only. The contextual canvas-header action appears only when exactly one collection is selected.
+- **Designer PDF export** — selected collection exports as standalone PDF plus audit Markdown under `data/exports/`; embedded local previews and direct external source URLs only. The contextual curation-bar action appears only when exactly one collection is selected.
 - **Local collection management** — sidebar `Manage Collections` edits collection names/descriptions; `Manage Collection Archive` handles archive/restore/delete separately. Archiving a folder never hides or deletes its items.
 - **Collection archive cleanup** — obsolete `pins:` source-board mirrors and completed `Review:` workflow folders were removed after a local SQLite backup. Source-board browsing now reads live `assets.board` metadata directly.
+- **Persistent curation bar** — the canvas keeps item count, text search, active filters, contextual PDF export, and a `Show` selector visible while scrolling. `Usable items`, `All items, including discarded`, `Keepers`, `Flagged`, and `Discarded` refine the current collection/text/tree scope without reviving the old review-queue backlog.
+- **Stable mode header** — entering Review or Make Collection does not reshape the global app header. Each mode adds its own action row inside the shared sticky curation bar; card clicks consistently open full detail/QC regardless of the `Show` view, while Review checkboxes select bulk actions and its explicit `One-by-one` action opens fast triage.
+- **One-by-one review editing** — the focused review screen stays optimized for triage, with an explicit `Edit title / media` action that opens the full detail/QC modal for title repair, media repair, annotations, and notes.
+- **Visual collection building** — `Make Collection` is a separate browse-canvas selection mode, distinct from Review/QC. Curators can select visible cards, create a collection from them, add them to an existing collection, or remove them when exactly one collection is in scope.
+- **Pagination lifecycle + auto-loading** — the grid observes the Load More sentinel and starts a high-priority next-page request several screenfuls before the curator reaches the bottom; `Load More` remains a fallback. Set the button and top item count to loading state as soon as an asset request begins, and keep the final refresh calls after `state.loadingAssets = false`.
+- **Logged launchd service** — `tools/inspirations_service.sh install` installs user LaunchAgent `com.jimbrannigan.inspirations` with `KeepAlive`, bound to `0.0.0.0:8001`, and writes stdout/stderr under `data/logs/`.
+- **Request-time schema writes removed** — `run_server()` calls `ensure_schema()` once before starting the threaded HTTP server. Normal API, catalog, media, and scan-PDF requests must not run migrations or metadata backfills; doing so caused SQLite lock storms under concurrent thumbnail traffic.
 - **Live collaborator sharing retired** — magic-link actor UX, `/api/me`, `/api/actors`, `/api/context/resolve`, and `/api/questions/dashboard` are legacy/disabled in active UI. Keep schema columns for compatibility, but do not present collaborator assignment or app-context share links.
-- Pagination (`has_more` flag) — all 6,295 items accessible via Load More
+- Pagination (`has_more` flag) — all current items accessible through automatic loading, with Load More as a fallback
 - Collections auto-created from `board` values during rebuild
 - Pinterest title fallback to `seo_alt_text` (fixes "(untitled)" tiles)
 - Facebook `thumbnail_url` stored as `image_url` fallback for bad captures
@@ -97,6 +107,16 @@ PYTHONPATH=src python3 -m inspirations serve --host 0.0.0.0 --port 8001
 ```
 Then open `http://<hostname>.local:8001` or `http://<lan-ip>:8001`.
 
+### Install/check the logged launchd service
+```bash
+./tools/inspirations_service.sh install
+./tools/inspirations_service.sh status
+./tools/inspirations_service.sh logs
+```
+The service label is `com.jimbrannigan.inspirations`. Logs are local-only in
+`data/logs/inspirations-8001.out.log` and
+`data/logs/inspirations-8001.err.log`.
+
 ### Start the server behind a reverse proxy (New Home site)
 ```bash
 BASE_PATH=/inspirations-app PYTHONPATH=src python3 -m inspirations serve --port 8001
@@ -120,7 +140,7 @@ PYTHONPATH=src python3 -m inspirations ai tag --provider gemini --api-key "$GEMI
 - **`thumbnails.py`** — Auto-detects system tools (`sips` on macOS, `magick` on Linux), Pillow fallback.
 - **`ai.py`** — AI tagging pipeline. Gemini integration. Primary model: `gemini-2.5-flash`, fallback to `gemini-2.0-flash` on `RECITATION` errors.
 - **`export.py`** — Export utilities. Active handoff path is one-collection PDF export; single-file HTML galleries/static portal remain legacy/debug utilities.
-- **`server.py`** — Standard library `HTTPServer`. REST API endpoints plus media serving and static files. Supports optional `BASE_PATH` env var for reverse-proxy deployments (strips prefix from incoming requests, injects `window.__BASE_PATH` into HTML).
+- **`server.py`** — Standard library `ThreadingHTTPServer`. REST API endpoints plus media serving and static files. Supports optional `BASE_PATH` env var for reverse-proxy deployments (strips prefix from incoming requests, injects `window.__BASE_PATH` into HTML).
 - **`devserver.py`** — File-watching wrapper for auto-reload during development.
 - **`importers/`** — Adapter pattern. Each normalizes source data into consistent `Asset` records. Imports are idempotent.
   - `pinterest_scrape.py` — Imports browser-scraped Pinterest JSON (new)
@@ -130,8 +150,8 @@ PYTHONPATH=src python3 -m inspirations ai tag --provider gemini --api-key "$GEMI
 ### Frontend (`app/`)
 
 Vanilla HTML/CSS/JS, no build step. The app has three main workflows:
-1. **Collection browsing + triage** — View collections as tile grids, natural-language collection management via chat prompt, keeper/hidden/skip review workflow with annotation marking
-2. **Attractor Explorer** — Semantic visualization (2D canvas with D3 forces, or 3D WebGL with Three.js). Toggle between Grid and Explorer via toolbar buttons. Sidebar filters and text search define the base scope. Category chips use explicit `Filter / Group` semantics, and 3D also offers `Group by` shortcuts that arrange the current scope without changing global/sidebar filters. Explorer controls are mounted in the top stats toolbar, with editable numeric tuning values for desktop and iPad. Mobile-constrained broad sets use `iPad lite: 2D map`; filtered subsets can switch back to 3D when the measured WebGL budget allows it.
+1. **Collection browsing + optional review** — View collections as tile grids, filter the usable corpus, use the separate `Make Collection` mode for visual collection building, optionally reveal muted discarded items for restoration, and enter focused review mode when selection-based QC is useful
+2. **Attractor Explorer** — Semantic visualization (2D canvas with D3 forces, or 3D WebGL with Three.js). Toggle between Grid and Explorer via toolbar buttons. Sidebar filters and text search define the base scope. Category chips use explicit `Filter / Group` semantics, and 3D also offers `Group by` shortcuts that arrange the current scope without changing global/sidebar filters. Explorer controls are mounted in the persistent curation bar, with editable numeric tuning values for desktop and iPad. Mobile-constrained broad sets use `iPad lite: 2D map`; filtered subsets can switch back to 3D when the measured WebGL budget allows it.
 3. **Collection PDF export** — Export exactly one selected collection as a self-contained PDF with copied local media and visible external source URLs
 
 Key explorer files:

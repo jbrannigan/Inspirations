@@ -44,6 +44,9 @@
   function formatApiError(err) {
     const msg = `${(err && err.message) || err || "Request failed"}`.trim();
     if (!msg) return "Request failed";
+    if (/^(load failed|failed to fetch|networkerror|network error)$/i.test(msg)) {
+      return "Could not reach the Inspirations server. Make sure it is running on port 8001.";
+    }
     try {
       const parsed = JSON.parse(msg);
       if (parsed && typeof parsed.error === "string" && parsed.error.trim()) return parsed.error.trim();

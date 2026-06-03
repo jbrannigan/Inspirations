@@ -121,6 +121,9 @@ class TestTreeContract(unittest.TestCase):
         with Db(self.db_path) as db:
             ensure_schema(db)
             _seed_assets(db)
+            # Mirror run_server(): legacy content kinds are backfilled once
+            # before the browse tree starts serving requests.
+            ensure_schema(db)
             db.exec(
                 "insert into actors (id, name, token, role, created_at) values (?, ?, ?, ?, datetime('now'))",
                 ("owner-tree", "Owner", "owner-tree-token", "owner"),

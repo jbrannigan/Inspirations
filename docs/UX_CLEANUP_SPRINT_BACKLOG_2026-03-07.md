@@ -1,5 +1,9 @@
 # UX Cleanup Sprint Backlog - 2026-03-07
 
+> Legacy note (2026-06-03): this backlog preserves collaborator-era UX input.
+> Live sharing is retired by D021. Current browse/review/collection behavior is
+> summarized in `docs/CURRENT_HANDOFF.md`.
+
 ## Purpose
 
 This document holds UX comments separately from the classification work.

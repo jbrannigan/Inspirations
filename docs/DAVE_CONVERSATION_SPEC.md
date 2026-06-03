@@ -1,5 +1,9 @@
 # Dave — Conversational Design Librarian
 
+> Historical design spec note (2026-06-03): Dave remains active, but any
+> collaborator-hosting or magic-link integration options in this document are
+> not current product direction under D021.
+
 **Date:** 2026-03-20
 **Status:** Draft
 **Author:** Jim + Claude

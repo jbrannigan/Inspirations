@@ -271,7 +271,6 @@ def _resolve_actor(handler: BaseHTTPRequestHandler) -> dict | None:
     if not token:
         return {"id": "local-owner", "name": "Jim", "role": "owner", "token": ""}
     with Db(handler.server.db_path) as db:
-        ensure_schema(db)
         return get_actor_by_token(db, token=token)
 
 
@@ -1871,8 +1870,6 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def _backup_primary_db(self) -> str:
         db_path = Path(self.server.db_path).resolve()
-        with Db(db_path) as db:
-            ensure_schema(db)
         backups_dir = db_path.parent / "backups"
         backups_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
@@ -1916,7 +1913,6 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def _with_db(self, fn, **kwargs):
         with Db(self.server.db_path) as db:
-            ensure_schema(db)
             return fn(db, **kwargs)
 
     def _ensure_chat_catalog_fresh(self) -> Path | None:
@@ -2282,7 +2278,6 @@ class ApiHandler(BaseHTTPRequestHandler):
         ]
         try:
             with Db(self.server.db_path) as db:
-                ensure_schema(db)
                 tree.extend(self._build_classification_tree_sections(db))
         except Exception:
             pass
@@ -2291,7 +2286,6 @@ class ApiHandler(BaseHTTPRequestHandler):
         tree = [node for node in tree if node.get("type") != "collections_group"]
         try:
             with Db(self.server.db_path) as db:
-                ensure_schema(db)
                 is_owner = str((actor or {}).get("role") or "").strip().lower() == "owner"
                 rows = list_collections(
                     db,
@@ -2637,7 +2631,6 @@ class ApiHandler(BaseHTTPRequestHandler):
         tree entirely so the UI never promises items it cannot deliver.
         """
         with Db(self.server.db_path) as db:
-            ensure_schema(db)
             hidden_collection_id = db.query_value("select id from collections where lower(name)='hidden' limit 1")
             visible_clauses = ["(a.triage_status is null or a.triage_status != 'hidden')"]
             visible_params: list[object] = []
@@ -2949,7 +2942,6 @@ class ApiHandler(BaseHTTPRequestHandler):
     def _serve_media(self, asset_id: str, kind: str) -> None:
         kind = kind if kind in ("thumb", "original", "video", "pdf") else "thumb"
         with Db(self.server.db_path) as db:
-            ensure_schema(db)
             row = db.query(
                 "select id, source, source_ref, stored_path, stored_video_path, thumb_path from assets where id=?",
                 (asset_id,),
@@ -3360,7 +3352,6 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def _serve_scan_doc_pdf(self, asset_id: str) -> None:
         with Db(self.server.db_path) as db:
-            ensure_schema(db)
             row = db.query("select source_ref from assets where id=?", (asset_id,))
             if not row:
                 return self.send_error(404)
@@ -3558,6 +3549,12 @@ def _server_log(message: str) -> None:
 
 
 def run_server(*, host: str, port: int, db_path: Path, app_dir: Path, store_dir: Path) -> None:
+    # Migrations perform writes. Run them once before the threaded request
+    # server starts so concurrent API and thumbnail reads cannot contend on
+    # schema-maintenance updates.
+    with Db(db_path) as db:
+        ensure_schema(db)
+
     server = InspirationsHTTPServer((host, port), ApiHandler)
     server.db_path = db_path
     server.app_dir = app_dir

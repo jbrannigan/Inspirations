@@ -1,5 +1,9 @@
 # 8499TimberBridgeLn.com: Design Inspiration Deliverable
 
+> Legacy note (2026-06-03): this website-deliverable direction is historical.
+> D021 made a standalone one-collection PDF the active designer handoff. The
+> separate Home website on port `8003` remains outside Inspirations.
+
 **Date:** 2026-03-08 (updated after reviewing actual website project)
 **Author:** Jim Brannigan (with Claude)
 **Site status:** Live Next.js 16 app, Cloudflare tunnel on port 8003, Tufte-inspired design

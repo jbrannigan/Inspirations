@@ -1,5 +1,9 @@
 # Sprint 1 Agenda (Current Focus)
 
+> Legacy agenda note (2026-06-03): this is not the current branch or sprint.
+> Start with `docs/CURRENT_HANDOFF.md`; live collaborator work is retired by
+> D021.
+
 Date: 2026-03-03
 Branch: `codex/sprint1-collaborator-collections-default`
 

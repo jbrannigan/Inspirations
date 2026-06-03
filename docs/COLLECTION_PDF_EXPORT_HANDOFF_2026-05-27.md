@@ -31,7 +31,7 @@ PYTHONPATH=src python3 -m inspirations export collection-pdf \
 
 App/API:
 
-- Contextual canvas-header button: `Export Collection PDF` when exactly one collection is selected
+- Contextual persistent-curation-bar button: `Export Collection PDF` when exactly one collection is selected
 - Sidebar button: `Manage Collections` for local name/description editing
 - Sidebar button: `Manage Collection Archive` for archiving, restoring, and permanently deleting obsolete collection folders. Folder archiving does not hide or delete member items.
 - API: `POST /api/collections/{collection_id}/export/pdf`

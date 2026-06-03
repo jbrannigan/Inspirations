@@ -1,5 +1,9 @@
 # Bug-Fix Sprint Baseline (Mar 2, 2026)
 
+> Legacy note (2026-06-03): this baseline describes the retired
+> collaborator/magic-link product era. Keep it for provenance, but use
+> `docs/CURRENT_HANDOFF.md` and D021-D025 for current behavior.
+
 ## Scope Freeze
 - Pause net-new product work.
 - Focus on stabilization for iPad + desktop.

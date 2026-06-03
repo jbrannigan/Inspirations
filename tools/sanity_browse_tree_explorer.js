@@ -88,15 +88,16 @@
       : `OK: ${sources.map((n) => `${n.label}(${n.count})`).join(", ")}`
   );
 
-  // ─── 2. Every source board returns items via API ───────────────────
+  // ─── 2. Every source branch returns items via API ──────────────────
 
   console.log("\n--- Source board API checks ---");
   for (const src of sources) {
     for (const child of (src.children || []).slice(0, 3)) {
       // Use the same query the app would use
-      const boardName = (child.board_name || child.label || "").toLowerCase().replace(/ /g, "-");
       const srcName = src.label.toLowerCase();
-      const url = `/api/assets?source=${encodeURIComponent(srcName)}&board=${encodeURIComponent(boardName)}&limit=1`;
+      const url = child.type === "source_subtype"
+        ? `/api/assets?source=${encodeURIComponent(srcName)}&content_kind=${encodeURIComponent(child.content_kind || "")}&limit=1`
+        : `/api/assets?source=${encodeURIComponent(srcName)}&board=${encodeURIComponent(child.board_name || child.label || "")}&limit=1`;
       try {
         const resp = await fetch(url);
         const data = await resp.json();

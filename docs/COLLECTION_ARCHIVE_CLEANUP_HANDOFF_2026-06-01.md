@@ -66,3 +66,75 @@ The next branch should focus on creating deliberate curator-owned collections:
   scope
 - preserve manual item ordering for designer PDF export
 - avoid reviving obsolete `pins:` source mirrors as collections
+
+## Browse-First Follow-Up
+
+The everyday curation surface was simplified after the archive cleanup:
+
+- removed the prominent legacy review-queue dropdown
+- ordinary browsing treats legacy null=`pending` and `keeper` assets as usable
+- added a persistent canvas curation bar with text search, active filters, and a
+  `Show` selector for usable, all, keeper, flagged, and discarded item views
+- added direct restore actions for discarded cards and context-aware restore in
+  focused review mode
+
+The underlying triage schema and audit log remain for compatibility and
+diagnostics. They are no longer presented as a corpus-wide backlog for Leslie.
+
+In grid Review mode, the shared `Show` selector and the card interactions have
+deliberately different meanings:
+
+- `Keepers`, `Flagged`, and `Discarded` item views revisit durable curation decisions
+  within the current collection, text-search, and tree-filter scope
+- clicking a card always opens the same full detail/QC modal, regardless of the
+  selected `Show` item view
+- the explicit `One-by-one` action opens the fast triage screen
+- one-by-one review offers `Edit title / media` to open the full detail/QC modal
+  for title repair, media repair, annotations, and notes
+- clicking its checkbox selects it for bulk keep, discard, restore, or flag
+- Make Collection remains selection-first, so clicking a card there selects it
+
+These are simple, mutually exclusive scope filters, not a return of the retired
+review-queue dropdown. Removing a star, unflagging an item, or restoring a
+discarded item while its filter is active removes it from the visible result
+set.
+
+## Collection-Building Follow-Up
+
+The browse-first collection workflow is now implemented:
+
+- `Make Collection` is a separate canvas mode beside `Review`
+- cards receive visible selection checkboxes while that mode is active
+- its contextual row in the shared sticky curation bar can create a collection
+  from selected cards, add cards to an existing collection, or remove cards
+  when one collection is in scope
+- entering Explorer closes the grid-based collection selection mode
+- the grid auto-loads the next asset page when scrolling near the bottom;
+  `Load More` remains as a fallback
+- automatic loading uses an `IntersectionObserver` on the Load More sentinel,
+  with scroll-distance checks as a fallback for desktop and narrow layouts; it
+  begins several screenfuls early and gives the asset-page request high priority
+- append-load failures keep already visible cards on screen and report the
+  failure as a toast instead of replacing the grid
+- the fallback button changes to `Loading…` as soon as automatic or manual
+  pagination begins, and the top item count also reports `loading more…`, so
+  slower iPad/LAN requests do not look inert
+- `Load More` now reliably re-enables after an asset page fetch; the frontend
+  must clear `state.loadingAssets` before refreshing that button state
+
+This intentionally keeps creative collection building separate from Review/QC.
+The next collection UX pass can focus on ordering items for the PDF and
+polishing empty-folder creation if it remains useful.
+
+## Service Reliability Follow-Up
+
+Intermittent asset-page and thumbnail failures were traced to request-time
+`ensure_schema()` calls in the threaded HTTP server. Concurrent API and media
+requests could each perform migration/backfill writes and trigger
+`sqlite3.OperationalError: database is locked`.
+
+The server now runs schema assurance once during startup, before accepting
+requests. Normal API, catalog, media, and scan-PDF requests remain read-oriented
+and must not reintroduce migration writes. SQLite connections also use a
+30-second busy timeout, and the launchd service logs remain the first place to
+inspect unexplained service or loading failures.

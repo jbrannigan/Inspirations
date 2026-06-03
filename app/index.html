@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inspirations!</title>
-    <link rel="stylesheet" href="/app/styles.css?v=79" />
+    <link rel="stylesheet" href="/app/styles.css?v=85" />
     <script type="importmap">
       {
         "imports": {
@@ -96,30 +96,11 @@
               </svg>
             </button>
           </div>
+          <button id="collectionBuildBtn" class="collection-build-launch-btn" type="button">Make Collection</button>
           <button id="reviewBtn" class="review-launch-btn" type="button">Review</button>
           <button id="addMedia" class="header-btn" type="button">Add Media</button>
           <a href="/app/admin.html" class="header-btn adminLink">Admin</a>
         </div>
-      <!-- Canvas review action bar (inside header so it sticks with topbar) -->
-        <div id="canvasActionBar" class="canvas-action-bar" hidden>
-        <div class="canvas-action-bar-inner">
-          <span id="reviewScopeChip" class="canvas-scope-chip">Scope: Entire library</span>
-          <span id="reviewActorChipCanvas" class="canvas-reviewer-chip">Reviewer: Not signed in</span>
-          <span id="canvasSelectionCount" class="canvas-selection-count">0 selected</span>
-          <span id="reviewSelectionToolChip" class="canvas-selection-tool-chip" hidden>Selection: Click</span>
-          <div class="canvas-action-buttons">
-            <button id="canvasKeep" class="canvas-action-btn canvas-action-keep" type="button" disabled>★ Keep</button>
-            <button id="canvasHideLocal" class="canvas-action-btn canvas-action-hide-local" type="button" disabled>↘ Hide in this collection</button>
-            <button id="canvasHideGlobal" class="canvas-action-btn canvas-action-hide-global" type="button" disabled>✗ Hide globally</button>
-            <button id="canvasFlag" class="canvas-action-btn canvas-action-flag" type="button" disabled>⚑ Flag</button>
-            <button id="canvasClear" class="canvas-action-btn" type="button">Clear</button>
-          </div>
-          <div class="canvas-mode-toggle">
-            <button id="canvasToOneByOne" class="canvas-action-btn canvas-action-switch" type="button">One-by-one</button>
-            <button id="canvasExitReview" class="canvas-action-btn" type="button">Exit Review</button>
-          </div>
-        </div>
-      </div>
     </header>
 
     <div id="chatResponse" class="chat-response-bar" hidden></div>
@@ -163,30 +144,65 @@
 
       <!-- Main content -->
       <main class="content">
-        <div class="stats-bar">
-          <span id="stats" class="stats-count">Loading…</span>
-          <span id="explorerModeChip" class="explorer-mode-chip" hidden></span>
-          <span id="actorContextChip" class="actor-context-chip" hidden></span>
-          <span id="topCardFilterToolbar" class="top-filter-toolbar">
-            <input id="canvasTextFilter" class="canvas-text-filter" type="search" autocomplete="off" placeholder="Type text to filter" aria-label="Filter cards text">
-            <select id="reviewQueueFilter" class="review-queue-filter" aria-label="Review queue">
-              <option value="">Review queue: All items</option>
-              <option value="pending">Pending</option>
-              <option value="keeper">Keepers</option>
-              <option value="hidden">Hidden</option>
-              <option value="hidden-manual">Hidden manually</option>
-              <option value="hidden-ai">Hidden by AI cleanup</option>
-              <option value="needs-comment">Needs comment</option>
-              <option value="flagged">Flagged</option>
-            </select>
-          </span>
-          <button id="exportCollectionPdf" class="collection-pdf-export-btn" type="button" hidden>Export Collection PDF</button>
-          <span id="explorerToolbarMount" class="explorer-toolbar-mount" hidden></span>
-          <span id="canvasNarrative" class="stats-narrative"></span>
-          <span id="filterSummary" class="stats-filter" hidden>
-            <span id="filterSummaryText"></span>
-            <button id="clearFilterSummary" class="stats-filter-clear" type="button">Clear filters</button>
-          </span>
+        <div class="curation-bar">
+          <div class="stats-bar curation-scope-row">
+            <span id="stats" class="stats-count">Loading…</span>
+            <span id="explorerModeChip" class="explorer-mode-chip" hidden></span>
+            <span id="actorContextChip" class="actor-context-chip" hidden></span>
+            <span id="topCardFilterToolbar" class="top-filter-toolbar">
+              <input id="canvasTextFilter" class="canvas-text-filter" type="search" autocomplete="off" placeholder="Type text to filter" aria-label="Filter items by text">
+              <label class="item-view-control" for="itemViewSelect">
+                <span>Show</span>
+                <select id="itemViewSelect" aria-label="Choose which items to show">
+                  <option value="usable">Usable items</option>
+                  <option value="all">All items, including discarded</option>
+                  <option value="keeper">Keepers</option>
+                  <option value="flagged">Flagged</option>
+                  <option value="hidden">Discarded</option>
+                </select>
+              </label>
+            </span>
+            <button id="exportCollectionPdf" class="collection-pdf-export-btn" type="button" hidden>Export Collection PDF</button>
+            <span id="explorerToolbarMount" class="explorer-toolbar-mount" hidden></span>
+            <span id="canvasNarrative" class="stats-narrative"></span>
+            <span id="filterSummary" class="stats-filter" hidden>
+              <span id="filterSummaryText"></span>
+              <button id="clearFilterSummary" class="stats-filter-clear" type="button">Clear filters</button>
+            </span>
+          </div>
+          <div id="canvasActionBar" class="canvas-action-bar" hidden>
+            <div class="canvas-action-bar-inner">
+              <span id="reviewScopeChip" class="canvas-scope-chip">Scope: Entire library</span>
+              <span id="canvasSelectionCount" class="canvas-selection-count">0 selected</span>
+              <span id="reviewSelectionToolChip" class="canvas-selection-tool-chip" hidden>Selection: Checkboxes</span>
+              <div class="canvas-action-buttons">
+                <button id="canvasKeep" class="canvas-action-btn canvas-action-keep" type="button" disabled>★ Keep</button>
+                <button id="canvasHideLocal" class="canvas-action-btn canvas-action-hide-local" type="button" disabled>↘ Hide in this collection</button>
+                <button id="canvasHideGlobal" class="canvas-action-btn canvas-action-hide-global" type="button" disabled>✗ Discard</button>
+                <button id="canvasFlag" class="canvas-action-btn canvas-action-flag" type="button" disabled>⚑ Flag</button>
+                <button id="canvasClear" class="canvas-action-btn" type="button">Clear</button>
+              </div>
+              <div class="canvas-mode-toggle">
+                <button id="canvasToOneByOne" class="canvas-action-btn canvas-action-switch" type="button">One-by-one</button>
+                <button id="canvasExitReview" class="canvas-action-btn" type="button">Exit Review</button>
+              </div>
+            </div>
+          </div>
+          <div id="collectionBuildBar" class="canvas-action-bar collection-build-bar" hidden>
+            <div class="canvas-action-bar-inner">
+              <span class="collection-build-chip">Making a collection</span>
+              <span id="collectionBuildSelectionCount" class="canvas-selection-count">0 selected</span>
+              <div class="canvas-action-buttons">
+                <button id="collectionBuildNew" class="canvas-action-btn collection-build-primary" type="button" disabled>+ New collection</button>
+                <button id="collectionBuildExisting" class="canvas-action-btn" type="button" disabled>Add to existing</button>
+                <button id="collectionBuildRemove" class="canvas-action-btn canvas-action-hide-local" type="button" hidden disabled>Remove from this collection</button>
+                <button id="collectionBuildClear" class="canvas-action-btn" type="button">Clear</button>
+              </div>
+              <div class="canvas-mode-toggle">
+                <button id="collectionBuildDone" class="canvas-action-btn" type="button">Done</button>
+              </div>
+            </div>
+          </div>
         </div>
         <div id="contextLinkBanner" class="context-link-banner" hidden role="status" aria-live="polite"></div>
 
@@ -230,7 +246,10 @@
               <p id="reviewMeta" class="review-meta"></p>
               <p id="reviewAssetId" class="review-asset-id"></p>
               <p id="reviewDesc" class="review-desc"></p>
-              <a id="reviewSourceLink" href="#" target="_blank" rel="noopener" class="review-source-link">View on source ↗</a>
+              <div class="review-detail-links">
+                <a id="reviewSourceLink" href="#" target="_blank" rel="noopener" class="review-source-link">View on source ↗</a>
+                <button id="reviewEditDetailsBtn" class="review-edit-details-btn" type="button">Edit title / media</button>
+              </div>
               <div id="reviewClassificationPanel" class="modal-classification-panel review-track-panel" hidden>
                 <div class="sectionTitle">Track Review</div>
                 <div id="reviewClassificationStatus" class="modal-classification-status muted" hidden></div>
@@ -303,9 +322,9 @@
               <span class="review-btn-icon">↘</span>
               <span class="review-btn-label">Hide in this collection</span>
             </button>
-            <button id="reviewHideGlobalBtn" class="review-btn review-btn-hide-global" type="button" title="Hide globally">
+            <button id="reviewHideGlobalBtn" class="review-btn review-btn-hide-global" type="button" title="Discard from the library">
               <span class="review-btn-icon">✗</span>
-              <span class="review-btn-label">Hide globally</span>
+              <span class="review-btn-label">Discard</span>
             </button>
             <button id="reviewFlagBtn" class="review-btn review-btn-flag" type="button" title="Flag for follow-up">
               <span class="review-btn-icon">⚑</span>
@@ -363,7 +382,7 @@
                 <span id="sourceSiteRow" hidden>
                   <a id="sourceSiteLink" href="#" target="_blank" rel="noopener" class="source-site-link">Original site ↗</a>
                 </span>
-                <button id="modalBrokenSourceBtn" class="modal-source-broken-btn" type="button" hidden>Broken link · hide item</button>
+                <button id="modalBrokenSourceBtn" class="modal-source-broken-btn" type="button" hidden>Broken link · discard item</button>
               </div>
             </div>
             <div class="modal-header-actions">
@@ -531,7 +550,7 @@
             <div id="modalDescription" class="modal-description" hidden></div>
             <div id="modalHashtags" class="modal-hashtags" hidden></div>
             <section id="modalTriageInfoSection" class="modal-side-section modal-triage-info" hidden>
-              <div class="sectionTitle">Hidden status</div>
+              <div class="sectionTitle">Discarded status</div>
               <div id="modalTriageInfoSummary" class="modal-triage-info-summary"></div>
               <div id="modalTriageInfoMeta" class="modal-triage-info-meta muted"></div>
             </section>
@@ -554,6 +573,41 @@
             <div id="modalEngagement" class="modal-engagement muted" hidden></div>
             <div id="modalDimensions" class="modal-dimensions muted" hidden></div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add selected cards to a new or existing collection -->
+    <div id="collectionBuildModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="collectionBuildModalTitle">
+      <div class="modalContent collectionBuildContent">
+        <div class="modalHeader">
+          <div>
+            <div id="collectionBuildModalTitle" class="modalTitle">Add selected items</div>
+            <div id="collectionBuildModalHint" class="muted">Choose where these items belong.</div>
+          </div>
+          <button id="closeCollectionBuildModal" type="button">Close</button>
+        </div>
+        <div class="collectionBuildBody">
+          <section id="collectionBuildNewSection" class="collectionBuildSection">
+            <h3>New collection</h3>
+            <label class="collectionDetailField">
+              <span>Name</span>
+              <input id="collectionBuildName" type="text" maxlength="160" placeholder="Example: Leslie's kitchen favorites" />
+            </label>
+            <label class="collectionDetailField">
+              <span>Description <span class="muted">(optional)</span></span>
+              <textarea id="collectionBuildDescription" rows="2" maxlength="500"></textarea>
+            </label>
+            <button id="collectionBuildCreate" class="collection-build-modal-primary" type="button">Create and add selected</button>
+          </section>
+          <section id="collectionBuildExistingSection" class="collectionBuildSection">
+            <h3>Existing collection</h3>
+            <label class="collectionDetailField">
+              <span>Collection</span>
+              <select id="collectionBuildExistingSelect"></select>
+            </label>
+            <button id="collectionBuildAdd" type="button">Add selected</button>
+          </section>
         </div>
       </div>
     </div>
@@ -783,9 +837,9 @@
 
     <div id="toastContainer" class="toast-container" aria-live="polite"></div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
-    <script src="/app/shared.js?v=4"></script>
+    <script src="/app/shared.js?v=5"></script>
     <script src="/app/explorer.js?v=2"></script>
     <script src="/app/attractor-explorer.js?v=16"></script>
-    <script src="/app/app.js?v=142"></script>
+    <script src="/app/app.js?v=155"></script>
   </body>
 </html>

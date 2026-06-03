@@ -18,7 +18,8 @@ const state = {
   classificationFacets: {},     // stackable Refine By filters: axis -> [values]
   classificationFacetLabels: {}, // display labels keyed as "axis:value"
   currentTreeNodeId: null,      // active sidebar tree node ID
-  triageFilter: "",             // "" | "pending" | "keeper" | "hidden" | "needs-comment"
+  triageFilter: "",             // "" | "pending" | "keeper" | "hidden" | "needs-comment" | "flagged"
+  showDiscarded: false,         // Browse discarded items alongside ordinary items.
 
   // Assets
   assets: [],
@@ -79,6 +80,7 @@ const state = {
 
   // Canvas review mode
   canvasReview: false,          // true when canvas review overlay is active
+  canvasCollectionBuild: false, // true while selecting cards for a collection
   canvasSelected: new Set(),    // set of selected asset IDs
 
   // Local owner session. Legacy collaborator fields remain only for old data.
@@ -97,6 +99,11 @@ const state = {
 const DESKTOP_ASSETS_PAGE_SIZE = 240;
 const TABLET_ASSETS_PAGE_SIZE = 120;
 const PHONE_ASSETS_PAGE_SIZE = 80;
+// Start pagination several screens early so its JSON request does not wait
+// behind the burst of lazy thumbnail requests near the bottom of the grid.
+const AUTO_LOAD_MORE_MARGIN_PX = 3600;
+let _autoLoadMoreRaf = 0;
+let _autoLoadMoreObservers = [];
 
 function _detectAssetsPageSize() {
   const vw = Math.max(0, window.innerWidth || 0);
@@ -903,6 +910,7 @@ function _buildCurrentAssetQueryParams({ limit, offset = 0, ids = null } = {}) {
   } else if (state.triageFilter) {
     params.set("triage_status", state.triageFilter);
   }
+  appendShowDiscardedParam(params);
   return params;
 }
 
@@ -924,6 +932,7 @@ function _buildCurrentCatalogQueryParams({ limit, offset = 0 } = {}) {
   } else if (state.triageFilter) {
     params.set("triage_status", state.triageFilter);
   }
+  appendShowDiscardedParam(params);
   return params;
 }
 
@@ -1015,6 +1024,64 @@ function updateActorContextChips() {
   }
 }
 
+const ITEM_VIEW_OPTIONS = {
+  usable: {
+    triageFilter: "",
+    showDiscarded: false,
+    emptyLabel: "No usable items match the current scope.",
+  },
+  all: {
+    triageFilter: "",
+    showDiscarded: true,
+    emptyLabel: "No items match the current scope.",
+  },
+  keeper: {
+    triageFilter: "keeper",
+    showDiscarded: false,
+    emptyLabel: "No keepers match the current scope.",
+  },
+  flagged: {
+    triageFilter: "flagged",
+    showDiscarded: false,
+    emptyLabel: "No flagged items match the current scope.",
+  },
+  hidden: {
+    triageFilter: "hidden",
+    showDiscarded: false,
+    emptyLabel: "No discarded items match the current scope.",
+  },
+};
+
+function isReviewStatusFilterActive(status) {
+  return state.triageFilter === status;
+}
+
+function currentItemView() {
+  if (state.showDiscarded && !state.triageFilter) return "all";
+  for (const [view, config] of Object.entries(ITEM_VIEW_OPTIONS)) {
+    if (config.triageFilter === state.triageFilter && config.showDiscarded === !!state.showDiscarded) {
+      return view;
+    }
+  }
+  return "current";
+}
+
+function syncItemViewControl() {
+  const select = $("#itemViewSelect");
+  if (!select) return;
+  let currentOption = select.querySelector('option[value="current"]');
+  const view = currentItemView();
+  if (view === "current" && !currentOption) {
+    currentOption = document.createElement("option");
+    currentOption.value = "current";
+    currentOption.textContent = "Filtered items";
+    select.append(currentOption);
+  } else if (view !== "current" && currentOption) {
+    currentOption.remove();
+  }
+  select.value = view;
+}
+
 function updateReviewScopeChips() {
   const scope = getReviewScopeInfo();
   const chipText = `Scope: ${scope.label}`;
@@ -1022,18 +1089,21 @@ function updateReviewScopeChips() {
   if (headerChip) headerChip.textContent = chipText;
   const oneByOneActorChip = $("#reviewActorChip");
   if (oneByOneActorChip) oneByOneActorChip.textContent = _reviewActorLabel();
-  const canvasActorChip = $("#reviewActorChipCanvas");
-  if (canvasActorChip) canvasActorChip.textContent = _reviewActorLabel();
+  syncItemViewControl();
 }
 
 function confirmGlobalHideBulk(count) {
   const total = Math.max(0, Number(count || 0));
   const noun = total === 1 ? "item" : "items";
   return window.confirm(
-    `Hide ${total} ${noun} globally?\n\n`
-    + "This applies to the entire library, not just the active collection.\n"
-    + "You can restore items later from Hidden."
+    `Discard ${total} ${noun}?\n\n`
+    + "Discarded items leave ordinary browsing across the library.\n"
+    + "You can restore them later from Show: Discarded."
   );
+}
+
+function appendShowDiscardedParam(params) {
+  if (isOwner() && state.showDiscarded) params.set("include_hidden", "1");
 }
 
 function hasCollectionFilter() {
@@ -1395,7 +1465,7 @@ function renderModalSourceLinks(asset) {
 
 async function markModalBrokenSourceLink(asset) {
   if (!asset?.id || !isOwner()) return;
-  if (!window.confirm("Flag this item as a broken source link and hide it from the main library?")) return;
+  if (!window.confirm("Flag this item as a broken source link and discard it from ordinary browsing?")) return;
   const button = $("#modalBrokenSourceBtn");
   if (button) button.disabled = true;
   try {
@@ -1405,10 +1475,10 @@ async function markModalBrokenSourceLink(asset) {
     });
     if (data.asset) replaceAssetInState(data.asset);
     closeModal();
-    await Promise.all([loadAssets(), loadCatalogTree(), loadReviewQueueCounts()]);
-    Shared.showToast("Broken source link flagged and hidden.", { type: "success", duration: 3000 });
+    await Promise.all([loadAssets(), loadCatalogTree()]);
+    Shared.showToast("Broken source link flagged and discarded.", { type: "success", duration: 3000 });
   } catch (e) {
-    Shared.showToast(`Unable to hide broken link: ${formatApiError(e)}`, { type: "error", duration: 3200 });
+    Shared.showToast(`Unable to discard broken link: ${formatApiError(e)}`, { type: "error", duration: 3200 });
   } finally {
     if (button) button.disabled = false;
   }
@@ -1627,6 +1697,8 @@ async function loadAssets(opts = {}) {
   if (!append) { state.offset = 0; }
 
   state.loadingAssets = true;
+  updateLoadMoreBtn();
+  if (append) updateStats();
   const seq = ++state.assetsRequestSeq;
 
   if (!append) renderSkeletons();
@@ -1662,10 +1734,7 @@ async function loadAssets(opts = {}) {
   } else if (state.triageFilter) {
     params.set("triage_status", state.triageFilter);
   }
-
-  // Always include hidden items when "all" is selected to show full picture
-  // but don't show triage=hidden by default unless explicitly requested
-  // (server default: exclude hidden)
+  appendShowDiscardedParam(params);
 
   try {
     let data;
@@ -1673,15 +1742,15 @@ async function loadAssets(opts = {}) {
     if (catalogFiles.length) {
       // Catalog browsing: load items from one or more catalog files
       const catParams = _buildCurrentCatalogQueryParams({ limit: ASSETS_PAGE_SIZE, offset: state.offset });
-      data = await api(`/api/catalog/items?${catParams}`);
+      data = await api(`/api/catalog/items?${catParams}`, { priority: "high" });
     } else if (semQ) {
-      const res = await fetch(_bp(`/api/search/similar?${params}`));
+      const res = await fetch(_bp(`/api/search/similar?${params}`), { priority: "high" });
       if (!res.ok) throw new Error(await res.text());
       data = await res.json();
     } else {
       const collectionIds = getCollectionFilterIds();
       if (collectionIds.length) params.set("collection_id", collectionIds.join(","));
-      data = await api(`/api/assets?${params}`);
+      data = await api(`/api/assets?${params}`, { priority: "high" });
     }
 
     if (seq !== state.assetsRequestSeq) return; // stale
@@ -1703,11 +1772,18 @@ async function loadAssets(opts = {}) {
     await syncExplorerFilter();
   } catch (e) {
     if (seq !== state.assetsRequestSeq) return;
+    if (append) {
+      Shared.showToast(`Unable to load more items: ${formatApiError(e)}`, { type: "error", duration: 4200 });
+      return;
+    }
     const grid = $("#grid");
     if (grid) grid.innerHTML = `<div class="empty-state">Unable to load items: ${escapeHtml(formatApiError(e))}</div>`;
   } finally {
     if (seq === state.assetsRequestSeq) {
       state.loadingAssets = false;
+      updateLoadMoreBtn();
+      updateStats();
+      scheduleAutoLoadMore();
       if (state.pendingAssetsReload && !append) {
         state.pendingAssetsReload = false;
         loadAssets();
@@ -1724,6 +1800,51 @@ function updateLoadMoreBtn() {
   btn.textContent = state.loadingAssets ? "Loading…" : "Load More";
 }
 
+function _autoLoadScrollRemainingPx() {
+  const scroller = $(".content");
+  if (scroller && getComputedStyle(scroller).overflowY !== "visible") {
+    return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+  }
+  const root = document.scrollingElement || document.documentElement;
+  return root.scrollHeight - window.scrollY - window.innerHeight;
+}
+
+function maybeAutoLoadMore() {
+  _autoLoadMoreRaf = 0;
+  const browseView = $("#browseView");
+  if (!browseView || browseView.hidden) return;
+  if (state.view !== "browse") return;
+  if (!state.hasMore || state.loadingAssets || state.semanticMode) return;
+  if (_autoLoadScrollRemainingPx() > AUTO_LOAD_MORE_MARGIN_PX) return;
+  loadAssets({ append: true });
+}
+
+function scheduleAutoLoadMore() {
+  if (_autoLoadMoreRaf) return;
+  _autoLoadMoreRaf = window.requestAnimationFrame(maybeAutoLoadMore);
+}
+
+function setupAutoLoadMoreObservers() {
+  if (!("IntersectionObserver" in window)) return;
+  const sentinel = $(".load-more-wrap");
+  if (!sentinel) return;
+  for (const observer of _autoLoadMoreObservers) observer.disconnect();
+  _autoLoadMoreObservers = [];
+
+  const contentScroller = $(".content");
+  const roots = contentScroller ? [contentScroller, null] : [null];
+  for (const root of roots) {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) scheduleAutoLoadMore();
+      },
+      { root, rootMargin: `${AUTO_LOAD_MORE_MARGIN_PX}px 0px`, threshold: 0 },
+    );
+    observer.observe(sentinel);
+    _autoLoadMoreObservers.push(observer);
+  }
+}
+
 function syncTopFilterToolbar() {
   const cardToolbar = $("#topCardFilterToolbar");
   const explorerToolbar = $("#explorerToolbarMount");
@@ -1731,7 +1852,7 @@ function syncTopFilterToolbar() {
   const explorerActive = isExplorerViewActive();
 
   syncCollectionPdfExportButton();
-  if (cardToolbar) cardToolbar.hidden = explorerActive;
+  if (cardToolbar) cardToolbar.hidden = false;
   if (explorerToolbar) {
     explorerToolbar.hidden = !explorerActive || explorerToolbar.children.length === 0;
   }
@@ -1793,10 +1914,11 @@ function updateStats() {
   }
   const shown = state.assets.length;
   const total = state.totalCount;
+  const loadingMore = state.loadingAssets && shown > 0 ? " · loading more…" : "";
   if (state.hasMore && total) {
-    statsEl.textContent = `${shown} loaded of ${total} items`;
+    statsEl.textContent = `${shown} loaded of ${total} items${loadingMore}`;
   } else if (state.hasMore) {
-    statsEl.textContent = `${shown} items loaded - more available`;
+    statsEl.textContent = `${shown} items loaded - more available${loadingMore}`;
   } else {
     statsEl.textContent = `${shown} items`;
   }
@@ -1820,9 +1942,12 @@ function renderGrid() {
   const grid = $("#grid");
   if (!grid) return;
   grid.innerHTML = "";
-  // Maintain canvas review class across re-renders
+  // Maintain canvas selection classes across re-renders.
   const browseView = $("#browseView");
-  if (browseView) browseView.classList.toggle("canvas-review-active", state.canvasReview);
+  if (browseView) {
+    browseView.classList.toggle("canvas-review-active", state.canvasReview);
+    browseView.classList.toggle("canvas-selection-active", state.canvasReview || state.canvasCollectionBuild);
+  }
   syncTopFilterToolbar();
 
   if (!state.assets.length) {
@@ -1858,7 +1983,7 @@ function buildCard(a) {
     } else if (ts === "keeper") {
       badgeHtml = '<span class="triage-badge keeper" title="Keeper"></span>';
     } else if (ts === "hidden") {
-      badgeHtml = '<span class="triage-badge hidden-status" title="Hidden"></span>';
+      badgeHtml = '<span class="triage-badge hidden-status" title="Discarded / irrelevant"></span>';
     }
   }
 
@@ -1884,15 +2009,19 @@ function buildCard(a) {
     ? `<button class="card-quick-tag${tagged ? " tagged" : ""}" title="${tagged ? "Remove tag" : "Tag for diagnosis"}" type="button">🏷️</button>`
     : "";
   const isKeeper = ts === "keeper";
-  const quickStarHtml = isOwner()
+  const quickStarHtml = isOwner() && ts !== "hidden"
     ? `<button class="card-quick-star${isKeeper ? " starred" : ""}" title="${isKeeper ? "Remove keeper" : "Mark as keeper"}" type="button">★</button>`
     : "";
   const quickFlagHtml = canUseFlag()
     ? `<button class="card-quick-flag${flagged ? " flagged" : ""}" title="${flagged ? "Remove flag" : "Flag for follow-up"}" type="button">⚑</button>`
     : "";
+  const quickRestoreHtml = isOwner() && ts === "hidden"
+    ? '<button class="card-quick-restore" title="Restore to ordinary browsing" type="button">Restore</button>'
+    : "";
 
-  const selectedClass = state.canvasReview && state.canvasSelected.has(a.id) ? " canvas-selected" : "";
-  el.className = "card" + selectedClass;
+  const selectedClass = (state.canvasReview || state.canvasCollectionBuild) && state.canvasSelected.has(a.id) ? " canvas-selected" : "";
+  const discardedClass = ts === "hidden" ? " discarded" : "";
+  el.className = "card" + discardedClass + selectedClass;
 
   const mediaHtml = showVideo
     ? (imgUrl
@@ -1911,6 +2040,7 @@ function buildCard(a) {
       ${quickStarHtml}
       ${quickTagHtml}
       ${quickFlagHtml}
+      ${quickRestoreHtml}
       ${scanNavHtml}
     </div>
     <div class="card-footer">
@@ -1924,12 +2054,21 @@ function buildCard(a) {
 
   el.onclick = (e) => {
     if (e.target.closest(".scan-nav-btn")) return;
-    if (state.canvasReview) {
+    if (state.canvasCollectionBuild) {
       toggleCanvasSelection(a.id, el);
       return;
     }
     openModal(a);
   };
+
+  const checkbox = el.querySelector(".card-checkbox");
+  if (checkbox) {
+    checkbox.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!state.canvasReview && !state.canvasCollectionBuild) return;
+      toggleCanvasSelection(a.id, el);
+    });
+  }
 
   // Scan page nav wiring
   if (isMultiScan) {
@@ -2004,10 +2143,37 @@ function buildCard(a) {
         a.flagged = newFlagged;
         quickFlagBtn.classList.toggle("flagged", !!newFlagged);
         quickFlagBtn.title = newFlagged ? "Remove flag" : "Flag for follow-up";
-        renderGrid();
+        if (isReviewStatusFilterActive("flagged") && !newFlagged) {
+          await loadAssets();
+        } else {
+          renderGrid();
+        }
         Shared.showToast(newFlagged ? "Flagged for follow-up." : "Flag removed.", { type: "success", duration: 1800 });
       } catch (err) {
         Shared.showToast(`Flag failed: ${formatApiError(err)}`, { type: "error" });
+      }
+    });
+  }
+
+  const quickRestoreBtn = el.querySelector(".card-quick-restore");
+  if (quickRestoreBtn) {
+    quickRestoreBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try {
+        await api(`/api/assets/${encodeURIComponent(a.id)}/triage`, {
+          method: "POST",
+          body: JSON.stringify({ status: null, reason: "restored from discarded browse" }),
+        });
+        a.triage_status = null;
+        if (isReviewStatusFilterActive("hidden")) {
+          await loadAssets();
+        } else {
+          renderGrid();
+        }
+        await loadCatalogTree();
+        Shared.showToast("Restored to ordinary browsing.", { type: "success", duration: 1800 });
+      } catch (err) {
+        Shared.showToast(`Restore failed: ${formatApiError(err)}`, { type: "error" });
       }
     });
   }
@@ -2037,6 +2203,7 @@ function buildCard(a) {
         // Update star button state
         quickStarBtn.classList.toggle("starred", newStatus === "keeper");
         quickStarBtn.title = newStatus === "keeper" ? "Remove keeper" : "Mark as keeper";
+        if (isReviewStatusFilterActive("keeper") && newStatus !== "keeper") await loadAssets();
         Shared.showToast(newStatus === "keeper" ? "Marked as keeper ★" : "Keeper removed", { type: "success", duration: 2000 });
         // Refresh tree counts
         loadCatalogTree();
@@ -2087,7 +2254,6 @@ async function refreshSidebarTrees() {
 function resetTriageFilter() {
   if (state.triageFilter) {
     state.triageFilter = "";
-    syncReviewQueueSelect();
   }
 }
 
@@ -2743,7 +2909,7 @@ function addTreeHideToggle(el, getFilterParams) {
   if (!isOwner()) return;
   const btn = document.createElement("button");
   btn.className = "tree-hide-toggle";
-  btn.title = "Hide all items in this folder";
+  btn.title = "Discard all items in this folder";
   const key = _nodeKey(getFilterParams());
   const isHidden = !!_bulkHiddenByNode[key];
   btn.innerHTML = "✗";
@@ -2787,7 +2953,7 @@ async function bulkTriageFromTree(status, filterParams, nodeKey) {
       return;
     }
     if (isHiding && !confirmGlobalHideBulk(ids.length)) {
-      Shared.showToast("Global hide canceled.", { type: "info" });
+      Shared.showToast("Discard canceled.", { type: "info" });
       return;
     }
     await api("/api/assets/triage/bulk", {
@@ -2797,7 +2963,7 @@ async function bulkTriageFromTree(status, filterParams, nodeKey) {
 
     if (isHiding) {
       _bulkHiddenByNode[nodeKey] = ids;
-      Shared.showToast(`${ids.length} item${ids.length === 1 ? "" : "s"} hidden.`, { type: "success" });
+      Shared.showToast(`${ids.length} item${ids.length === 1 ? "" : "s"} discarded.`, { type: "success" });
     } else if (isUndoing) {
       delete _bulkHiddenByNode[nodeKey];
       Shared.showToast(`${ids.length} item${ids.length === 1 ? "" : "s"} restored.`, { type: "success" });
@@ -2869,7 +3035,6 @@ async function loadHiddenTree() {
   } catch {
     state.hiddenTree = null;
   }
-  void loadReviewQueueCounts();
 }
 
 function renderHiddenTree() {
@@ -2897,18 +3062,7 @@ function toggleQuestionPanel() {
   renderQuestionBadge();
 }
 
-// ─── Review queue filter ────────────────────────────────────────────────────────
-
-const REVIEW_QUEUE_LABELS = {
-  "": "All items",
-  pending: "Pending",
-  keeper: "Keepers",
-  hidden: "Hidden",
-  "hidden-manual": "Hidden manually",
-  "hidden-ai": "Hidden by AI cleanup",
-  "needs-comment": "Needs comment",
-  flagged: "Flagged",
-};
+// ─── Item visibility and legacy triage filters ─────────────────────────────────
 
 function _hiddenReviewQueueActor(value = state.triageFilter) {
   if (value === "hidden-manual") return "manual";
@@ -2926,87 +3080,27 @@ function _appendHiddenReviewQueueParams(params) {
   if (triageActor) params.set("triage_actor", triageActor);
 }
 
-function syncReviewQueueSelect(counts = null) {
-  const select = $("#reviewQueueFilter");
-  if (!select) return;
-  select.value = state.triageFilter || "";
-  const countByValue = counts || select._reviewQueueCounts || {};
-  select._reviewQueueCounts = countByValue;
-  for (const option of select.options) {
-    const value = String(option.value || "");
-    const label = REVIEW_QUEUE_LABELS[value] || value;
-    const count = Number(countByValue[value]);
-    const suffix = Number.isFinite(count) ? ` · ${count}` : "";
-    option.textContent = value ? `${label}${suffix}` : `Review queue: ${label}${suffix}`;
+async function setItemView(view) {
+  const config = ITEM_VIEW_OPTIONS[view];
+  if (!config) return;
+  state.triageFilter = config.triageFilter;
+  state.showDiscarded = config.showDiscarded;
+  state.offset = 0;
+  syncItemViewControl();
+  updateReviewScopeChips();
+  updateCanvasSelectionCount();
+  updateCollectionBuildSelectionCount();
+  updateFilterIndicator();
+  await loadAssets();
+  if (!state.assets.length) {
+    Shared.showToast(config.emptyLabel, { type: "info" });
   }
 }
 
-async function loadReviewQueueCounts() {
-  if (!isOwner()) return;
-  try {
-    const data = await api("/api/triage/stats");
-    const overall = data?.overall || {};
-    syncReviewQueueSelect({
-      "": Number(overall.total || 0),
-      pending: Number(overall.pending || 0),
-      keeper: Number(overall.keepers || 0),
-      hidden: Number(overall.hidden || 0),
-      "hidden-manual": Number(overall.hidden_manual || 0),
-      "hidden-ai": Number(overall.hidden_ai_cleanup || 0),
-      "needs-comment": Number(overall.needs_comment || 0),
-      flagged: Number(overall.flagged || 0),
-    });
-  } catch {
-    syncReviewQueueSelect();
-  }
-}
-
-function clearBrowseScopeForReviewQueue() {
-  const hadBrowseScope = !!(
-    state.q
-    || state.chatPrompt
-    || (state.chatItemIds && state.chatItemIds.length)
-    || state.currentSource
-    || state.currentBoard
-    || state.currentContentKind
-    || hasCollectionFilter()
-    || hasCatalogFilter()
-    || hasClassificationFilter()
-  );
-  state.q = "";
-  state.semanticMode = false;
-  state.chatPrompt = "";
-  state.chatItemIds = null;
-  state.currentSource = null;
-  state.currentBoard = null;
-  state.currentContentKind = null;
-  state.currentTreeNodeId = null;
-  window.clearTimeout(_canvasTextFilterTimer);
-  const textFilter = $("#canvasTextFilter");
-  if (textFilter) textFilter.value = "";
-  clearCatalogFilter();
-  clearClassificationFilter();
-  clearCollectionFilter();
-  return hadBrowseScope;
-}
-
-function wireReviewQueueFilter() {
-  const select = $("#reviewQueueFilter");
+function wireItemViewControl() {
+  const select = $("#itemViewSelect");
   if (!select) return;
-  select.addEventListener("change", () => {
-    state.triageFilter = String(select.value || "");
-    const clearedBrowseScope = clearBrowseScopeForReviewQueue();
-    state.offset = 0;
-    renderCatalogTree();
-    updateFilterIndicator();
-    loadAssets();
-    if (clearedBrowseScope && state.triageFilter) {
-      Shared.showToast(
-        `Showing ${REVIEW_QUEUE_LABELS[state.triageFilter] || state.triageFilter} across the entire library.`,
-        { type: "info", duration: 2600 },
-      );
-    }
-  });
+  select.addEventListener("change", () => setItemView(select.value));
 }
 
 // ─── Collections ────────────────────────────────────────────────────────────────
@@ -3629,6 +3723,102 @@ function setCollectionFilter(collectionId) {
   loadAssets();
 }
 
+function closeCollectionBuildModal() {
+  $("#collectionBuildModal")?.classList.add("hidden");
+}
+
+function renderCollectionBuildExistingOptions() {
+  const select = $("#collectionBuildExistingSelect");
+  if (!select) return;
+  const rows = (state.collections || []).filter((collection) => !_collectionIsHidden(collection));
+  select.innerHTML = rows.length
+    ? rows.map((collection) => `<option value="${escapeHtml(collection.id)}">${escapeHtml(collection.name || "Untitled collection")} · ${Number(collection.count || 0)} items</option>`).join("")
+    : '<option value="">No collections yet</option>';
+  const activeIds = getCollectionFilterIds();
+  if (activeIds.length === 1 && rows.some((collection) => collection.id === activeIds[0])) {
+    select.value = activeIds[0];
+  }
+  const addBtn = $("#collectionBuildAdd");
+  if (addBtn) addBtn.disabled = !rows.length;
+}
+
+function openCollectionBuildModal(mode) {
+  const count = state.canvasSelected.size;
+  if (!count) {
+    Shared.showToast("Select at least one item first.", { type: "info" });
+    return;
+  }
+  const showNew = mode === "new";
+  const title = $("#collectionBuildModalTitle");
+  const hint = $("#collectionBuildModalHint");
+  const newSection = $("#collectionBuildNewSection");
+  const existingSection = $("#collectionBuildExistingSection");
+  if (title) title.textContent = showNew ? "Create a collection" : "Add to a collection";
+  if (hint) hint.textContent = `${count} selected item${count === 1 ? "" : "s"}.`;
+  if (newSection) newSection.hidden = !showNew;
+  if (existingSection) existingSection.hidden = showNew;
+  if (showNew) {
+    const nameInput = $("#collectionBuildName");
+    const descriptionInput = $("#collectionBuildDescription");
+    if (nameInput) nameInput.value = "";
+    if (descriptionInput) descriptionInput.value = "";
+  } else {
+    renderCollectionBuildExistingOptions();
+  }
+  $("#collectionBuildModal")?.classList.remove("hidden");
+  if (showNew) $("#collectionBuildName")?.focus();
+}
+
+async function addSelectedToNewCollection() {
+  const ids = Array.from(state.canvasSelected);
+  const name = String($("#collectionBuildName")?.value || "").trim();
+  const description = String($("#collectionBuildDescription")?.value || "").trim();
+  if (!ids.length) return;
+  if (!name) {
+    Shared.showToast("Give the new collection a name.", { type: "info" });
+    $("#collectionBuildName")?.focus();
+    return;
+  }
+  const btn = $("#collectionBuildCreate");
+  if (btn) btn.disabled = true;
+  try {
+    const data = await api("/api/collections", {
+      method: "POST",
+      body: JSON.stringify({ name, description }),
+    });
+    const collection = data?.collection || {};
+    await addAssetsToCollections(ids, [collection.id]);
+    await refreshSidebarTrees();
+    closeCollectionBuildModal();
+    clearCanvasSelection();
+    Shared.showToast(`Created "${name}" with ${ids.length} item${ids.length === 1 ? "" : "s"}.`, { type: "success" });
+  } catch (e) {
+    Shared.showToast(`Collection creation failed: ${formatApiError(e)}`, { type: "error" });
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function addSelectedToExistingCollection() {
+  const ids = Array.from(state.canvasSelected);
+  const collectionId = String($("#collectionBuildExistingSelect")?.value || "").trim();
+  if (!ids.length || !collectionId) return;
+  const collection = (state.collections || []).find((row) => row.id === collectionId) || null;
+  const btn = $("#collectionBuildAdd");
+  if (btn) btn.disabled = true;
+  try {
+    await addAssetsToCollections(ids, [collectionId]);
+    await refreshSidebarTrees();
+    closeCollectionBuildModal();
+    clearCanvasSelection();
+    Shared.showToast(`Added ${ids.length} item${ids.length === 1 ? "" : "s"} to "${collection?.name || "collection"}".`, { type: "success" });
+  } catch (e) {
+    Shared.showToast(`Add failed: ${formatApiError(e)}`, { type: "error" });
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 $("#newCollection").addEventListener("click", async () => {
   const name = prompt("Collection name:");
   if (!name || !name.trim()) return;
@@ -3645,6 +3835,18 @@ $("#newCollection").addEventListener("click", async () => {
 const exportCollectionPdfBtn = $("#exportCollectionPdf");
 if (exportCollectionPdfBtn) {
   exportCollectionPdfBtn.addEventListener("click", exportCurrentCollectionPdf);
+}
+const closeCollectionBuildModalBtn = $("#closeCollectionBuildModal");
+if (closeCollectionBuildModalBtn) closeCollectionBuildModalBtn.addEventListener("click", closeCollectionBuildModal);
+const collectionBuildCreateBtn = $("#collectionBuildCreate");
+if (collectionBuildCreateBtn) collectionBuildCreateBtn.addEventListener("click", addSelectedToNewCollection);
+const collectionBuildAddBtn = $("#collectionBuildAdd");
+if (collectionBuildAddBtn) collectionBuildAddBtn.addEventListener("click", addSelectedToExistingCollection);
+const collectionBuildModalEl = $("#collectionBuildModal");
+if (collectionBuildModalEl) {
+  collectionBuildModalEl.addEventListener("click", (event) => {
+    if (event.target === collectionBuildModalEl) closeCollectionBuildModal();
+  });
 }
 const manageCollectionsBtn = $("#manageCollections");
 if (manageCollectionsBtn) {
@@ -3735,6 +3937,7 @@ function replaceAssetInState(updatedAsset) {
   const next = updatedAsset && typeof updatedAsset === "object" ? updatedAsset : null;
   if (!next || !next.id) return;
   state.assets = state.assets.map((asset) => (asset && asset.id === next.id ? next : asset));
+  state.reviewItems = state.reviewItems.map((asset) => (asset && asset.id === next.id ? next : asset));
   if (state.modalAsset && state.modalAsset.id === next.id) state.modalAsset = next;
 }
 
@@ -3850,6 +4053,7 @@ async function _resolveCurrentScopeAssetIds() {
   } else if (state.triageFilter) {
     params.set("triage_status", state.triageFilter);
   }
+  appendShowDiscardedParam(params);
   const data = await api(`/api/asset-ids?${params}`);
   return Array.isArray(data?.ids) ? data.ids : [];
 }
@@ -4637,8 +4841,8 @@ async function openModal(asset, options = {}) {
     const aiReelCleanup = actor === "ai-reel-triage";
     triageSection.hidden = !hidden;
     triageSummary.textContent = aiReelCleanup
-      ? "Hidden by AI reel cleanup"
-      : (actor ? `Hidden manually by ${actor}` : "Hidden from the main library");
+      ? "Discarded by AI reel cleanup"
+      : (actor ? `Discarded manually by ${actor}` : "Discarded from ordinary browsing");
     const metaParts = [];
     if (createdAt) metaParts.push(createdAt.slice(0, 10));
     if (reason) metaParts.push(reason);
@@ -4789,6 +4993,7 @@ async function openModal(asset, options = {}) {
             card.querySelector(".card-image").prepend(badge);
           }
         }
+        if (isReviewStatusFilterActive("flagged") && !newFlagged) await loadAssets();
         Shared.showToast(newFlagged ? "Flagged for review" : "Flag removed", { type: "success" });
       } catch (e) {
         Shared.showToast(`Failed: ${formatApiError(e)}`, { type: "error" });
@@ -4946,6 +5151,7 @@ function closeModal() {
     video.hidden = true;
   }
   renderModalNavigation();
+  if (state.view === "review") void renderReviewCard();
 }
 
 async function _navModalScan(delta) {
@@ -5665,7 +5871,8 @@ function printModalAsset(asset) {
 
 // ─── Review mode ────────────────────────────────────────────────────────────────
 
-async function enterReview() {
+async function enterReview(options = {}) {
+  const startAssetId = String(options.startAssetId || "").trim();
   const seedIds = Array.isArray(state.reviewSeedIds) ? _uniqNonEmpty(state.reviewSeedIds) : [];
   if (!state.assets.length && !seedIds.length) {
     Shared.showToast("No items to review.", { type: "info" });
@@ -5688,7 +5895,10 @@ async function enterReview() {
   }
   state.view = "review";
   state.reviewItems = reviewItems;
-  state.reviewIndex = 0;
+  const startIndex = startAssetId
+    ? reviewItems.findIndex((item) => String(item?.id || "") === startAssetId)
+    : -1;
+  state.reviewIndex = startIndex >= 0 ? startIndex : 0;
   state.reviewHistory = [];
   state.reviewDrafts = {};
   state.reviewSkipped = 0;
@@ -5940,6 +6150,11 @@ async function renderReviewCard() {
     link.hidden = !ref;
     link.textContent = ref ? `View on ${item.source || "source"} ↗` : "";
   }
+  const editDetailsBtn = $("#reviewEditDetailsBtn");
+  if (editDetailsBtn) {
+    editDetailsBtn.disabled = !isOwner();
+    editDetailsBtn.onclick = () => openModal(item);
+  }
   renderReviewClassificationPanel(item);
 
   // Update undo button
@@ -5953,7 +6168,13 @@ async function renderReviewCard() {
   const hideLocalBtn = $("#reviewHideLocalBtn");
   if (hideLocalBtn) hideLocalBtn.disabled = !(isOwner() && scope.hasCollectionScope);
   const hideGlobalBtn = $("#reviewHideGlobalBtn");
-  if (hideGlobalBtn) hideGlobalBtn.disabled = !isOwner();
+  if (hideGlobalBtn) {
+    const restore = item.triage_status === "hidden";
+    hideGlobalBtn.disabled = !isOwner();
+    hideGlobalBtn.title = restore ? "Restore to ordinary browsing" : "Discard from the library";
+    hideGlobalBtn.querySelector(".review-btn-icon").textContent = restore ? "↟" : "✗";
+    hideGlobalBtn.querySelector(".review-btn-label").textContent = restore ? "Restore" : "Discard";
+  }
   const flagBtn = $("#reviewFlagBtn");
   if (flagBtn) flagBtn.disabled = !canUseFlag();
   const clearBtn = $("#reviewClearBtn");
@@ -6123,17 +6344,21 @@ async function reviewPrimaryAction(action) {
       return;
     }
     if (action === "hide_global") {
-      if (!confirmGlobalHideBulk(1)) {
-        Shared.showToast("Global hide canceled.", { type: "info" });
+      if (item.triage_status === "hidden") {
+        await _reviewSetTriage(item, null, "restore", "Restored to ordinary browsing.");
         return;
       }
-      await _reviewSetTriage(item, "hidden", "hide_global", "Hidden globally.");
+      if (!confirmGlobalHideBulk(1)) {
+        Shared.showToast("Discard canceled.", { type: "info" });
+        return;
+      }
+      await _reviewSetTriage(item, "hidden", "hide_global", "Discarded from ordinary browsing.");
       return;
     }
     if (action === "hide_local") {
       const scope = getReviewScopeInfo();
       if (!scope.hasCollectionScope) {
-        Shared.showToast("No active collection scope. Use Hide globally for library-wide hide.", { type: "info" });
+        Shared.showToast("No active collection scope. Use Discard for library-wide removal.", { type: "info" });
         return;
       }
       const results = await removeAssetsFromCollections([item.id], scope.collectionIds);
@@ -6330,7 +6555,7 @@ function showReviewComplete() {
       statsEl.innerHTML = `
         <span class="review-stat keeper">${state.reviewKept} kept</span>
         <span class="review-stat moved">${state.reviewMoved} updated</span>
-        <span class="review-stat hidden-s">${state.reviewHidden} hidden</span>
+        <span class="review-stat hidden-s">${state.reviewHidden} discarded</span>
         <span class="review-stat skipped">${state.reviewSkipped} skipped</span>
       `;
     }
@@ -6353,6 +6578,7 @@ function enterCanvasReview() {
     Shared.showToast("No items to review.", { type: "info" });
     return;
   }
+  if (state.canvasCollectionBuild) exitCollectionBuild();
   let switchedFromExplorer = false;
   if (isExplorerViewActive()) {
     if (_ExplorerImpl && typeof _ExplorerImpl.getVisibleNodeIds === "function") {
@@ -6373,7 +6599,10 @@ function enterCanvasReview() {
   state.canvasSelected.clear();
 
   const browseView = $("#browseView");
-  if (browseView) browseView.classList.add("canvas-review-active");
+  if (browseView) {
+    browseView.classList.add("canvas-review-active");
+    browseView.classList.add("canvas-selection-active");
+  }
 
   const actionBar = $("#canvasActionBar");
   if (actionBar) actionBar.hidden = false;
@@ -6388,7 +6617,7 @@ function enterCanvasReview() {
   Shared.showToast(
     switchedFromExplorer
       ? "Review actions are grid-only for safety. Switched to Grid review mode."
-      : "Review mode — click cards to select, then act on selection.",
+      : "Review mode — click a card for full details; use checkboxes for bulk actions or One-by-one for fast triage.",
     { type: "info" }
   );
 }
@@ -6398,7 +6627,10 @@ function exitCanvasReview() {
   state.canvasSelected.clear();
 
   const browseView = $("#browseView");
-  if (browseView) browseView.classList.remove("canvas-review-active");
+  if (browseView) {
+    browseView.classList.remove("canvas-review-active");
+    if (!state.canvasCollectionBuild) browseView.classList.remove("canvas-selection-active");
+  }
 
   const actionBar = $("#canvasActionBar");
   if (actionBar) actionBar.hidden = true;
@@ -6420,6 +6652,7 @@ function toggleCanvasSelection(id, cardEl) {
     if (cardEl) cardEl.classList.add("canvas-selected");
   }
   updateCanvasSelectionCount();
+  updateCollectionBuildSelectionCount();
 }
 
 function selectAllCanvas() {
@@ -6435,6 +6668,68 @@ function clearCanvasSelection() {
   state.canvasSelected.clear();
   $$(".card.canvas-selected").forEach((c) => c.classList.remove("canvas-selected"));
   updateCanvasSelectionCount();
+  updateCollectionBuildSelectionCount();
+}
+
+function updateCollectionBuildSelectionCount() {
+  const count = state.canvasSelected.size;
+  const countEl = $("#collectionBuildSelectionCount");
+  if (countEl) countEl.textContent = `${count} selected`;
+  const newBtn = $("#collectionBuildNew");
+  if (newBtn) newBtn.disabled = count === 0;
+  const existingBtn = $("#collectionBuildExisting");
+  if (existingBtn) existingBtn.disabled = count === 0;
+  const removeBtn = $("#collectionBuildRemove");
+  if (removeBtn) {
+    const scope = getReviewScopeInfo();
+    const showRemove = scope.hasCollectionScope && scope.collectionIds.length === 1;
+    removeBtn.hidden = !showRemove;
+    removeBtn.disabled = !(showRemove && count > 0);
+  }
+}
+
+function enterCollectionBuild() {
+  if (!state.assets.length) {
+    Shared.showToast("No items are visible to add to a collection.", { type: "info" });
+    return;
+  }
+  if (state.canvasReview) exitCanvasReview();
+  if (isExplorerViewActive()) setViewMode("grid", { persist: false });
+  state.canvasCollectionBuild = true;
+  state.canvasSelected.clear();
+  $("#browseView")?.classList.add("canvas-selection-active");
+  const bar = $("#collectionBuildBar");
+  if (bar) bar.hidden = false;
+  $("#collectionBuildBtn")?.classList.add("active");
+  updateCollectionBuildSelectionCount();
+  renderGrid();
+  Shared.showToast("Select cards to add to a collection.", { type: "info", duration: 2200 });
+}
+
+function exitCollectionBuild() {
+  state.canvasCollectionBuild = false;
+  state.canvasSelected.clear();
+  $("#browseView")?.classList.remove("canvas-selection-active");
+  const bar = $("#collectionBuildBar");
+  if (bar) bar.hidden = true;
+  $("#collectionBuildBtn")?.classList.remove("active");
+  $$(".card.canvas-selected").forEach((card) => card.classList.remove("canvas-selected"));
+  updateCollectionBuildSelectionCount();
+}
+
+async function removeSelectedFromActiveCollection() {
+  const ids = Array.from(state.canvasSelected);
+  const scope = getReviewScopeInfo();
+  if (!ids.length || !scope.hasCollectionScope || scope.collectionIds.length !== 1) return;
+  try {
+    const results = await removeAssetsFromCollections(ids, scope.collectionIds);
+    const removed = results.reduce((sum, result) => sum + Number(result.removed || 0), 0);
+    clearCanvasSelection();
+    await Promise.all([loadAssets(), loadCatalogTree(), loadCollections()]);
+    Shared.showToast(`${removed} item${removed === 1 ? "" : "s"} removed from this collection.`, { type: "success" });
+  } catch (e) {
+    Shared.showToast(`Remove failed: ${formatApiError(e)}`, { type: "error" });
+  }
 }
 
 function updateCanvasSelectionCount() {
@@ -6448,7 +6743,15 @@ function updateCanvasSelectionCount() {
   const hideLocalBtn = $("#canvasHideLocal");
   if (hideLocalBtn) hideLocalBtn.disabled = !(hasSelection && scope.hasCollectionScope);
   const hideGlobalBtn = $("#canvasHideGlobal");
-  if (hideGlobalBtn) hideGlobalBtn.disabled = !hasSelection;
+  if (hideGlobalBtn) {
+    hideGlobalBtn.disabled = !hasSelection;
+    const selectedAssets = Array.from(state.canvasSelected)
+      .map((id) => state.assets.find((asset) => asset.id === id))
+      .filter(Boolean);
+    const shouldRestore = selectedAssets.length > 0 && selectedAssets.every((asset) => asset.triage_status === "hidden");
+    hideGlobalBtn.textContent = shouldRestore ? "↟ Restore" : "✗ Discard";
+    hideGlobalBtn.classList.toggle("canvas-action-restore", shouldRestore);
+  }
   const flagBtn = $("#canvasFlag");
   if (flagBtn) {
     flagBtn.disabled = !(hasSelection && canUseFlag());
@@ -6487,7 +6790,7 @@ async function canvasBulkHideLocal() {
   if (!ids.length) return;
   const scope = getReviewScopeInfo();
   if (!scope.hasCollectionScope) {
-    Shared.showToast("No active collection scope. Use Hide globally for library-wide hide.", { type: "info" });
+    Shared.showToast("No active collection scope. Use Discard for library-wide removal.", { type: "info" });
     return;
   }
   try {
@@ -6511,17 +6814,22 @@ async function canvasBulkHideLocal() {
 async function canvasBulkHideGlobal() {
   const ids = Array.from(state.canvasSelected);
   if (!ids.length) return;
-  if (!confirmGlobalHideBulk(ids.length)) return;
+  const selectedAssets = ids.map((id) => state.assets.find((asset) => asset.id === id)).filter(Boolean);
+  const shouldRestore = selectedAssets.length > 0 && selectedAssets.every((asset) => asset.triage_status === "hidden");
+  if (!shouldRestore && !confirmGlobalHideBulk(ids.length)) return;
   try {
     await api("/api/assets/triage/bulk", {
       method: "POST",
-      body: JSON.stringify({ ids, status: "hidden" }),
+      body: JSON.stringify({ ids, status: shouldRestore ? null : "hidden" }),
     });
-    Shared.showToast(`${ids.length} item${ids.length === 1 ? "" : "s"} hidden.`, { type: "success" });
+    Shared.showToast(
+      `${ids.length} item${ids.length === 1 ? "" : "s"} ${shouldRestore ? "restored" : "discarded"}.`,
+      { type: "success" },
+    );
     clearCanvasSelection();
-    await loadAssets();
+    await Promise.all([loadAssets(), loadCatalogTree()]);
   } catch (e) {
-    Shared.showToast(`Bulk hide failed: ${formatApiError(e)}`, { type: "error" });
+    Shared.showToast(`${shouldRestore ? "Restore" : "Discard"} failed: ${formatApiError(e)}`, { type: "error" });
   }
 }
 
@@ -6548,7 +6856,11 @@ async function canvasBulkToggleFlag() {
       { type: "success" }
     );
     clearCanvasSelection();
-    renderGrid();
+    if (isReviewStatusFilterActive("flagged") && !newFlagged) {
+      await loadAssets();
+    } else {
+      renderGrid();
+    }
   } catch (e) {
     Shared.showToast(`Bulk flag failed: ${formatApiError(e)}`, { type: "error" });
   }
@@ -6598,6 +6910,20 @@ if (canvasToOneByOneBtn) canvasToOneByOneBtn.addEventListener("click", () => {
 });
 const canvasExitReviewBtn = $("#canvasExitReview");
 if (canvasExitReviewBtn) canvasExitReviewBtn.addEventListener("click", exitCanvasReview);
+
+// Collection building is a separate creative selection mode.
+const collectionBuildBtn = $("#collectionBuildBtn");
+if (collectionBuildBtn) collectionBuildBtn.addEventListener("click", enterCollectionBuild);
+const collectionBuildNewBtn = $("#collectionBuildNew");
+if (collectionBuildNewBtn) collectionBuildNewBtn.addEventListener("click", () => openCollectionBuildModal("new"));
+const collectionBuildExistingBtn = $("#collectionBuildExisting");
+if (collectionBuildExistingBtn) collectionBuildExistingBtn.addEventListener("click", () => openCollectionBuildModal("existing"));
+const collectionBuildRemoveBtn = $("#collectionBuildRemove");
+if (collectionBuildRemoveBtn) collectionBuildRemoveBtn.addEventListener("click", removeSelectedFromActiveCollection);
+const collectionBuildClearBtn = $("#collectionBuildClear");
+if (collectionBuildClearBtn) collectionBuildClearBtn.addEventListener("click", clearCanvasSelection);
+const collectionBuildDoneBtn = $("#collectionBuildDone");
+if (collectionBuildDoneBtn) collectionBuildDoneBtn.addEventListener("click", exitCollectionBuild);
 
 // Review button — canvas review is the default
 const reviewBtn = $("#reviewBtn");
@@ -6698,6 +7024,7 @@ window.addEventListener("keydown", (e) => {
   // Close modal with Escape
   if (e.key === "Escape") {
     if (!$("#modal").classList.contains("hidden")) { closeModal(); return; }
+    if (!$("#collectionBuildModal").classList.contains("hidden")) { closeCollectionBuildModal(); return; }
     if (!$("#collectionShareModal").classList.contains("hidden")) { closeCollectionShareModal(); return; }
     if (!$("#collectionBulkModal").classList.contains("hidden")) { closeCollectionBulkModal(); return; }
     if (!$("#mediaImportModal").classList.contains("hidden") && !isAnyImportBusy()) { closeMediaImportModal(); return; }
@@ -6705,12 +7032,13 @@ window.addEventListener("keydown", (e) => {
     if (!$("#photoImportModal").classList.contains("hidden") && !state.photoImportBusy) { closePhotoImportModal(); return; }
     if (!$("#videoImportModal").classList.contains("hidden") && !state.videoImportBusy) { closeVideoImportModal(); return; }
     if (state.canvasReview) { exitCanvasReview(); return; }
+    if (state.canvasCollectionBuild) { exitCollectionBuild(); return; }
     if (state.view === "review") { exitReview(); return; }
     return;
   }
 
-  // Canvas review shortcuts
-  if (state.canvasReview) {
+  // Canvas selection shortcuts
+  if (state.canvasReview || state.canvasCollectionBuild) {
     const tag = (e.target && e.target.tagName || "").toLowerCase();
     if (tag === "input" || tag === "textarea" || tag === "select") return;
     if (!$("#modal").classList.contains("hidden")) return;
@@ -7069,7 +7397,6 @@ async function executeChatAction(action, params) {
       }
       if (params.triage_status !== undefined) {
         state.triageFilter = params.triage_status || "";
-        syncReviewQueueSelect();
       }
       if (params.q !== undefined) {
         state.q = params.q || "";
@@ -7143,7 +7470,6 @@ async function executeChatAction(action, params) {
       state.currentTreeNodeId = null;
       state.triageFilter = "";
       state.q = "";
-      syncReviewQueueSelect();
       renderCatalogTree();
       await loadAssets();
       break;
@@ -7693,7 +8019,7 @@ function _merge3DExplorerData(layoutData, attractorData) {
 }
 
 function _shouldExplorerIncludeHiddenData() {
-  return isOwner() && _isHiddenReviewQueue();
+  return isOwner() && (state.showDiscarded || _isHiddenReviewQueue());
 }
 
 async function _loadExplorerPayload(mode, includeHidden, payloadFilterIds = null) {
@@ -7760,6 +8086,10 @@ function setViewMode(mode, options = {}) {
   if (mode === "explorer" && isReviewModeActive()) {
     Shared.showToast("Exit review mode before opening 3D Explorer.", { type: "info", duration: 3000 });
     return;
+  }
+  if (mode === "explorer" && state.canvasCollectionBuild) {
+    exitCollectionBuild();
+    Shared.showToast("Collection selection closed before opening 3D Explorer.", { type: "info", duration: 3000 });
   }
   const browseView = $("#browseView");
   const explorerView = $("#explorerView");
@@ -8016,6 +8346,7 @@ async function syncExplorerFilter() {
     if (catalogFiles.length) {
       const catalogParams = new URLSearchParams();
       for (const file of catalogFiles) catalogParams.append("file", file);
+      appendShowDiscardedParam(catalogParams);
       const seq = ++_explorerFilterSeq;
       try {
         const data = await api(`/api/catalog/asset-ids?${catalogParams}`);
@@ -8051,6 +8382,7 @@ async function syncExplorerFilter() {
     } else if (state.triageFilter) {
       params.set("triage_status", state.triageFilter);
     }
+    appendShowDiscardedParam(params);
 
     const seq = ++_explorerFilterSeq;
     try {
@@ -8083,7 +8415,9 @@ function clearAllActiveFilters() {
   state.currentContentKind = null;
   state.currentTreeNodeId = null;
   state.offset = 0;
+  state.showDiscarded = false;
   resetTriageFilter();
+  syncItemViewControl();
   clearCatalogFilter();
   clearClassificationFilter();
   clearCollectionFilter();
@@ -8097,7 +8431,7 @@ function updateFilterIndicator() {
   const text = $("#filterSummaryText");
   const clearBtn = $("#clearFilterSummary");
   if (!bar || !text) return;
-  syncReviewQueueSelect();
+  syncItemViewControl();
 
   const davePrompt = String(state.chatPrompt || "").trim();
   const parts = [];
@@ -8153,9 +8487,10 @@ function updateFilterIndicator() {
     }
   }
   if (state.triageFilter) {
-    const labels = { pending: "Pending", keeper: "Keepers", hidden: "Hidden", "hidden-manual": "Hidden manually", "hidden-ai": "Hidden by AI cleanup", "needs-comment": "Needs comment", flagged: "Flagged" };
-    parts.push(`Status: ${labels[state.triageFilter] || state.triageFilter}`);
+    const labels = { pending: "Pending", keeper: "Keepers", hidden: "Discarded", "hidden-manual": "Discarded manually", "hidden-ai": "Discarded by AI cleanup", "needs-comment": "Needs comment", flagged: "Flagged" };
+    parts.push(`Show: ${labels[state.triageFilter] || state.triageFilter}`);
   }
+  if (state.showDiscarded) parts.push("Show: All items, including discarded");
 
   updateReviewScopeChips();
   if (!davePrompt && parts.length === 0) {
@@ -8211,6 +8546,11 @@ if (canvasTextFilter) {
 
 const loadMoreBtn = $("#loadMore");
 if (loadMoreBtn) loadMoreBtn.addEventListener("click", () => loadAssets({ append: true }));
+const contentScroller = $(".content");
+if (contentScroller) contentScroller.addEventListener("scroll", scheduleAutoLoadMore, { passive: true });
+window.addEventListener("scroll", scheduleAutoLoadMore, { passive: true });
+window.addEventListener("resize", scheduleAutoLoadMore);
+setupAutoLoadMoreObservers();
 
 // ─── Media import ───────────────────────────────────────────────────────────────
 
@@ -8600,7 +8940,7 @@ refreshIngestTagPickers();
 
 // ─── Init ─────────────────────────────────────────────────────────────────────────
 
-wireReviewQueueFilter();
+wireItemViewControl();
 wireSidebarToggle();
 wireSidebarResize();
 
@@ -8630,10 +8970,10 @@ function renderReviewSidebarSummary() {
   const modeLabel = state.view === "review" ? "One-by-one review" : "Grid review";
   headingEl.textContent = "Review";
   content.innerHTML = `
-    <div class="review-sidebar-summary">
-      <div class="review-sidebar-row"><span class="muted">Scope</span><strong>${escapeHtml(scope.label || "Entire library")}</strong></div>
-      <div class="review-sidebar-row"><span class="muted">Mode</span><strong>${escapeHtml(modeLabel)}</strong></div>
-      <div class="review-sidebar-note muted">Use Review queue above the cards to change workflow status. Normal browse folders are hidden while review is active.</div>
+      <div class="review-sidebar-summary">
+        <div class="review-sidebar-row"><span class="muted">Scope</span><strong>${escapeHtml(scope.label || "Entire library")}</strong></div>
+        <div class="review-sidebar-row"><span class="muted">Mode</span><strong>${escapeHtml(modeLabel)}</strong></div>
+      <div class="review-sidebar-note muted">Use Keepers, Flagged, or Discarded to revisit decisions in this scope. Card clicks always open full details; use checkboxes for bulk actions or One-by-one for fast triage.</div>
     </div>
   `;
   section.hidden = false;
@@ -8715,6 +9055,8 @@ function applyRoleVisibility() {
   // Review button, import buttons, admin link — owner-only
   const reviewBtnEl = $("#reviewBtn");
   if (reviewBtnEl) reviewBtnEl.hidden = !owner;
+  const collectionBuildBtnEl = $("#collectionBuildBtn");
+  if (collectionBuildBtnEl) collectionBuildBtnEl.hidden = !owner;
   const addMediaEl = $("#addMedia");
   if (addMediaEl) addMediaEl.hidden = !owner;
   const adminEl = $(".adminLink");

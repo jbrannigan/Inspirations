@@ -1,5 +1,9 @@
 # Vision: AI-Powered Curation and Synthesis for Home Design Inspiration
 
+> Historical vision note (2026-06-03): the analysis ideas remain useful, but
+> references to collaborator websites or live app delivery are not current
+> product direction. D021 defines the active PDF handoff.
+
 **Date:** 2026-03-08
 **Author:** Jim Brannigan (with Claude)
 **Context:** The Inspirations project has built a corpus of 6,343 home design assets from Pinterest, Facebook, Houzz, and magazine scans, enriched with Gemini AI tags and embeddings. This document explores how far modern AI can push the synthesis and presentation of that corpus — moving beyond retrieval ("find me kitchens") toward genuine understanding ("what does Leslie's taste look like, and how do I communicate it to a professional?").

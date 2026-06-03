@@ -30,14 +30,23 @@ transaction handling to avoid lock contention.
 
 ---
 
-## D003 — Local-only deployment (2026-02-03)
+## D003 — Local-first deployment with optional LAN access (2026-02-03, revised 2026-06-03)
 
-**Decision:** Serve on localhost only. No cloud deployment planned.
+**Decision:** Inspirations remains a local-first Mac mini app. Bind to
+`127.0.0.1` for shell-only development when LAN access is unnecessary, and bind
+to `0.0.0.0:8001` for iPad/iPhone/LAN use. The preferred persistent local/LAN
+runtime is the logged-user launchd service documented in
+`docs/INSPIRATIONS_SERVICE_RUNBOOK.md`.
 
 **Why:** Personal tool running on Mac Mini. Assets are local files, not
-suitable for cloud hosting without a storage migration.
+suitable for cloud hosting without a storage migration. LAN visibility is
+useful for device testing without changing the local-first product model.
 
 **Port:** 8001 (registered in STANDARDS.md port allocation table).
+
+**Consequence:** DevLauncher is not the uptime mechanism. If public access is
+ever revived, use launchd plus the shared Cloudflare tunnel rather than relying
+on a developer shell or DevLauncher process.
 
 ---
 
@@ -130,6 +139,9 @@ orchestrates a clean reimport. Old documentation archived to `docs/archive/`.
 
 ## D015 — Triage-first curation workflow (2026-02-22)
 
+**Status:** Superseded by D023 for the everyday UX. The triage schema, audit
+history, and focused review tools remain useful.
+
 **Decision:** The primary curation UX is a keeper/hidden triage workflow,
 not the previous filter-and-collect approach.
 
@@ -160,6 +172,10 @@ processes them client-side with simple pattern matching).
 ---
 
 ## D017 — Attractor Explorer as in-app view mode (2026-02-26)
+
+**Status:** Partially superseded by D019 and D023. Explorer remains an in-app
+view mode, but current controls and scope semantics are defined by those later
+decisions.
 
 **Decision:** The attractor explorer (2D and 3D) is an in-app view mode,
 toggled via toolbar buttons (Grid / Explorer) with 3D as a checkbox inside
@@ -288,6 +304,71 @@ the live source tree and could drift from imported board metadata.
 delete member assets. New collection UX should treat collections as deliberate
 curator-created working sets or deliverables, not as a replacement for source
 metadata browsing.
+
+---
+
+## D023 — Browse-first curation with a persistent curation bar (2026-06-01, revised 2026-06-02)
+
+**Decision:** Leslie's everyday workflow is browse-first collection making, not
+completion of a corpus-wide pending queue. A sticky curation bar remains visible
+while the canvas scrolls and owns the item count, text filter, active-filter
+summary, contextual collection PDF export, and a friendly `Show` selector for
+`Usable items`, `All items, including discarded`, `Keepers`, `Flagged`, and
+`Discarded`. Review remains available as an optional focused action mode over
+the current scope.
+
+**Why:** Most of the corpus is usable without item-by-item approval. The
+database's historical null=`pending` state made almost every usable item look
+like unfinished work and would invite Leslie to repeat cleanup that has already
+been done.
+
+**Consequence:** Existing triage schema and audit history stay intact for
+compatibility and diagnostics. In everyday UX, null and `keeper` both mean
+usable, while `hidden` is presented as discarded/irrelevant. The global app
+header remains stable when modes change; Review and Make Collection add
+contextual action rows inside the curation bar instead. The `Show` selector
+changes item visibility only: card clicks always open the same full detail/QC
+modal. Review checkboxes are for bulk actions, and the explicit `One-by-one`
+action is the route to fast triage.
+
+---
+
+## D024 — Collection making is a separate canvas selection mode (2026-06-01)
+
+**Decision:** The primary manual collection workflow begins with a visible
+`Make Collection` action beside `Review`. It opens a separate browse-canvas
+selection mode with a contextual action row in the shared sticky curation bar.
+Selected cards can create a new collection, be added to an existing collection,
+or be removed from the one collection currently in scope. Review/QC remains a
+distinct mode with triage actions.
+
+**Why:** Leslie's everyday goal is to gather ideas, not classify the corpus.
+Reusing Review for collection making would blur creative selection with corpus
+cleanup and make both workflows harder to understand. Starting from visible
+cards also makes the effect of live filters obvious.
+
+**Consequence:** `Make Collection` and `Review` must not be active at the same
+time. Explorer closes collection selection before opening because the first
+collection-building workflow is grid-based. Empty-folder creation and advanced
+collection editing remain available through the sidebar tools.
+
+---
+
+## D025 — Schema assurance runs before threaded serving (2026-06-02)
+
+**Decision:** `ensure_schema()` runs once in `run_server()` before the threaded
+HTTP server starts. Normal API, catalog, media, and scan-PDF requests do not run
+schema migrations or metadata backfills.
+
+**Why:** Thumbnail-heavy grid browsing creates many concurrent requests.
+Request-time schema maintenance introduced overlapping SQLite writes and caused
+`database is locked` failures, which surfaced as missing thumbnails, failed
+asset pages, and apparently unreliable automatic loading.
+
+**Consequence:** New schema migrations and backfills remain idempotent but must
+complete at startup or in explicit maintenance/import commands. Tests that seed
+legacy rows should run schema assurance before starting their server fixture,
+not depend on a request to mutate the database.
 
 ---
 

@@ -59,6 +59,9 @@ class TestServerApi(unittest.TestCase):
                 """,
                 ("ann1", "a1", 0.2, 0.3, "test"),
             )
+            # Mirror run_server(): legacy metadata is backfilled once before
+            # threaded request handling begins.
+            ensure_schema(db)
 
         self.server = HTTPServer(("127.0.0.1", 0), ApiHandler)
         self.server.db_path = self.db_path
@@ -3415,6 +3418,16 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(srv.admin_tokens, {})
         self.assertTrue(srv.serve_forever_called)
         seed.assert_not_called()
+
+    def test_normal_requests_do_not_run_schema_migrations(self):
+        with mock.patch("inspirations.server.ensure_schema", side_effect=AssertionError("request-time migration")):
+            status, body = self._request("/api/assets?limit=1")
+            self.assertEqual(status, 200)
+            self.assertEqual(len(body.get("assets") or []), 1)
+
+            status, media, _headers = self._raw_request("/media/a1?kind=thumb")
+            self.assertEqual(status, 200)
+            self.assertEqual(media, b"th")
 
     def test_scan_pdf_upload_runs_import_and_thumbs(self):
         boundary = "----insp-test-boundary"

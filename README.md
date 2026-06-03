@@ -9,7 +9,7 @@ Inspirations scrapes Pinterest boards and Facebook saved items directly from the
 1. **Scrape** — Browser-scrapes Pinterest boards and Facebook saved items, capturing rich metadata (titles, descriptions, hashtags, creator names, engagement data, high-res images)
 2. **Import** — Normalizes scraped data into a single SQLite catalog with local media storage
 3. **Tag** — Runs Gemini AI tagging for searchable labels, summaries, and embeddings
-4. **Triage** — Keeper/hidden workflow to curate collections: review items one-by-one, keep the good stuff, hide the rest
+4. **Curate** — Browse the usable corpus, optionally review focused scopes, flag or discard problem items, and build collections visually
 5. **Organize** — Natural-language collection management ("move all kitchen items to a new collection")
 6. **Export** — Export one curated collection at a time as a standalone PDF with embedded local images and visible/clickable source URLs
 
@@ -75,6 +75,16 @@ For iPhone/iPad/LAN testing:
 This binds to `0.0.0.0:8001` by default so iPads/iPhones on the same LAN can
 open `http://<mac-lan-ip>:8001`.
 
+For logged, login-persistent service mode on the Mac mini:
+```sh
+./tools/inspirations_service.sh install
+./tools/inspirations_service.sh status
+./tools/inspirations_service.sh logs
+```
+This installs a user LaunchAgent named `com.jimbrannigan.inspirations` with
+`KeepAlive`, still bound to `0.0.0.0:8001`. Logs are written under
+`data/logs/` and are intentionally local-only.
+
 Behind a reverse proxy (e.g., New Home Next.js site at `/inspirations-app`):
 ```sh
 BASE_PATH=/inspirations-app PYTHONPATH=src python3 -m inspirations serve --port 8001
@@ -84,6 +94,8 @@ BASE_PATH=/inspirations-app PYTHONPATH=src python3 -m inspirations serve --port 
 
 ### Collection Browsing
 - Browse collections as tile grids showing pins, photos, PDFs, and Facebook saves
+- Click **Make Collection**, select cards, then create a new collection or add the selection to an existing one
+- When browsing exactly one collection, **Make Collection** can also remove selected cards from that collection
 - Natural-language prompt to manage collections ("take all the things from this collection and put them into that collection")
 - Filter by source, board, tags, and more
 
@@ -97,11 +109,11 @@ BASE_PATH=/inspirations-app PYTHONPATH=src python3 -m inspirations serve --port 
 - Sliders include editable numeric fields so tuning works on iPad as well as desktop
 - Broad iPad/mobile-constrained sets use `iPad lite: 2D map`; filtered subsets can switch back to 3D when the measured WebGL budget allows it
 
-### Triage Review
-- Select a collection and hit "Review" to enter triage mode
-- For each item: **Keep** (love it), **Hide** (not relevant), or **Skip** (decide later)
-- Optional "comment later" checkbox on keepers to mark items for annotation
-- Keyboard-driven for speed (arrow keys or K/S/Z shortcuts)
+### Browse and Optional Review
+- Ordinary browsing shows the usable corpus; legacy `pending` and `keeper` states do not imply that Leslie must re-review the library
+- Use the persistent **Show** selector to revisit keepers, flagged items, or discarded/irrelevant items and restore any mistakes
+- Hit **Review** when a focused scope benefits from selection actions: keep, discard, restore, flag, or remove from the active collection
+- One-by-one review remains available for focused QC work
 
 ### Annotation
 - After triage, walk through items marked for annotation
@@ -116,9 +128,10 @@ BASE_PATH=/inspirations-app PYTHONPATH=src python3 -m inspirations serve --port 
 
 ### Collection PDF Export
 - Use **+ New Collection** to create a collection
+- Use **Make Collection** for the primary visual workflow: select cards from the current browse scope, then create a new collection or add them to an existing one
 - Use **Manage Collections** to rename collections and edit their descriptions
 - Use **Manage Collection Archive** to archive, restore, or permanently delete obsolete collection folders. Archiving a folder does not hide or delete its items.
-- Select exactly one collection in the sidebar, then click **Export Collection PDF** in the canvas header
+- Select exactly one collection in the sidebar, then click **Export Collection PDF** in the persistent curation bar
 - CLI equivalent:
 ```sh
 PYTHONPATH=src python3 -m inspirations export collection-pdf \
@@ -161,11 +174,12 @@ ruff check src tests
 
 ## Current Status
 
-The scrape-first rebuild is complete. Current active work is UX refinement,
-especially Explorer filtering/grouping, iPad stability, source/QC cleanup, and
-the one-collection PDF handoff flow. The live collaborator/magic-link layer is
-retired from the active product; legacy schema remains for compatibility but is
-not presented in the UI. Obsolete `pins:` source-board mirrors and completed
+The scrape-first rebuild is complete. Inspirations is a local-first corpus
+curation and QC app with browse-first collection making, optional focused
+review, Grid and Explorer views, Dave, source/media repair, annotations, and
+one-collection standalone PDF handoffs. The live collaborator/magic-link layer
+is retired from the active product; legacy schema remains for compatibility but
+is not presented in the UI. Obsolete `pins:` source-board mirrors and completed
 `Review:` workflow folders were removed after a local SQLite backup; live source
 board browsing now uses `assets.board` metadata directly.
 
@@ -177,6 +191,8 @@ board browsing now uses `assets.board` metadata directly.
 ## Docs
 
 - `docs/SCRAPE_REBUILD_SPEC.md` — Current implementation spec
+- `docs/CURRENT_HANDOFF.md` — Authoritative reboot/resume checkpoint
+- `docs/INSPIRATIONS_SERVICE_RUNBOOK.md` — Logged launchd service and LAN uptime runbook
 - `docs/EXPLORER_CONTROL_HANDOFF_2026-05-24.md` — Current Explorer control semantics and latest smoke-test notes
 - `docs/COLLECTION_PDF_EXPORT_HANDOFF_2026-05-27.md` — Current PDF export and live-sharing retirement handoff
 - `docs/TODO_CONSUMING_UX.md` — Legacy consuming-UX notes, superseded by PDF handoff direction

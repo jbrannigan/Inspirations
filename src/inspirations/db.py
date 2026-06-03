@@ -15,8 +15,9 @@ class Db:
         self._conn: sqlite3.Connection | None = None
 
     def __enter__(self) -> "Db":
-        self._conn = sqlite3.connect(self.path)
+        self._conn = sqlite3.connect(self.path, timeout=30.0)
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("pragma busy_timeout=30000;")
         self._conn.execute("pragma foreign_keys=on;")
         return self
 

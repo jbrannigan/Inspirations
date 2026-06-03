@@ -32,7 +32,7 @@ Changed files:
   - `setFilter()` and `setSearch()` now rebuild the visible node set instead of dimming non-matching nodes.
 - `app/styles.css`
   - Added compact `Group by` select and `Clear grouping` button styling.
-  - Moved Explorer controls into the top stats toolbar instead of a floating canvas overlay.
+  - Moved Explorer controls into the toolbar instead of a floating canvas overlay.
   - Increased chip contrast and added a panel background for the toolbar-mounted
     Categories drawer.
 - `app/app.js`
@@ -87,7 +87,10 @@ The 2D attractor map still has the older category pill/filter-group control mode
 
 ## Follow-up update
 
-A later UX pass moved the Explorer controls into the top stats toolbar, removed the duplicate card-view `Categories` mini-panel, and clarified the lazy-loading count wording from `120 of 4666 items` to `120 loaded of 4666 items`.
+A later UX pass moved the Explorer controls into the shared persistent curation
+bar, removed the duplicate card-view `Categories` mini-panel, and clarified the
+lazy-loading count wording from `120 of 4666 items` to `120 loaded of 4666
+items`.
 
 ## Follow-up update - 2026-05-25
 

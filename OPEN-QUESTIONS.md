@@ -5,10 +5,10 @@ new work — your question might already be captured.
 
 ---
 
-## OQ001 — Consuming UX for shared collections
+## ~~OQ001 — Consuming UX for shared collections~~ (resolved D021)
 
-**Context:** The curation app (local) is for the curator. But shared collections
-are viewed by designers/decorators who need a different experience.
+Resolved: live shared-collection UX is retired. The active designer handoff is
+a standalone one-collection PDF with embedded images and external source links.
 
 **Questions:**
 - What does the designer see when they open a shared HTML export?
@@ -17,13 +17,15 @@ are viewed by designers/decorators who need a different experience.
 - Is a static HTML file sufficient or do we need a hosted viewer?
 - What about mobile (iPad) viewing experience?
 
-**Status:** Deferred. Noted as future work in `docs/TODO_CONSUMING_UX.md`.
+**Status:** Historical questions remain in `docs/TODO_CONSUMING_UX.md`.
 
 ---
 
 ## OQ002 — Natural-language collection management implementation
 
 **Context:** D016 decided to use chat-style prompts for collection management.
+The browse-first visual `Make Collection` workflow is now the primary manual
+path; this question applies only to complementary power-user operations.
 
 **Questions:**
 - Client-side pattern matching or server-side AI-assisted?
@@ -49,6 +51,8 @@ are viewed by designers/decorators who need a different experience.
 
 Resolved: Browser scrape is the primary ingestion path.
 
-## ~~OQ-RESOLVED: Triage workflow~~ (resolved D015)
+## ~~OQ-RESOLVED: Everyday curation workflow~~ (resolved D023)
 
-Resolved: Keeper/hidden card-by-card review with keyboard shortcuts.
+Resolved: browse-first collection making with optional focused review. The
+keeper/hidden schema remains as usable/discarded state rather than a required
+corpus-wide backlog.
