@@ -3339,6 +3339,16 @@ class TestServerApi(unittest.TestCase):
         self.assertIn(b"if (state.pendingAssetsReload) {", app_js)
         self.assertNotIn(b"state.pendingAssetsReload && !append", app_js)
 
+    def test_frontend_reports_media_search_progress_and_uses_one_card_flag_control(self):
+        req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            app_js = resp.read()
+        self.assertIn(b"Checking the original post for source images", app_js)
+        self.assertIn(b"Using selected media", app_js)
+        self.assertIn(b"No source images were found in this post", app_js)
+        self.assertIn(b'kind === "saved_media"', app_js)
+        self.assertNotIn(b'triage-badge flagged', app_js)
+
     def test_head_requests_supported_for_api_and_static_assets(self):
         status, body, headers = self._request("/api/assets?limit=1", method="HEAD", return_headers=True)
         self.assertEqual(status, 200)

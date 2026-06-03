@@ -68,6 +68,8 @@ const state = {
   modalScopeAssetIds: [],
   modalScopeAssetIndex: -1,
   modalSourceCandidateSelectedId: "",
+  modalSourceCandidateBusyAction: "",
+  modalSourceCandidateMessage: "",
   modalClassificationDirty: false,
 
   // Imports
@@ -1975,12 +1977,10 @@ function buildCard(a) {
   const flagged = a.flagged == 1;
   const tagged = a.tagged == 1;
 
-  // Triage/flag badges — owner-only
+  // Triage badges — owner-only. Flag state is shown by the quick flag control.
   let badgeHtml = "";
   if (isOwner()) {
-    if (flagged) {
-      badgeHtml = '<span class="triage-badge flagged" title="Flagged for review"></span>';
-    } else if (ts === "keeper" && needsComment) {
+    if (ts === "keeper" && needsComment) {
       badgeHtml = '<span class="triage-badge needs-comment" title="Keeper — needs comment"></span>';
     } else if (ts === "keeper") {
       badgeHtml = '<span class="triage-badge keeper" title="Keeper"></span>';
@@ -2014,8 +2014,9 @@ function buildCard(a) {
   const quickStarHtml = isOwner() && ts !== "hidden"
     ? `<button class="card-quick-star${isKeeper ? " starred" : ""}" title="${isKeeper ? "Remove keeper" : "Mark as keeper"}" type="button">★</button>`
     : "";
+  const quickFlagLabel = flagged ? "Unflag follow-up" : "Flag for follow-up";
   const quickFlagHtml = canUseFlag()
-    ? `<button class="card-quick-flag${flagged ? " flagged" : ""}" title="${flagged ? "Remove flag" : "Flag for follow-up"}" type="button">⚑</button>`
+    ? `<button class="card-quick-flag${flagged ? " flagged" : ""}" title="${escapeHtml(quickFlagLabel)}" aria-label="${escapeHtml(quickFlagLabel)}" type="button">${flagged ? "⚐" : "⚑"}</button>`
     : "";
   const quickRestoreHtml = isOwner() && ts === "hidden"
     ? '<button class="card-quick-restore" title="Restore to ordinary browsing" type="button">Restore</button>'
@@ -2144,7 +2145,10 @@ function buildCard(a) {
         });
         a.flagged = newFlagged;
         quickFlagBtn.classList.toggle("flagged", !!newFlagged);
-        quickFlagBtn.title = newFlagged ? "Remove flag" : "Flag for follow-up";
+        const actionLabel = newFlagged ? "Unflag follow-up" : "Flag for follow-up";
+        quickFlagBtn.title = actionLabel;
+        quickFlagBtn.setAttribute("aria-label", actionLabel);
+        quickFlagBtn.textContent = newFlagged ? "⚐" : "⚑";
         if (isReviewStatusFilterActive("flagged") && !newFlagged) {
           await loadAssets();
         } else {
@@ -4412,14 +4416,24 @@ function renderModalSourceCandidatePanel(asset) {
   const statusEl = $("#modalSourceCandidateStatus");
   if (statusEl) {
     const parts = [];
+    const busyAction = String(state.modalSourceCandidateBusyAction || "").trim();
     if (evidenceStatus.startsWith("refresh_required:")) {
       parts.push("Search evidence is waiting for Admin refresh.");
     }
-    if (fetchStatus === "fetched") {
+    if (busyAction) {
+      parts.push(busyAction === "promote"
+        ? "Applying the selected media…"
+        : "Checking the original post for source images…");
+    } else if (state.modalSourceCandidateMessage) {
+      parts.push(state.modalSourceCandidateMessage);
+    } else if (fetchStatus === "fetched") {
       const sourceImageCount = mediaCandidates.filter((item) => item?.kind === "post_image").length;
+      const savedMediaCount = mediaCandidates.filter((item) => item?.kind === "saved_media").length;
       parts.push(sourceImageCount
         ? "Source media found. Choose a post image or a generated text card."
-        : "Source text captured. Choose the generated text card if it best represents this post.");
+        : (savedMediaCount
+          ? "No source images were found in the post. Previously used media remains available below."
+          : "No source images were found in the post. The current media was not changed."));
     } else if (fetchStatus) {
       parts.push(fetchStatus);
     }
@@ -4449,9 +4463,11 @@ function renderModalSourceCandidatePanel(asset) {
           : "");
       const hint = kind === "text_card"
         ? "Built locally from the captured post text"
+        : (kind === "saved_media"
+          ? "Preserved from an earlier media choice"
         : (String(item?.source_page_url || "").trim()
           ? "Captured from the linked source page"
-          : "Captured from the source post");
+          : "Captured from the source post"));
       return `
         <${cardTag} class="modal-source-candidate-card${selected ? " is-selected" : ""}"${attrs}>
           <div class="modal-source-candidate-preview">${preview}</div>
@@ -4484,8 +4500,20 @@ function renderModalSourceCandidatePanel(asset) {
 
   const captureBtn = $("#modalSourceCandidateCaptureBtn");
   const promoteBtn = $("#modalSourceCandidatePromoteBtn");
-  if (captureBtn) captureBtn.disabled = false;
-  if (promoteBtn) promoteBtn.disabled = !state.modalSourceCandidateSelectedId;
+  const busyAction = String(state.modalSourceCandidateBusyAction || "").trim();
+  const busy = !!busyAction;
+  if (captureBtn) {
+    captureBtn.disabled = busy;
+    captureBtn.classList.toggle("is-busy", busyAction === "capture");
+    captureBtn.textContent = busyAction === "capture" ? "Finding source media…" : "Find source media";
+    captureBtn.setAttribute("aria-busy", busyAction === "capture" ? "true" : "false");
+  }
+  if (promoteBtn) {
+    promoteBtn.disabled = busy || !state.modalSourceCandidateSelectedId;
+    promoteBtn.classList.toggle("is-busy", busyAction === "promote");
+    promoteBtn.textContent = busyAction === "promote" ? "Using selected media…" : "Use selected media";
+    promoteBtn.setAttribute("aria-busy", busyAction === "promote" ? "true" : "false");
+  }
 }
 
 async function runModalSourceCandidateAction(action) {
@@ -4495,15 +4523,20 @@ async function runModalSourceCandidateAction(action) {
     Shared.showToast("Source candidate tools are owner-only.", { type: "info" });
     return;
   }
-  const captureBtn = $("#modalSourceCandidateCaptureBtn");
-  const promoteBtn = $("#modalSourceCandidatePromoteBtn");
+  if (state.modalSourceCandidateBusyAction) return;
   const selectedCandidateId = String(state.modalSourceCandidateSelectedId || "").trim();
   if (action === "promote" && !selectedCandidateId) {
     Shared.showToast("Choose source media before using it.", { type: "info" });
     return;
   }
-  if (captureBtn) captureBtn.disabled = true;
-  if (promoteBtn) promoteBtn.disabled = true;
+  const panel = $("#modalSourceCandidatePanel");
+  if (panel) panel.open = true;
+  state.modalSourceCandidateBusyAction = action;
+  state.modalSourceCandidateMessage = "";
+  renderModalSourceCandidatePanel(asset);
+  if (action === "capture") {
+    Shared.showToast("Checking the original post for source media…", { type: "info", duration: 2200 });
+  }
   try {
     const requestAction = action === "promote" ? "promote_candidate" : action;
     const data = await api(`/api/assets/${encodeURIComponent(asset.id)}/source-link-candidate`, {
@@ -4515,6 +4548,7 @@ async function runModalSourceCandidateAction(action) {
     replaceAssetInState(updated);
     state.modalAsset = updated;
     state.modalSourceCandidateSelectedId = "";
+    state.modalSourceCandidateBusyAction = "";
     renderModalSourceCandidatePanel(updated);
     if (action === "promote") {
       renderGrid();
@@ -4522,22 +4556,41 @@ async function runModalSourceCandidateAction(action) {
       Shared.showToast(
         promotedKind === "text_card"
           ? "Generated text card is now in use. Search evidence is waiting for Admin refresh."
-          : "Selected source image is now in use. Search evidence is waiting for Admin refresh.",
+          : (promotedKind === "saved_media"
+            ? "Previously used image is now in use. Search evidence is waiting for Admin refresh."
+            : "Selected source image is now in use. Search evidence is waiting for Admin refresh."),
         { type: "success", duration: 4200 },
       );
       await openModal(updated);
       const modalContent = document.querySelector("#modal .modalContent");
       if (modalContent) modalContent.scrollTo({ top: 0, behavior: "smooth" });
     } else {
-      const panel = $("#modalSourceCandidatePanel");
-      if (panel) panel.open = true;
-      Shared.showToast("Source checked. Choose a replacement only if it is better.", { type: "success", duration: 2600 });
+      const mediaCandidates = Array.isArray(updated?.source_link_candidate?.media_candidates)
+        ? updated.source_link_candidate.media_candidates
+        : [];
+      const sourceImageCount = mediaCandidates.filter((item) => item?.kind === "post_image").length;
+      const savedMediaCount = mediaCandidates.filter((item) => item?.kind === "saved_media").length;
+      state.modalSourceCandidateMessage = sourceImageCount
+        ? `${sourceImageCount} source image${sourceImageCount === 1 ? "" : "s"} found. Choose a replacement only if it is better.`
+        : (savedMediaCount
+          ? "No source images were found in this post. Previously used media is still available below."
+          : "No source images were found in this post. The current media was not changed.");
+      renderModalSourceCandidatePanel(updated);
+      Shared.showToast(state.modalSourceCandidateMessage, {
+        type: sourceImageCount ? "success" : "info",
+        duration: 4400,
+      });
     }
   } catch (e) {
-    Shared.showToast(formatApiError(e), { type: "error", duration: 3200 });
+    state.modalSourceCandidateBusyAction = "";
+    state.modalSourceCandidateMessage = action === "capture"
+      ? `Source media check failed: ${formatApiError(e)}`
+      : `Media change failed: ${formatApiError(e)}`;
+    if (state.modalAsset?.id === asset.id) renderModalSourceCandidatePanel(state.modalAsset);
+    Shared.showToast(state.modalSourceCandidateMessage, { type: "error", duration: 4200 });
   } finally {
-    if (captureBtn) captureBtn.disabled = false;
-    if (promoteBtn) promoteBtn.disabled = false;
+    state.modalSourceCandidateBusyAction = "";
+    if (state.modalAsset?.id === asset.id) renderModalSourceCandidatePanel(state.modalAsset);
   }
 }
 
@@ -4874,6 +4927,8 @@ async function openModal(asset, options = {}) {
   state.modalLoadSeq = modalSeq;
   if (String(state.modalAsset?.id || "") !== String(asset?.id || "")) {
     state.modalSourceCandidateSelectedId = "";
+    state.modalSourceCandidateBusyAction = "";
+    state.modalSourceCandidateMessage = "";
   }
   state.modalAsset = asset;
 
@@ -5200,6 +5255,8 @@ function closeModal() {
   $("#modal").classList.add("hidden");
   state.modalAsset = null;
   state.modalSourceCandidateSelectedId = "";
+  state.modalSourceCandidateBusyAction = "";
+  state.modalSourceCandidateMessage = "";
   state.modalClassificationDirty = false;
   state.annotations = [];
   state.activeAnnotationId = null;

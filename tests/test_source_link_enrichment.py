@@ -119,6 +119,63 @@ class TestSourceLinkEnrichment(unittest.TestCase):
         self.assertEqual(gallery[0]["evidence_status"], "refresh_required:generated_text_card")
         self.assertIn("&v=", gallery[0]["preview_url"])
 
+    def test_media_repair_gallery_can_restore_saved_media_after_text_card_and_empty_source_search(self):
+        with tempfile.TemporaryDirectory() as td:
+            store_dir = Path(td) / "store"
+            original = store_dir / "originals" / "facebook" / "original-saved-image.jpg"
+            original.parent.mkdir(parents=True, exist_ok=True)
+            original.write_bytes(b"original saved image")
+            with Db(Path(td) / "t.sqlite") as db:
+                ensure_schema(db)
+                self._seed_media_repair_asset(db)
+                db.exec(
+                    "update assets set image_url=?, stored_path=?, sha256=? where id='repair-a1'",
+                    ("https://cdn.example.com/original-saved-image.jpg", str(original), "original-saved-image-sha"),
+                )
+                with patch("inspirations.source_link_enrichment.generate_thumbnails"):
+                    promote_media_repair_candidate_for_asset(
+                        db,
+                        asset_id="repair-a1",
+                        candidate_id="text-card",
+                        store_dir=store_dir,
+                    )
+                db.exec(
+                    """
+                    update asset_source_link_enrichment
+                    set text_excerpt=?, media_candidates_json=?, fetch_status=?, created_at=?
+                    where id='repair-enrichment-1'
+                    """,
+                    ("Let us talk about grass.", "[]", "fetched", "2026-03-08T06:00:00+00:00"),
+                )
+                gallery = media_repair_gallery_for_asset(db, asset_id="repair-a1", store_dir=store_dir)
+                saved = next(item for item in gallery if item["kind"] == "saved_media")
+                with patch("inspirations.source_link_enrichment.generate_thumbnails"):
+                    report = promote_media_repair_candidate_for_asset(
+                        db,
+                        asset_id="repair-a1",
+                        candidate_id=str(saved["id"]),
+                        store_dir=store_dir,
+                    )
+                restored_path = db.query_value("select stored_path from assets where id='repair-a1'")
+                restored_image_url = db.query_value("select image_url from assets where id='repair-a1'")
+                restored_image_url_provenance = db.query_value(
+                    """
+                    select origin_type
+                    from asset_field_provenance
+                    where asset_id='repair-a1' and field_name='image_url' and is_current=1
+                    """
+                )
+                restored_gallery = media_repair_gallery_for_asset(db, asset_id="repair-a1", store_dir=store_dir)
+
+        self.assertEqual([item["kind"] for item in gallery], ["current_media", "saved_media", "text_card"])
+        self.assertEqual(saved["label"], "Previously used: Saved image")
+        self.assertTrue(str(saved["preview_url"]).startswith("/store/originals/facebook/original-saved-image.jpg"))
+        self.assertEqual(report["kind"], "saved_media")
+        self.assertEqual(Path(str(restored_path)).resolve(), original.resolve())
+        self.assertEqual(restored_image_url, "https://cdn.example.com/original-saved-image.jpg")
+        self.assertEqual(restored_image_url_provenance, "media_repair_restore")
+        self.assertEqual(restored_gallery[0]["label"], "In use: Saved image")
+
     def test_promote_text_card_archives_and_invalidates_stale_machine_evidence(self):
         with tempfile.TemporaryDirectory() as td:
             store_dir = Path(td) / "store"

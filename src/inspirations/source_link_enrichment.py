@@ -554,6 +554,147 @@ def _normalize_media_candidates(raw: Any, *, limit: int = DEFAULT_MAX_MEDIA_CAND
     return out
 
 
+def _media_representation_label(value: str) -> str:
+    return {
+        "generated_text_card": "Generated text card",
+        "source_image": "Source image",
+        "saved_image": "Saved image",
+    }.get(str(value or "").strip(), "Saved image")
+
+
+def _media_repair_audit_asset(raw: Any) -> dict[str, Any]:
+    try:
+        payload = json.loads(str(raw or "{}"))
+    except Exception:
+        return {}
+    asset = payload.get("asset") if isinstance(payload, dict) else None
+    return dict(asset) if isinstance(asset, dict) else {}
+
+
+def _store_media_path(raw_path: Any, *, store_dir: Path | None) -> tuple[Path, str] | None:
+    if not store_dir:
+        return None
+    try:
+        base = Path(store_dir).resolve()
+        target = Path(str(raw_path or "").strip()).resolve()
+        relative = target.relative_to(base).as_posix()
+    except Exception:
+        return None
+    if not target.is_file():
+        return None
+    return target, relative
+
+
+def _media_representation_before(db: Db, *, asset_id: str, created_at: str) -> str:
+    return str(
+        db.query_value(
+            """
+            select field_value
+            from asset_field_provenance
+            where asset_id=? and field_name='media_representation' and created_at < ?
+            order by created_at desc, id desc
+            limit 1
+            """,
+            (asset_id, created_at),
+        )
+        or ""
+    ).strip()
+
+
+def _archived_media_candidates_for_asset(
+    db: Db,
+    *,
+    asset_id: str,
+    store_dir: Path | None,
+    current_stored_path: str,
+    current_sha256: str,
+) -> list[dict[str, Any]]:
+    if not store_dir:
+        return []
+    rows = db.query(
+        """
+        select id, stale_evidence_json, created_at
+        from asset_media_repair_audit
+        where asset_id=?
+        order by created_at desc, id desc
+        """,
+        (asset_id,),
+    )
+    seen = {value for value in (current_sha256, current_stored_path) if value}
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        archived = _media_repair_audit_asset(row["stale_evidence_json"])
+        stored_path = str(archived.get("stored_path") or "").strip()
+        sha256 = str(archived.get("sha256") or "").strip()
+        store_path = _store_media_path(stored_path, store_dir=store_dir)
+        if not store_path:
+            continue
+        _target, relative = store_path
+        key = sha256 or stored_path
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        representation = _media_representation_before(
+            db,
+            asset_id=asset_id,
+            created_at=str(row["created_at"] or ""),
+        ) or "saved_image"
+        version = f"?v={quote(sha256)}" if sha256 else ""
+        candidates.append(
+            {
+                "id": f"history-{row['id']}",
+                "kind": "saved_media",
+                "label": f"Previously used: {_media_representation_label(representation)}",
+                "preview_url": f"/store/{quote(relative, safe='/')}{version}",
+                "selectable": True,
+                "current": False,
+                "representation": representation,
+            }
+        )
+    return candidates
+
+
+def _archived_media_candidate_for_asset(
+    db: Db,
+    *,
+    asset_id: str,
+    candidate_id: str,
+    store_dir: Path,
+) -> dict[str, Any] | None:
+    audit_id = str(candidate_id or "").removeprefix("history-").strip()
+    if not audit_id or audit_id == candidate_id:
+        return None
+    rows = db.query(
+        """
+        select id, stale_evidence_json, created_at
+        from asset_media_repair_audit
+        where id=? and asset_id=?
+        limit 1
+        """,
+        (audit_id, asset_id),
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    archived = _media_repair_audit_asset(row["stale_evidence_json"])
+    store_path = _store_media_path(archived.get("stored_path"), store_dir=store_dir)
+    if not store_path:
+        return None
+    target, _relative = store_path
+    representation = _media_representation_before(
+        db,
+        asset_id=asset_id,
+        created_at=str(row["created_at"] or ""),
+    ) or "saved_image"
+    return {
+        "audit_id": audit_id,
+        "stored_path": str(target),
+        "image_url": str(archived.get("image_url") or "").strip(),
+        "sha256": str(archived.get("sha256") or "").strip(),
+        "representation": representation,
+    }
+
+
 def _text_card_lines(text: str, *, width: int = 34) -> list[str]:
     normalized = _normalize_space(text)
     if not normalized:
@@ -758,6 +899,80 @@ def _promote_hero_image(
         created_at=created_at,
     )
     return {"promoted": True, "stored_path": stable_str, "thumb_generated": False, "invalidated": invalidated}
+
+
+def _promote_archived_media(
+    db: Db,
+    *,
+    asset: dict[str, Any],
+    archived: dict[str, Any],
+    created_at: str,
+    origin_ref: str,
+) -> dict[str, Any]:
+    asset_id = str(asset.get("id") or "").strip()
+    stored_path = str(archived.get("stored_path") or "").strip()
+    if not asset_id or not stored_path:
+        raise ValueError("previously used media is not available")
+    invalidated = _archive_and_invalidate_media_evidence(
+        db,
+        asset_id=asset_id,
+        repair_kind="restored_saved_media",
+        origin_ref=origin_ref,
+        created_at=created_at,
+    )
+    image_url = str(archived.get("image_url") or "").strip()
+    sha256 = str(archived.get("sha256") or "").strip()
+    representation = str(archived.get("representation") or "").strip() or "saved_image"
+    db.exec(
+        """
+        update assets
+        set image_url=?, stored_path=?, sha256=?, thumb_path=null, media_status='image'
+        where id=?
+        """,
+        (image_url or None, stored_path, sha256 or None, asset_id),
+    )
+    _record_field_provenance(
+        db,
+        asset_id=asset_id,
+        field_name="stored_path",
+        field_value=stored_path,
+        origin_type="media_repair_restore",
+        origin_ref=origin_ref,
+        actor="source_link_enrichment",
+        confidence=1.0,
+        created_at=created_at,
+    )
+    if image_url:
+        _record_field_provenance(
+            db,
+            asset_id=asset_id,
+            field_name="image_url",
+            field_value=image_url,
+            origin_type="media_repair_restore",
+            origin_ref=origin_ref,
+            actor="source_link_enrichment",
+            confidence=1.0,
+            created_at=created_at,
+        )
+    _record_field_provenance(
+        db,
+        asset_id=asset_id,
+        field_name="media_representation",
+        field_value=representation,
+        origin_type="media_repair_restore",
+        origin_ref=origin_ref,
+        actor="source_link_enrichment",
+        confidence=1.0,
+        created_at=created_at,
+    )
+    return {
+        "promoted": True,
+        "stored_path": stored_path,
+        "sha256": sha256,
+        "kind": "saved_media",
+        "representation": representation,
+        "invalidated": invalidated,
+    }
 
 
 def _fetch_source_page(
@@ -1780,7 +1995,12 @@ def _generated_text_card_text(*, asset: dict[str, Any], latest: dict[str, Any]) 
     )
 
 
-def media_repair_gallery_for_asset(db: Db, *, asset_id: str) -> list[dict[str, Any]]:
+def media_repair_gallery_for_asset(
+    db: Db,
+    *,
+    asset_id: str,
+    store_dir: Path | None = None,
+) -> list[dict[str, Any]]:
     asset_rows = db.query(
         """
         select id, source, title, description, image_url, stored_path, thumb_path, sha256
@@ -1818,10 +2038,7 @@ def media_repair_gallery_for_asset(db: Db, *, asset_id: str) -> list[dict[str, A
         )
         or ""
     ).strip()
-    representation_label = {
-        "generated_text_card": "Generated text card",
-        "source_image": "Source image",
-    }.get(representation, "Saved image")
+    representation_label = _media_representation_label(representation)
     gallery: list[dict[str, Any]] = []
     current_preview = ""
     current_version = str(asset.get("sha256") or "").strip()
@@ -1855,6 +2072,15 @@ def media_repair_gallery_for_asset(db: Db, *, asset_id: str) -> list[dict[str, A
                 "current": False,
             }
         )
+    gallery.extend(
+        _archived_media_candidates_for_asset(
+            db,
+            asset_id=asset_id,
+            store_dir=store_dir,
+            current_stored_path=str(asset.get("stored_path") or "").strip(),
+            current_sha256=str(asset.get("sha256") or "").strip(),
+        )
+    )
     text = _generated_text_card_text(asset=asset, latest=latest)
     if text:
         gallery.append(
@@ -1896,6 +2122,32 @@ def promote_media_repair_candidate_for_asset(
         raise ValueError("choose source media before using it")
     created_at = _now_iso()
     run_id = str(latest.get("run_id") or "").strip()
+    archived = _archived_media_candidate_for_asset(
+        db,
+        asset_id=asset_id,
+        candidate_id=candidate_id,
+        store_dir=store_dir,
+    )
+    if archived:
+        origin_ref = str(archived.get("audit_id") or "").strip() or run_id
+        report = _promote_archived_media(
+            db,
+            asset=asset,
+            archived=archived,
+            created_at=created_at,
+            origin_ref=origin_ref,
+        )
+        generate_thumbnails(db, store_dir=store_dir, source=str(asset.get("source") or "").strip() or None, limit=0)
+        return {
+            "ok": True,
+            "asset_id": asset_id,
+            "candidate_id": candidate_id,
+            "kind": "saved_media",
+            "promoted": bool(report.get("promoted")),
+            "invalidated": report.get("invalidated") or {},
+            "refresh_required": ["image_tagging", "embedding", "classification"],
+            "notes": notes,
+        }
     if candidate_id == TEXT_CARD_CANDIDATE_ID:
         text = _generated_text_card_text(asset=asset, latest=latest)
         report = _promote_text_card(

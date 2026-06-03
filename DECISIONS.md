@@ -332,6 +332,8 @@ modal. Review checkboxes are for bulk actions, and the explicit `One-by-one`
 action is the route to fast triage. The full detail/QC modal always retains a
 compact curation group for `Keep`, `Discard / Restore`, and `Flag / Unflag`;
 making detail behavior consistent must not remove those durable item actions.
+Flagged Grid cards use one stateful quick-action control as both the visible
+state indicator and the unflag action, rather than a second flag badge.
 
 ---
 
@@ -371,6 +373,26 @@ asset pages, and apparently unreliable automatic loading.
 complete at startup or in explicit maintenance/import commands. Tests that seed
 legacy rows should run schema assurance before starting their server fixture,
 not depend on a request to mutate the database.
+
+---
+
+## D026 — Media repair choices remain reversible (2026-06-03)
+
+**Decision:** Replacing an item's media never removes the curator's recovery
+path. The detail modal's `Repair media` gallery exposes previously used saved
+media from `asset_media_repair_audit` as selectable candidates. A later
+`Find source media` result may add or fail to add post images, but it must not
+hide recoverable prior media.
+
+**Why:** Source sites, especially Facebook, often return text without usable
+images. A successful no-image search previously looked like a failed action,
+and choosing a generated text card made the original saved picture disappear
+from the UI even though it remained in the audit log.
+
+**Consequence:** Media-repair actions show explicit searching, result, and
+failure feedback. Restoring previously used media archives the current choice
+in turn, invalidates stale machine evidence, and enters the normal Admin refresh
+queue.
 
 ---
 

@@ -19,7 +19,7 @@ Typical failure modes:
 
 Workflow `A` is the implementation branch that makes this a first-class system capability instead of an ad hoc review habit.
 
-## Implemented Checkpoint - May 31, 2026
+## Implemented Checkpoint - June 3, 2026
 
 The item modal now has a first-class `Repair media` gallery:
 
@@ -28,6 +28,8 @@ The item modal now has a first-class `Repair media` gallery:
 - Captured post images are shown as explicit selectable candidates.
 - A `Generated text card` option builds a local PNG from captured post text when text is the best representation.
 - `Use selected media` promotes only the human-selected candidate.
+- Previously used saved media is recovered from `asset_media_repair_audit` and remains selectable after later source checks, including checks that find no post images.
+- `Find source media` opens the gallery immediately and reports searching, images-found, no-images-found, and failure states instead of relying on a disabled cursor.
 - Generated cards use the normal local storage and thumbnail pathways, so Grid, detail view, and standalone collection PDF export use them without app-dependent links.
 - Promotion records provenance in `asset_field_provenance`.
 - Promotion archives stale machine evidence in `asset_media_repair_audit`, then clears old AI summaries, AI labels, embeddings, derived classification rows, and source-link QC rows for that asset.

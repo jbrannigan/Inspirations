@@ -112,6 +112,17 @@ notes, normal detail navigation, and the same compact `Keep`,
 `Discard / Restore`, and `Flag / Unflag` curation controls in every scope.
 Edits made there must remain visible when returning to one-by-one review.
 
+Media repair is reversible. The gallery exposes previously used saved media
+from `asset_media_repair_audit` as selectable candidates, even when a later
+`Find source media` check returns no post images. The action opens the panel
+immediately, shows an in-progress state, and reports whether source images were
+found, none were found, or the check failed. Choosing a previous image archives
+the current media in turn and queues the normal Admin search-evidence refresh.
+
+Flagged cards use one stateful quick-action control. The persistent brown
+`Unflag follow-up` button is both the flagged-state indicator and the removal
+action; there is no separate red flag badge.
+
 The Grid automatically requests the next asset page before the curator reaches
 the bottom. `Load More` remains a fallback and must show a loading state rather
 than appearing inert on slower LAN/iPad requests. If the curator changes scope
@@ -206,6 +217,11 @@ Browser verification completed against `http://127.0.0.1:8001`:
 - flagged and usable card clicks open the same full detail/QC modal
 - explicit one-by-one review shows `Edit title / media`
 - one-by-one `Edit title / media` opens the full detail/QC modal
+- media repair on item `00a380ec-419b-4424-8da7-f59db468a4d3` shows the
+  generated text card in use, preserves `Previously used: Saved image`, and
+  reports the no-source-image result after a live source check
+- flagged tiles show one brown `Unflag follow-up` control rather than two flag
+  icons
 
 Latest completed automated verification before this handoff:
 
@@ -216,7 +232,7 @@ git diff --check
 ruff check src tests
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 
-Ran 378 tests in 60.278s
+Ran 380 tests in 54.797s
 OK
 ```
 

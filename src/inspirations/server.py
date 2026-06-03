@@ -3158,7 +3158,11 @@ class ApiHandler(BaseHTTPRequestHandler):
             "fetch_status": str(row.get("fetch_status") or "").strip(),
             "error": str(row.get("error") or "").strip(),
             "created_at": str(row.get("created_at") or "").strip(),
-            "media_candidates": media_repair_gallery_for_asset(db, asset_id=asset_id),
+            "media_candidates": media_repair_gallery_for_asset(
+                db,
+                asset_id=asset_id,
+                store_dir=Path(self.server.store_dir).resolve(),
+            ),
         }
 
     def _apply_modal_classification_review(
