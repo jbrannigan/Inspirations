@@ -1,5 +1,9 @@
 # Modal / Share Redesign Plan — 2026-03-21
 
+> Legacy note (2026-06-03): this proposed live-collaborator/share redesign is
+> historical. D021 retired the live sharing product layer; current detail/QC
+> modal behavior is summarized in `docs/CURRENT_HANDOFF.md`.
+
 Status: Proposed for review before implementation
 Project: Inspirations
 

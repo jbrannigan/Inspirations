@@ -1,5 +1,9 @@
 # Last Try: Final Automated Curation Pass
 
+> Historical implementation spec (2026-06-03): this completed curation pass is
+> useful provenance, but its collaborator-facing deliverable assumptions are
+> superseded by D021 and the standalone collection PDF workflow.
+
 **Date:** 2026-03-08
 **Author:** Jim Brannigan (with Claude)
 **Estimated effort:** 3–5 days in Claude Code sessions

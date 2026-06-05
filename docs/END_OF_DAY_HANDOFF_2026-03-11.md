@@ -1,5 +1,9 @@
 # End-of-Day Handoff — 2026-03-11
 
+> Legacy note (2026-06-03): this is a historical collaborator-UX checkpoint.
+> Do not use it as a current resume document. Start with
+> `docs/CURRENT_HANDOFF.md`.
+
 ## Purpose
 
 This document captures the current state of the collaborator UX work, collections/share product decisions, 3DE observations, server-launch clarification, and the exact next steps so work can resume cleanly even if the chat thread loses context.

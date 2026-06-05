@@ -38,11 +38,10 @@ from .curation import (
     render_curation_html,
     run_curation_pipeline,
 )
-from .export import export_html_gallery, export_static_share_portal
+from .export import export_collection_pdf, export_html_gallery, export_static_share_portal
 from .server import run_server
 from .source_link_enrichment import default_auth_browser_profile_dir, run_source_link_enrichment
 from .source_link_qc import run_source_link_qc
-from .store import create_collection, add_items_to_collection
 from .storage import backfill_previews_from_source_ref
 from .title_audit import (
     apply_title_audit_batch,
@@ -208,25 +207,13 @@ def cmd_rebuild_db(args: argparse.Namespace) -> int:
         r = generate_thumbnails(db, store_dir=store_dir)
     summary["thumbnails"] = r
 
-    # Step 7: Create collections from boards
-    print("[rebuild-db] Creating collections from boards", file=sys.stderr)
-    with Db(db_path) as db:
-        ensure_schema(db)
-        boards = db.query(
-            "select distinct board from assets where board is not null and board != '' order by board"
-        )
-        collections_created = 0
-        collection_items_total = 0
-        for row in boards:
-            board_name = row["board"]
-            col = create_collection(db, name=board_name)
-            asset_rows = db.query("select id from assets where board = ?", (board_name,))
-            asset_ids = [r["id"] for r in asset_rows]
-            n = add_items_to_collection(db, collection_id=col["id"], asset_ids=asset_ids)
-            collections_created += 1
-            collection_items_total += n
-        print(f"[rebuild-db] Created {collections_created} collections, {collection_items_total} items linked", file=sys.stderr)
-    summary["collections"] = {"created": collections_created, "items": collection_items_total}
+    # Source boards remain metadata. The live tree browses assets.board directly;
+    # recreating mirror collections would add a stale second source of truth.
+    summary["collections"] = {
+        "created": 0,
+        "items": 0,
+        "note": "source boards remain metadata-only",
+    }
 
     # Step 8: Null out bad Facebook images (SHA256 appearing on 5+ assets = wrong capture)
     print("[rebuild-db] Checking for duplicate Facebook images", file=sys.stderr)
@@ -428,6 +415,7 @@ def cmd_ai_tag(args: argparse.Namespace) -> int:
             model=args.model,
             recitation_fallback_model=args.recitation_fallback_model,
             source=args.source,
+            asset_id=getattr(args, "asset_id", ""),
             image_kind=args.image_kind,
             force=args.force,
             store_dir=_p(args.store),
@@ -472,6 +460,7 @@ def cmd_ai_embed(args: argparse.Namespace) -> int:
             api_key=api_key,
             model=args.model or DEFAULT_GEMINI_EMBEDDING_MODEL,
             source=args.source,
+            asset_id=getattr(args, "asset_id", ""),
             limit=args.limit,
             force=args.force,
         )
@@ -729,6 +718,27 @@ def cmd_export_portal(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_export_collection_pdf(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    out_path = _p(args.out) if str(args.out or "").strip() else None
+    with Db(db_path) as db:
+        ensure_schema(db)
+        try:
+            report = export_collection_pdf(
+                db,
+                collection_id=args.collection_id,
+                out_path=out_path,
+            )
+        except FileNotFoundError:
+            print(json.dumps({"ok": False, "error": "collection not found"}, indent=2))
+            return 1
+        except Exception as e:
+            print(json.dumps({"ok": False, "error": str(e)}, indent=2))
+            return 1
+    print(json.dumps(report, indent=2))
+    return 0
+
+
 def cmd_curation_run(args: argparse.Namespace) -> int:
     db_path = _p(args.db)
     out_dir = _p(args.out_dir)
@@ -851,35 +861,6 @@ def cmd_curation_source_link_qc_v2(args: argparse.Namespace) -> int:
             notes=args.notes,
         )
     print(json.dumps(report, indent=2))
-    return 0
-
-
-def cmd_promote_boards(args: argparse.Namespace) -> int:
-    db_path = _p(args.db)
-    with Db(db_path) as db:
-        ensure_schema(db)
-        boards = db.query(
-            "select distinct board from assets where board is not null and board != '' order by board"
-        )
-        created = 0
-        skipped = 0
-        total_items = 0
-        for row in boards:
-            board_name = row["board"]
-            collection_name = f"pins: {board_name}"
-            existing = db.query("select id from collections where name = ?", (collection_name,))
-            if existing:
-                skipped += 1
-                continue
-            col = create_collection(db, name=collection_name)
-            cid = col["id"]
-            asset_rows = db.query("select id from assets where board = ?", (board_name,))
-            asset_ids = [r["id"] for r in asset_rows]
-            n = add_items_to_collection(db, collection_id=cid, asset_ids=asset_ids)
-            created += 1
-            total_items += n
-            print(f"  Created '{collection_name}' with {n} items")
-    print(f"\nDone. Created {created} collections, skipped {skipped} existing, {total_items} total items linked.")
     return 0
 
 
@@ -1015,6 +996,7 @@ def build_parser() -> argparse.ArgumentParser:
     tag.add_argument("--provider", default="mock", help="Provider: mock | gemini")
     tag.add_argument("--limit", type=int, default=0, help="Limit assets (0 = no limit)")
     tag.add_argument("--source", default="", help="Only tag a source (pinterest/facebook/scan)")
+    tag.add_argument("--asset-id", default="", help="Only tag one repaired asset ID")
     tag.add_argument("--model", default="", help="Gemini model name (default gemini-2.5-flash)")
     tag.add_argument(
         "--recitation-fallback-model",
@@ -1055,6 +1037,7 @@ def build_parser() -> argparse.ArgumentParser:
     embed.add_argument("--provider", default="gemini", help="Provider: gemini")
     embed.add_argument("--model", default=DEFAULT_GEMINI_EMBEDDING_MODEL, help="Embedding model")
     embed.add_argument("--source", default="", help="Only embed one source (pinterest/facebook/scan)")
+    embed.add_argument("--asset-id", default="", help="Only embed one repaired asset ID")
     embed.add_argument("--limit", type=int, default=0, help="Limit assets (0 = no limit)")
     embed.add_argument("--force", action="store_true", help="Re-embed even if embedding already exists")
     embed.add_argument("--api-key", default="", help="Gemini API key (or set GEMINI_API_KEY)")
@@ -1181,10 +1164,6 @@ def build_parser() -> argparse.ArgumentParser:
     cat_gen.add_argument("--out", default="data/catalog", help="Output directory (default data/catalog)")
     cat_gen.set_defaults(func=cmd_catalog_generate)
 
-    pb = sub.add_parser("promote-boards", help="Convert boards to collections (one-time migration)")
-    pb.add_argument("--db", required=True)
-    pb.set_defaults(func=cmd_promote_boards)
-
     serve = sub.add_parser("serve", help="Run local web app")
     serve.add_argument("--host", default="127.0.0.1", help="Bind host (default 127.0.0.1)")
     serve.add_argument("--port", type=int, default=8001, help="Port")
@@ -1225,6 +1204,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     exp_portal.add_argument("--limit", type=int, default=0, help="Limit assets (0 = no limit)")
     exp_portal.set_defaults(func=cmd_export_portal)
+    exp_pdf = exp_sub.add_parser(
+        "collection-pdf",
+        help="Export one collection as a standalone designer-facing PDF",
+    )
+    exp_pdf.add_argument("--collection-id", required=True, help="Collection id to export")
+    exp_pdf.add_argument("--out", default="", help="Output .pdf path (default data/exports/<collection-name>.pdf)")
+    exp_pdf.set_defaults(func=cmd_export_collection_pdf)
 
     curation = sub.add_parser("curation", help="AI curation pipeline")
     curation.set_defaults(func=lambda _: curation.print_help() or 2)

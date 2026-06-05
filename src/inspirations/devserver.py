@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import os
 import signal
+import sys
 import time
 from pathlib import Path
-
-from .server import run_server
 
 
 WATCH_DIRS = ["app", "src"]
@@ -39,8 +38,24 @@ def _changed(prev: dict[str, float], curr: dict[str, float]) -> bool:
 def _start_child(*, host: str, port: int, db_path: Path, app_dir: Path, store_dir: Path) -> int:
     pid = os.fork()
     if pid == 0:
-        run_server(host=host, port=port, db_path=db_path, app_dir=app_dir, store_dir=store_dir)
-        return 0
+        args = [
+            sys.executable,
+            "-m",
+            "inspirations",
+            "--db",
+            str(db_path),
+            "--store",
+            str(store_dir),
+            "serve",
+            "--host",
+            host,
+            "--port",
+            str(port),
+            "--app",
+            str(app_dir),
+        ]
+        os.execvpe(sys.executable, args, dict(os.environ))
+        raise RuntimeError("execvpe returned unexpectedly")
     return pid
 
 

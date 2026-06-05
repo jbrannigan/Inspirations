@@ -17,6 +17,7 @@ from .title_audit import (
     _slug_title_from_source_ref,
     concise_title,
     propose_title,
+    strip_facebook_engagement_prefix,
 )
 
 _SCAN_DOC_SUFFIX_RE = re.compile(r"(\s-\sdoc\s+\d+(?:\s+p\d+)?)\s*$", re.IGNORECASE)
@@ -64,6 +65,7 @@ _SUGGESTION_LABELS = {
     "shorten_existing_title": "Shortened for easier reuse",
     "shorten_ai_summary": "Shortened from AI summary",
     "shorten_seo_alt": "Shortened from alt text",
+    "strip_engagement_prefix": "Suggested without Facebook engagement counts",
 }
 
 
@@ -213,6 +215,11 @@ def _suggested_title(asset: dict[str, Any]) -> tuple[str, str]:
     source_ref = str(asset.get("source_ref") or "").strip()
     ai_summary = str(asset.get("ai_summary") or "").strip()
     seo_alt = str(asset.get("seo_alt_text") or "").strip()
+
+    if source == "facebook":
+        cleaned = strip_facebook_engagement_prefix(current)
+        if cleaned and cleaned != current:
+            return (cleaned, "strip_engagement_prefix")
 
     proposal = propose_title(
         source=source,

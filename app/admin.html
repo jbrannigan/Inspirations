@@ -66,12 +66,34 @@
     <main class="adminShell">
       <section class="section">
         <div class="sectionTitle">Access</div>
+        <div id="adminSetup" hidden>
+          <p id="setupHelp" class="muted"></p>
+          <div id="setupForm" class="row" style="flex-wrap: wrap" hidden>
+            <input id="newAdminPassword" type="password" placeholder="Choose an admin password" autocomplete="new-password" />
+            <input id="confirmAdminPassword" type="password" placeholder="Confirm admin password" autocomplete="new-password" />
+            <button id="setupAdmin">Create Admin Password</button>
+          </div>
+        </div>
         <div class="row" style="flex-wrap: wrap">
-          <input id="adminPassword" type="password" placeholder="Admin password" />
+          <input id="adminPassword" type="password" placeholder="Admin password" autocomplete="current-password" />
           <button id="unlockAdmin">Enter Admin Mode</button>
           <button id="lockAdmin" disabled>Exit Admin Mode</button>
         </div>
         <div id="authStatus" class="muted" style="margin-top: 8px">Enter admin password to unlock delete actions.</div>
+      </section>
+
+      <section class="section">
+        <div class="sectionTitle">Repaired Media Search Evidence</div>
+        <p class="muted">
+          Replacement images are visible immediately. Refreshing rebuilds their AI tags, semantic-search embeddings,
+          and Explorer classification evidence.
+        </p>
+        <div class="row" style="flex-wrap: wrap">
+          <button id="reloadMediaRepairs">Check Pending Repairs</button>
+          <button id="refreshMediaRepairs" disabled>Refresh Search Evidence</button>
+        </div>
+        <div id="mediaRepairStatus" class="muted" style="margin-top: 8px">Checking pending repairs...</div>
+        <div id="mediaRepairItems" class="list compactList"></div>
       </section>
 
       <section class="section">
@@ -96,6 +118,6 @@
     </main>
 
     <script src="/app/shared.js?v=3"></script>
-    <script src="/app/admin.js"></script>
+    <script src="/app/admin.js?v=2"></script>
   </body>
 </html>

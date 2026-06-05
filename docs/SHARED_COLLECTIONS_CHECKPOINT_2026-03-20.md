@@ -1,5 +1,9 @@
 # Shared Collections Checkpoint — 2026-03-20
 
+> Legacy note (2026-05-27): shared live collections and collaborator links are
+> retired from the active product. Current designer handoff is standalone PDF
+> export for one local collection at a time.
+
 ## Scope
 
 This checkpoint captures the current state of shared collection creation, sharing, access enforcement, and collaborator landing behavior as of 2026-03-20.

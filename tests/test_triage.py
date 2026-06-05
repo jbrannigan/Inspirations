@@ -101,13 +101,15 @@ class TestTriageStore(unittest.TestCase):
             a2 = _insert_asset(db, board="kitchen")
             a3 = _insert_asset(db, board="bathroom")
             set_triage_status(db, a1, "keeper")
-            set_triage_status(db, a2, "hidden")
+            set_triage_status(db, a2, "hidden", actor="Jim")
             set_triage_status(db, a3, "keeper", needs_annotation=1)
 
             stats = triage_stats(db)
             overall = stats["overall"]
             self.assertEqual(overall["keepers"], 2)
             self.assertEqual(overall["hidden"], 1)
+            self.assertEqual(overall["hidden_manual"], 1)
+            self.assertEqual(overall["hidden_ai_cleanup"], 0)
             self.assertEqual(overall["pending"], 0)
             self.assertEqual(overall["needs_comment"], 1)
             self.assertEqual(overall["total"], 3)
@@ -165,6 +167,32 @@ class TestTriageStore(unittest.TestCase):
             all_assets = list_assets(db, include_hidden=True)
             all_ids = {r["id"] for r in all_assets}
             self.assertIn(a1, all_ids)
+        finally:
+            db.__exit__(None, None, None)
+
+    def test_list_assets_filters_hidden_by_latest_triage_actor(self):
+        db, _ = self._make_db()
+        try:
+            ai_hidden = _insert_asset(db)
+            manual_hidden = _insert_asset(db)
+            set_triage_status(db, ai_hidden, "hidden", reason="AI cleanup", actor="ai-reel-triage")
+            set_triage_status(db, manual_hidden, "hidden", reason="manual review", actor="Jim")
+
+            ai_assets = list_assets(
+                db,
+                triage_status="hidden",
+                triage_actor="ai-reel-triage",
+                include_hidden=True,
+            )
+            manual_assets = list_assets(
+                db,
+                triage_status="hidden",
+                triage_actor="manual",
+                include_hidden=True,
+            )
+
+            self.assertEqual({r["id"] for r in ai_assets}, {ai_hidden})
+            self.assertEqual({r["id"] for r in manual_assets}, {manual_hidden})
         finally:
             db.__exit__(None, None, None)
 

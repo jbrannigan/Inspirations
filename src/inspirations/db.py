@@ -15,8 +15,9 @@ class Db:
         self._conn: sqlite3.Connection | None = None
 
     def __enter__(self) -> "Db":
-        self._conn = sqlite3.connect(self.path)
+        self._conn = sqlite3.connect(self.path, timeout=30.0)
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("pragma busy_timeout=30000;")
         self._conn.execute("pragma foreign_keys=on;")
         return self
 
@@ -986,6 +987,7 @@ def ensure_schema(db: Db) -> None:
             "hero_image_url": "text",
             "hero_image_alt": "text",
             "hero_text_excerpt": "text",
+            "media_candidates_json": "text",
         },
     )
 
@@ -1023,6 +1025,25 @@ def ensure_schema(db: Db) -> None:
         """
         create index if not exists ix_asset_source_link_qc_verdict
         on asset_source_link_qc(verdict);
+        """
+    )
+    db.exec(
+        """
+        create table if not exists asset_media_repair_audit (
+          id text primary key,
+          asset_id text not null,
+          repair_kind text not null,
+          origin_ref text,
+          stale_evidence_json text not null,
+          created_at text not null,
+          foreign key(asset_id) references assets(id) on delete cascade
+        );
+        """
+    )
+    db.exec(
+        """
+        create index if not exists ix_asset_media_repair_audit_asset
+        on asset_media_repair_audit(asset_id);
         """
     )
 

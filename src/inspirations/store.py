@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .db import Db, infer_collection_provenance
+from .feature_vectors import EXPLORER_LEGACY_SPECS, build_legacy_facet_memberships
 from .title_workflow import enrich_assets_with_title_info
 
 _SCAN_REF_RE = re.compile(r"^scan://([a-f0-9]{64})(?:#p(\d+))?$", re.IGNORECASE)
@@ -216,6 +217,99 @@ def _replace_collection_shares(db: Db, *, collection_id: str, actor_ids: list[st
 
 def _csv_values(raw: str) -> list[str]:
     return [s.strip() for s in (raw or "").split(",") if s.strip()]
+
+
+_LEGACY_CLASSIFICATION_AXES = {axis_name for axis_name, _label, _values, _weight in EXPLORER_LEGACY_SPECS}
+
+
+def _classification_filter_values(raw: object) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple, set)):
+        values: list[str] = []
+        for item in raw:
+            values.extend(_classification_filter_values(item))
+        return values
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    return [text]
+
+
+def _parse_classification_facets(
+    *,
+    classification_axis: str = "",
+    classification_value: str = "",
+    classification_filters: object = None,
+) -> dict[str, list[str]]:
+    facets: dict[str, list[str]] = {}
+
+    def add(axis: str, values: list[str]) -> None:
+        clean_axis = str(axis or "").strip().lower()
+        if not clean_axis:
+            return
+        clean_values = [str(value or "").strip() for value in values if str(value or "").strip()]
+        if clean_axis not in facets:
+            facets[clean_axis] = []
+        for value in clean_values:
+            if value not in facets[clean_axis]:
+                facets[clean_axis].append(value)
+
+    add(classification_axis, _csv_values(classification_value))
+    for raw in _classification_filter_values(classification_filters):
+        if ":" in raw:
+            axis, value = raw.split(":", 1)
+        elif "=" in raw:
+            axis, value = raw.split("=", 1)
+        else:
+            axis, value = raw, ""
+        add(axis, _csv_values(value))
+
+    return facets
+
+
+def _apply_legacy_facet_filter(
+    db: Db,
+    clauses: list[str],
+    params: list[Any],
+    legacy_facets: dict[str, list[str]],
+) -> None:
+    if not legacy_facets:
+        return
+
+    memberships = build_legacy_facet_memberships(db)
+    matching_ids: list[str] = []
+    for asset_id, axes in memberships.items():
+        matched = True
+        for axis_name, wanted_values in legacy_facets.items():
+            asset_values = axes.get(axis_name, set())
+            if wanted_values:
+                if not asset_values.intersection(wanted_values):
+                    matched = False
+                    break
+            elif not asset_values:
+                matched = False
+                break
+        if matched:
+            matching_ids.append(asset_id)
+
+    if not matching_ids:
+        clauses.append("1 = 0")
+        return
+
+    matching_ids = sorted(set(matching_ids))
+    if len(matching_ids) > 500:
+        db.exec("drop table if exists _legacy_facet_filter")
+        db.exec("create temp table _legacy_facet_filter (asset_id text primary key)")
+        db.executemany(
+            "insert into _legacy_facet_filter (asset_id) values (?)",
+            [(asset_id,) for asset_id in matching_ids],
+        )
+        clauses.append("a.id in (select asset_id from _legacy_facet_filter)")
+    else:
+        placeholders = ",".join(["?"] * len(matching_ids))
+        clauses.append(f"a.id in ({placeholders})")
+        params.extend(matching_ids)
 
 
 def _scan_ref_parts(source_ref: str) -> tuple[str, int | None] | None:
@@ -493,7 +587,9 @@ def _build_asset_filter(
     content_kind: str = "",
     creator: str = "",
     collection_id: str = "",
+    review_status: str = "",
     triage_status: str = "",
+    triage_actor: str = "",
     category: str = "",
     needs_annotation: bool = False,
     flagged_only: bool = False,
@@ -501,6 +597,7 @@ def _build_asset_filter(
     include_hidden: bool = False,
     classification_axis: str = "",
     classification_value: str = "",
+    classification_filters: object = None,
     exclude_tracks: str = "",
     viewer_role: str = "",
     viewer_actor_id: str = "",
@@ -629,55 +726,90 @@ def _build_asset_filter(
                 params.extend([actor_id, actor_id])
             else:
                 clauses.append("1 = 0")
-    axis_name = str(classification_axis or "").strip().lower()
-    axis_values = [s.strip() for s in str(classification_value or "").split(",") if s.strip()]
+    classification_facets = _parse_classification_facets(
+        classification_axis=classification_axis,
+        classification_value=classification_value,
+        classification_filters=classification_filters,
+    )
     exclude_track_values = [s.strip() for s in str(exclude_tracks or "").split(",") if s.strip()]
-    if axis_name:
+    legacy_facets = {
+        axis_name: values
+        for axis_name, values in classification_facets.items()
+        if axis_name in _LEGACY_CLASSIFICATION_AXES
+    }
+    _apply_legacy_facet_filter(db, clauses, params, legacy_facets)
+
+    sql_facets = {
+        axis_name: values
+        for axis_name, values in classification_facets.items()
+        if axis_name not in _LEGACY_CLASSIFICATION_AXES
+    }
+    for facet_idx, (axis_name, axis_values) in enumerate(sql_facets.items()):
         if axis_name == "track":
             run_id = _latest_classification_run_id(db, "track_gate")
             if not run_id:
                 clauses.append("1 = 0")
-            else:
-                now_iso = datetime.now(timezone.utc).isoformat()
-                joins.append("join asset_track_assessments ata on ata.asset_id = a.id and ata.run_id = ?")
-                join_params.append(run_id)
-                joins.append(
-                    """
-                    left join (
-                      select ao.asset_id, ao.axis_value
-                      from asset_overrides ao
-                      join (
-                        select asset_id, max(created_at) as max_created_at
-                        from asset_overrides
-                        where axis_name='track'
-                          and operation='set'
-                          and (expires_at is null or expires_at > ?)
-                        group by asset_id
-                      ) latest
-                        on latest.asset_id = ao.asset_id
-                       and latest.max_created_at = ao.created_at
-                      where ao.axis_name='track'
-                        and ao.operation='set'
-                        and (ao.expires_at is null or ao.expires_at > ?)
-                    ) ato on ato.asset_id = a.id
-                    """
+                continue
+            now_iso = datetime.now(timezone.utc).isoformat()
+            value_sql = ""
+            if axis_values:
+                value_sql = " and coalesce(ato_f{idx}.axis_value, ata_f{idx}.track) in ({placeholders})".format(
+                    idx=facet_idx,
+                    placeholders=",".join(["?"] * len(axis_values)),
                 )
-                join_params.extend([now_iso, now_iso])
-                if axis_values:
-                    clauses.append("coalesce(ato.axis_value, ata.track) in (%s)" % ",".join(["?"] * len(axis_values)))
-                    params.extend(axis_values)
+            clauses.append(
+                f"""
+                exists (
+                  select 1
+                  from asset_track_assessments ata_f{facet_idx}
+                  left join (
+                    select ao.asset_id, ao.axis_value
+                    from asset_overrides ao
+                    join (
+                      select asset_id, max(created_at) as max_created_at
+                      from asset_overrides
+                      where axis_name='track'
+                        and operation='set'
+                        and (expires_at is null or expires_at > ?)
+                      group by asset_id
+                    ) latest
+                      on latest.asset_id = ao.asset_id
+                     and latest.max_created_at = ao.created_at
+                    where ao.axis_name='track'
+                      and ao.operation='set'
+                      and (ao.expires_at is null or ao.expires_at > ?)
+                  ) ato_f{facet_idx} on ato_f{facet_idx}.asset_id = ata_f{facet_idx}.asset_id
+                  where ata_f{facet_idx}.asset_id = a.id
+                    and ata_f{facet_idx}.run_id = ?
+                    {value_sql}
+                )
+                """
+            )
+            params.extend([now_iso, now_iso, run_id, *axis_values])
         else:
             run_id = _latest_classification_run_id(db, "multi_axis_inference")
             if not run_id:
                 clauses.append("1 = 0")
-            else:
-                joins.append(
-                    "join asset_axis_memberships aam on aam.asset_id = a.id and aam.run_id = ? and aam.axis_name = ?"
+                continue
+            value_sql = ""
+            if axis_values:
+                value_sql = " and aam_f{idx}.axis_value in ({placeholders})".format(
+                    idx=facet_idx,
+                    placeholders=",".join(["?"] * len(axis_values)),
                 )
-                join_params.extend([run_id, axis_name])
-                if axis_values:
-                    clauses.append("aam.axis_value in (%s)" % ",".join(["?"] * len(axis_values)))
-                    params.extend(axis_values)
+            clauses.append(
+                f"""
+                exists (
+                  select 1
+                  from asset_axis_memberships aam_f{facet_idx}
+                  where aam_f{facet_idx}.asset_id = a.id
+                    and aam_f{facet_idx}.run_id = ?
+                    and aam_f{facet_idx}.axis_name = ?
+                    {value_sql}
+                )
+                """
+            )
+            params.extend([run_id, axis_name, *axis_values])
     if exclude_track_values:
         run_id = _latest_classification_run_id(db, "track_gate")
         if run_id:
@@ -711,6 +843,44 @@ def _build_asset_filter(
                 % ",".join(["?"] * len(exclude_track_values))
             )
             params.extend(exclude_track_values)
+    if str(review_status or "").strip() == "irrelevant_discarded":
+        run_id = _latest_classification_run_id(db, "track_gate")
+        if run_id:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            clauses.append(
+                """
+                (
+                  a.triage_status = 'hidden'
+                  or exists (
+                    select 1
+                    from asset_track_assessments atrs
+                    left join (
+                      select ao.asset_id, ao.axis_value
+                      from asset_overrides ao
+                      join (
+                        select asset_id, max(created_at) as max_created_at
+                        from asset_overrides
+                        where axis_name='track'
+                          and operation='set'
+                          and (expires_at is null or expires_at > ?)
+                        group by asset_id
+                      ) latest
+                        on latest.asset_id = ao.asset_id
+                       and latest.max_created_at = ao.created_at
+                      where ao.axis_name='track'
+                        and ao.operation='set'
+                        and (ao.expires_at is null or ao.expires_at > ?)
+                    ) otrs on otrs.asset_id = atrs.asset_id
+                    where atrs.asset_id = a.id
+                      and atrs.run_id = ?
+                      and coalesce(otrs.axis_value, atrs.track, '') = 'irrelevant'
+                  )
+                )
+                """
+            )
+            params.extend([now_iso, now_iso, run_id])
+        else:
+            clauses.append("a.triage_status = 'hidden'")
     if triage_status:
         statuses = [s.strip() for s in triage_status.split(",") if s.strip()]
         if "pending" in statuses:
@@ -726,6 +896,34 @@ def _build_asset_filter(
         else:
             clauses.append("a.triage_status in (%s)" % ",".join(["?"] * len(statuses)))
             params.extend(statuses)
+    if triage_actor:
+        actors = [s.strip() for s in triage_actor.split(",") if s.strip()]
+        actor_clauses: list[str] = []
+        if "manual" in actors:
+            actor_clauses.append("coalesce(tl.actor, '') != 'ai-reel-triage'")
+        explicit_actors = [actor for actor in actors if actor != "manual"]
+        if explicit_actors:
+            actor_clauses.append("tl.actor in (%s)" % ",".join(["?"] * len(explicit_actors)))
+            params.extend(explicit_actors)
+        if actor_clauses:
+            clauses.append(
+                """
+                exists (
+                  select 1
+                  from triage_log tl
+                  where tl.asset_id = a.id
+                    and tl.id = (
+                      select tl_latest.id
+                      from triage_log tl_latest
+                      where tl_latest.asset_id = a.id
+                      order by tl_latest.created_at desc, tl_latest.id desc
+                      limit 1
+                    )
+                    and (%s)
+                )
+                """
+                % " or ".join(actor_clauses)
+            )
     if needs_annotation:
         clauses.append("a.needs_annotation = 1")
     if flagged_only:
@@ -765,7 +963,9 @@ def list_assets(
     content_kind: str = "",
     creator: str = "",
     collection_id: str = "",
+    review_status: str = "",
     triage_status: str = "",
+    triage_actor: str = "",
     category: str = "",
     needs_annotation: bool = False,
     flagged_only: bool = False,
@@ -773,6 +973,7 @@ def list_assets(
     include_hidden: bool = False,
     classification_axis: str = "",
     classification_value: str = "",
+    classification_filters: object = None,
     exclude_tracks: str = "",
     viewer_role: str = "",
     viewer_actor_id: str = "",
@@ -782,10 +983,12 @@ def list_assets(
     join_sql, where, params = _build_asset_filter(
         db, ids=ids, q=q, source=source, board=board, label=label,
         label_mode=label_mode, media_status=media_status, content_kind=content_kind,
-        creator=creator, collection_id=collection_id, triage_status=triage_status,
+        creator=creator, collection_id=collection_id, review_status=review_status, triage_status=triage_status,
+        triage_actor=triage_actor,
         category=category, needs_annotation=needs_annotation, flagged_only=flagged_only,
         tagged_only=tagged_only, include_hidden=include_hidden,
         classification_axis=classification_axis, classification_value=classification_value,
+        classification_filters=classification_filters,
         exclude_tracks=exclude_tracks, viewer_role=viewer_role, viewer_actor_id=viewer_actor_id,
     )
 
@@ -800,7 +1003,7 @@ def list_assets(
              (select ai.summary from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1),
              a.ai_summary
            ) as ai_summary,
-           a.created_at, a.imported_at, a.image_url, a.stored_path, a.thumb_path,
+           a.created_at, a.imported_at, a.image_url, a.stored_path, a.stored_video_path, a.thumb_path,
            a.triage_status, a.needs_annotation, a.source_url, a.seo_alt_text,
            a.post_text, a.hashtags, a.engagement_json, a.dominant_color,
            a.image_width, a.image_height, a.closeup_desc,
@@ -1168,7 +1371,8 @@ def triage_stats(db: Db) -> dict[str, Any]:
             sum(case when triage_status = 'keeper' then 1 else 0 end) as keepers,
             sum(case when triage_status = 'hidden' then 1 else 0 end) as hidden,
             sum(case when triage_status is null then 1 else 0 end) as pending,
-            sum(case when needs_annotation = 1 then 1 else 0 end) as needs_comment
+            sum(case when needs_annotation = 1 then 1 else 0 end) as needs_comment,
+            sum(case when flagged = 1 then 1 else 0 end) as flagged
         from assets
         group by board
         order by count(*) desc
@@ -1181,8 +1385,31 @@ def triage_stats(db: Db) -> dict[str, Any]:
             count(*) as total,
             sum(case when triage_status = 'keeper' then 1 else 0 end) as keepers,
             sum(case when triage_status = 'hidden' then 1 else 0 end) as hidden,
+            sum(
+              case when triage_status = 'hidden'
+                     and coalesce((
+                       select tl.actor
+                       from triage_log tl
+                       where tl.asset_id = assets.id
+                       order by tl.created_at desc, tl.id desc
+                       limit 1
+                     ), '') = 'ai-reel-triage'
+                then 1 else 0 end
+            ) as hidden_ai_cleanup,
+            sum(
+              case when triage_status = 'hidden'
+                     and coalesce((
+                       select tl.actor
+                       from triage_log tl
+                       where tl.asset_id = assets.id
+                       order by tl.created_at desc, tl.id desc
+                       limit 1
+                     ), '') != 'ai-reel-triage'
+                then 1 else 0 end
+            ) as hidden_manual,
             sum(case when triage_status is null then 1 else 0 end) as pending,
-            sum(case when needs_annotation = 1 then 1 else 0 end) as needs_comment
+            sum(case when needs_annotation = 1 then 1 else 0 end) as needs_comment,
+            sum(case when flagged = 1 then 1 else 0 end) as flagged
         from assets
         """
     )

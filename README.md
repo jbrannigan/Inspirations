@@ -2,16 +2,16 @@
 
 Local-first inspiration library for home design research.
 
-Inspirations scrapes Pinterest boards and Facebook saved items directly from the browser, enriches them with AI tagging (Gemini), and provides a local curation app for triaging, organizing, and sharing design inspiration collections.
+Inspirations scrapes Pinterest boards and Facebook saved items directly from the browser, enriches them with AI tagging (Gemini), and provides Jim's local curation/QC app for triaging, organizing, exploring, and exporting designer-ready collection PDFs.
 
 ## What The Project Does
 
 1. **Scrape** — Browser-scrapes Pinterest boards and Facebook saved items, capturing rich metadata (titles, descriptions, hashtags, creator names, engagement data, high-res images)
 2. **Import** — Normalizes scraped data into a single SQLite catalog with local media storage
 3. **Tag** — Runs Gemini AI tagging for searchable labels, summaries, and embeddings
-4. **Triage** — Keeper/hidden workflow to curate collections: review items one-by-one, keep the good stuff, hide the rest
+4. **Curate** — Browse the usable corpus, optionally review focused scopes, flag or discard problem items, and build collections visually
 5. **Organize** — Natural-language collection management ("move all kitchen items to a new collection")
-6. **Share** — Export curated collections as shareable HTML with clickable source links back to Pinterest/Facebook
+6. **Export** — Export one curated collection at a time as a standalone PDF with embedded local images and visible/clickable source URLs
 
 ## Data Sources
 
@@ -75,6 +75,16 @@ For iPhone/iPad/LAN testing:
 This binds to `0.0.0.0:8001` by default so iPads/iPhones on the same LAN can
 open `http://<mac-lan-ip>:8001`.
 
+For logged, login-persistent service mode on the Mac mini:
+```sh
+./tools/inspirations_service.sh install
+./tools/inspirations_service.sh status
+./tools/inspirations_service.sh logs
+```
+This installs a user LaunchAgent named `com.jimbrannigan.inspirations` with
+`KeepAlive`, still bound to `0.0.0.0:8001`. Logs are written under
+`data/logs/` and are intentionally local-only.
+
 Behind a reverse proxy (e.g., New Home Next.js site at `/inspirations-app`):
 ```sh
 BASE_PATH=/inspirations-app PYTHONPATH=src python3 -m inspirations serve --port 8001
@@ -84,6 +94,8 @@ BASE_PATH=/inspirations-app PYTHONPATH=src python3 -m inspirations serve --port 
 
 ### Collection Browsing
 - Browse collections as tile grids showing pins, photos, PDFs, and Facebook saves
+- Click **Make Collection**, select cards, then create a new collection or add the selection to an existing one
+- When browsing exactly one collection, **Make Collection** can also remove selected cards from that collection
 - Natural-language prompt to manage collections ("take all the things from this collection and put them into that collection")
 - Filter by source, board, tags, and more
 
@@ -97,21 +109,39 @@ BASE_PATH=/inspirations-app PYTHONPATH=src python3 -m inspirations serve --port 
 - Sliders include editable numeric fields so tuning works on iPad as well as desktop
 - Broad iPad/mobile-constrained sets use `iPad lite: 2D map`; filtered subsets can switch back to 3D when the measured WebGL budget allows it
 
-### Triage Review
-- Select a collection and hit "Review" to enter triage mode
-- For each item: **Keep** (love it), **Hide** (not relevant), or **Skip** (decide later)
-- Optional "comment later" checkbox on keepers to mark items for annotation
-- Keyboard-driven for speed (arrow keys or K/S/Z shortcuts)
+### Browse and Optional Review
+- Ordinary browsing shows the usable corpus; legacy `pending` and `keeper` states do not imply that Leslie must re-review the library
+- Use **Browse → Review Status** in the sidebar to revisit keepers, flagged items, needs-comment items, or discarded/irrelevant items and restore any mistakes
+- Hit **Review** when a focused scope benefits from selection actions: keep, discard, restore, flag, or remove from the active collection
+- One-by-one review remains available for focused QC work
 
 ### Annotation
 - After triage, walk through items marked for annotation
 - Add point-based notes directly on images
 - Notes persist with the asset across collections
 
-### Share Export
-- Generate shareable HTML galleries from curated collections
-- Clickable source links back to original Pinterest pins and Facebook posts
-- Works as a standalone file — no server needed for viewing
+### Admin Maintenance
+- Open **Admin** from the app header
+- On first use, open `http://localhost:8001/app/admin.html` on the Mac and choose an admin password
+- Replacement media is applied immediately; use **Refresh Search Evidence** in Admin to retag replacement photos, rebuild semantic embeddings, and refresh Explorer classification evidence in a deliberate batch
+- Generated text cards skip visual retagging and receive text embeddings only
+
+### Collection PDF Export
+- Use **Manage Collections** to create an empty collection, rename collections, edit descriptions, archive obsolete folders, restore archived folders, or permanently delete archived folders.
+- Use **Make Collection** for the primary visual workflow: select cards from the current browse scope, then create a new collection or add them to an existing one
+- Archiving a collection folder does not hide or delete its items.
+- Select exactly one collection in the sidebar, then click **Export Collection PDF** in the persistent curation bar
+- CLI equivalent:
+```sh
+PYTHONPATH=src python3 -m inspirations export collection-pdf \
+  --collection-id <id> \
+  --out data/exports/<name>.pdf
+```
+- The exporter writes both `data/exports/<name>.md` and `data/exports/<name>.pdf`
+- Local images/previews are copied under `data/exports/<name>_media/` so the PDF does not depend on the running app or `store/`
+- Source URLs are visible and clickable, but only external `http`/`https` links are included; local app/media/store links are omitted
+- The PDF uses one item per page, with the image, source details, labels, notes, and annotation markers kept together
+- Requires local `pandoc` and `tectonic` for PDF rendering
 
 ## AI Tagging (Gemini)
 
@@ -143,18 +173,29 @@ ruff check src tests
 
 ## Current Status
 
-The scrape-first rebuild is complete. Current active work is UX refinement,
-especially Explorer filtering/grouping, iPad stability, and collaboration scope.
+The scrape-first rebuild is complete. Inspirations is a local-first corpus
+curation and QC app with browse-first collection making, optional focused
+review, Grid and Explorer views, Dave, source/media repair, annotations, and
+one-collection standalone PDF handoffs. The live collaborator/magic-link layer
+is retired from the active product; legacy schema remains for compatibility but
+is not presented in the UI. Obsolete `pins:` source-board mirrors and completed
+`Review:` workflow folders were removed after a local SQLite backup; live source
+board browsing now uses `assets.board` metadata directly.
 
 ## Future Work
 
-- **Consuming UX** — Design the viewing experience for people receiving shared collections (the decorator/designer). How they browse, filter, and interact with curated sets. See `docs/TODO_CONSUMING_UX.md`.
+- Improve PDF layout quality, ordering controls, and source-link completeness for designer handoffs.
+- Continue polishing source/media repair for Facebook and Pinterest edge cases where platform UI hides source evidence behind authenticated or lazy-loaded views.
+- Keep static HTML/portal exports as legacy/debug utilities unless intentionally revived.
 
 ## Docs
 
 - `docs/SCRAPE_REBUILD_SPEC.md` — Current implementation spec
+- `docs/CURRENT_HANDOFF.md` — Authoritative reboot/resume checkpoint
+- `docs/INSPIRATIONS_SERVICE_RUNBOOK.md` — Logged launchd service and LAN uptime runbook
 - `docs/EXPLORER_CONTROL_HANDOFF_2026-05-24.md` — Current Explorer control semantics and latest smoke-test notes
-- `docs/TODO_CONSUMING_UX.md` — Future work: shared collection viewer experience
+- `docs/COLLECTION_PDF_EXPORT_HANDOFF_2026-05-27.md` — Current PDF export and live-sharing retirement handoff
+- `docs/TODO_CONSUMING_UX.md` — Legacy consuming-UX notes, superseded by PDF handoff direction
 - `docs/archive/` — Historical documentation from the pre-rebuild system
 - `CLAUDE.md` — AI assistant guidance for working in this repo
 - `DECISIONS.md` — Architectural decision records

@@ -14,6 +14,10 @@ function keychain_read() {
   security find-generic-password -a "$USER" -s "$service" -w 2>/dev/null || true
 }
 
+function log_line() {
+  printf '[review-server-wrapper %s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"
+}
+
 cd "${ROOT_DIR}"
 
 # Always prepend this repo's src so imports work even when launched from a
@@ -33,4 +37,18 @@ echo "[review-server] db=${DB_PATH} store=${STORE_DIR}"
 echo "[review-server] gemini_key=$([[ -n \"${GEMINI_API_KEY}\" ]] && echo present || echo missing)"
 echo "[review-server] anthropic_key=$([[ -n \"${ANTHROPIC_API_KEY}\" ]] && echo present || echo missing)"
 
-exec python3 -u -m inspirations --db "${DB_PATH}" --store "${STORE_DIR}" serve --host "${HOST}" --port "${PORT}"
+log_line "starting python server"
+python3 -u -m inspirations --db "${DB_PATH}" --store "${STORE_DIR}" serve --host "${HOST}" --port "${PORT}" &
+child_pid=$!
+
+function stop_child() {
+  log_line "received stop signal; forwarding to pid=${child_pid}"
+  kill -TERM "${child_pid}" 2>/dev/null || true
+  wait "${child_pid}" 2>/dev/null || true
+}
+
+trap stop_child TERM INT
+wait "${child_pid}"
+exit_status=$?
+log_line "python server exited status=${exit_status}"
+exit "${exit_status}"

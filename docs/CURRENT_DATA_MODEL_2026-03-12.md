@@ -1,5 +1,10 @@
 # Current Data Model
 
+> Compatibility note (2026-06-03): this document accurately records legacy
+> sharing tables and columns, but they are no longer an active product surface.
+> D021 keeps them temporarily for schema compatibility while retiring live
+> collaborator UX and APIs.
+
 Date: March 12, 2026 (updated March 20, 2026 for collection sharing normalization)
 Source of truth: `/Users/minime/Projects/Inspirations/src/inspirations/db.py`
 

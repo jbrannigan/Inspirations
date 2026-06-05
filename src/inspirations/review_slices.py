@@ -246,6 +246,8 @@ def _is_low_signal_url(asset: dict[str, Any], track: dict[str, Any], ai: dict[st
 def _is_media_mismatch(asset: dict[str, Any], track: dict[str, Any], ai: dict[str, Any], source_link: dict[str, Any] | None = None) -> bool:
     if not _is_url_backed(asset):
         return False
+    if _normalize(asset.get("media_reliability", "")) == "trust_title_source":
+        return False
     payload = ai.get("payload") or {}
     if not payload and not source_link:
         return False

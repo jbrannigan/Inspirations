@@ -6,6 +6,40 @@ from inspirations import devserver
 
 
 class TestDevServer(unittest.TestCase):
+    def test_start_child_execs_fresh_python_process(self):
+        with mock.patch("inspirations.devserver.os.fork", return_value=0), \
+             mock.patch("inspirations.devserver.os.execvpe", side_effect=RuntimeError("exec called")) as execvpe:
+            with self.assertRaisesRegex(RuntimeError, "exec called"):
+                devserver._start_child(
+                    host="0.0.0.0",
+                    port=8001,
+                    db_path=Path("/tmp/inspirations.sqlite"),
+                    app_dir=Path("/tmp/app"),
+                    store_dir=Path("/tmp/store"),
+                )
+
+        args = execvpe.call_args.args
+        self.assertEqual(args[0], devserver.sys.executable)
+        self.assertEqual(
+            args[1],
+            [
+                devserver.sys.executable,
+                "-m",
+                "inspirations",
+                "--db",
+                "/tmp/inspirations.sqlite",
+                "--store",
+                "/tmp/store",
+                "serve",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8001",
+                "--app",
+                "/tmp/app",
+            ],
+        )
+
     def test_child_exited_false_when_still_running(self):
         with mock.patch("inspirations.devserver.os.waitpid", return_value=(0, 0)):
             self.assertFalse(devserver._child_exited(123))

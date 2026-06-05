@@ -16,6 +16,7 @@ from inspirations.title_audit import (
     review_title_audit_batch,
     run_title_audit,
     stage_title_audit_batch,
+    strip_facebook_engagement_prefix,
     undo_title_audit_batch,
 )
 
@@ -106,6 +107,17 @@ class TestTitleAudit(unittest.TestCase):
         got = concise_title(text)
         self.assertFalse(got.lower().endswith("over"))
         self.assertIn("red cardigan", got.lower())
+
+    def test_strip_facebook_engagement_prefix_handles_dash_separators(self):
+        title = "62K views - 1.8K reactions | Better Building Practices | Texas Signature Inspections"
+        self.assertEqual(
+            strip_facebook_engagement_prefix(title),
+            "Better Building Practices | Texas Signature Inspections",
+        )
+
+    def test_strip_facebook_engagement_prefix_keeps_normal_title_intact(self):
+        title = "A clever built-in cabinet with a charging drawer"
+        self.assertEqual(strip_facebook_engagement_prefix(title), title)
 
     def test_run_title_audit_excludes_hidden_when_requested(self):
         with tempfile.TemporaryDirectory() as td:

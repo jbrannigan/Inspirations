@@ -1,5 +1,9 @@
 # Collections UI Split Plan — Share vs Hide/Unhide
 
+> Legacy note (2026-05-27): the share/live-link half of this plan is retired.
+> Keep collection visibility/maintenance ideas only if still useful for local
+> corpus management. Current external handoff is PDF export.
+
 Date: 2026-03-12
 Project: Inspirations
 Status: Proposed UX sprint slice

@@ -17,6 +17,7 @@ from typing import Any
 from .db import Db
 from .storage import download_and_attach_originals
 from .thumbnails import generate_thumbnails
+from .title_audit import strip_facebook_engagement_prefix
 
 
 KEYWORDS = [
@@ -52,11 +53,6 @@ DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 DEFAULT_GEMINI_RECITATION_FALLBACK_MODEL = "gemini-2.0-flash"
 DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001"
 GEMINI_KEYCHAIN_SERVICE = "inspirations_gemini_api_key"
-_FACEBOOK_ENGAGEMENT_PREFIX_RE = re.compile(
-    r"^\s*(?:(?:\d[\d.,]*\s*[kmb]?)\s*"
-    r"(?:views?|reactions?|shares?|comments?|likes?|saves?)\s*(?:[·•]\s*)?){1,5}\|\s*",
-    re.IGNORECASE,
-)
 _SCAN_DOC_SUFFIX_RE = re.compile(r"(\s-\sdoc\s+\d+(?:\s+p\d+)?)\s*$", re.IGNORECASE)
 _SCAN_GENERIC_PREFIX_RE = re.compile(
     r"^(?:a|an|the|this)\s+(?:scanned?\s+)?(?:magazine\s+page|image|photo|scan|page|document)"
@@ -603,7 +599,7 @@ def _build_embedding_input_text(row: dict[str, Any]) -> str:
     for key, label in field_order:
         value = str(row.get(key) or "").strip()
         if key == "title" and source == "facebook":
-            cleaned = _FACEBOOK_ENGAGEMENT_PREFIX_RE.sub("", value).strip()
+            cleaned = strip_facebook_engagement_prefix(value)
             if cleaned:
                 value = cleaned
         if value:
@@ -825,6 +821,7 @@ def run_gemini_text_embedder(
     api_key: str,
     model: str = DEFAULT_GEMINI_EMBEDDING_MODEL,
     source: str = "",
+    asset_id: str = "",
     limit: int = 0,
     force: bool = False,
 ) -> dict[str, Any]:
@@ -840,6 +837,9 @@ def run_gemini_text_embedder(
     if source:
         clauses.append("a.source = ?")
         params.append(source)
+    if asset_id:
+        clauses.append("a.id = ?")
+        params.append(asset_id)
     if not force:
         clauses.append(
             "a.id not in (select asset_id from asset_embeddings where provider=? and model=?)"
@@ -1053,7 +1053,7 @@ def run_similarity_search(
     }
 
 
-def run_mock_labeler(db: Db, *, limit: int = 0) -> dict[str, Any]:
+def run_mock_labeler(db: Db, *, limit: int = 0, asset_id: str = "") -> dict[str, Any]:
     run_id = str(uuid.uuid4())
     db.exec(
         "insert into ai_runs (id, provider, model, created_at) values (?, ?, ?, ?)",
@@ -1061,7 +1061,8 @@ def run_mock_labeler(db: Db, *, limit: int = 0) -> dict[str, Any]:
     )
 
     rows = db.query(
-        "select id, title, board from assets order by imported_at asc"
+        "select id, title, board from assets where (?='' or id=?) order by imported_at asc",
+        (asset_id, asset_id),
     )
     attempted = 0
     labeled = 0
@@ -1109,6 +1110,7 @@ def run_gemini_image_labeler(
     model: str,
     limit: int = 0,
     source: str = "",
+    asset_id: str = "",
     image_kind: str = "thumb",
     force: bool = False,
     store_dir: Path | None = None,
@@ -1130,7 +1132,7 @@ def run_gemini_image_labeler(
         (run_id, "gemini", model, now),
     )
 
-    if preflight:
+    if preflight and not asset_id:
         store_dir = store_dir or Path("store")
         if source:
             sources = [source]
@@ -1146,6 +1148,9 @@ def run_gemini_image_labeler(
     if source:
         clauses.append("a.source = ?")
         params.append(source)
+    if asset_id:
+        clauses.append("a.id = ?")
+        params.append(asset_id)
     if not force:
         clauses.append(
             "a.id not in (select asset_id from asset_ai where provider=?)"
@@ -1279,7 +1284,7 @@ def run_gemini_image_labeler(
 def run_ai_labeler(db: Db, *, provider: str, limit: int = 0, **kwargs: Any) -> dict[str, Any]:
     provider = provider.lower()
     if provider == "mock":
-        return run_mock_labeler(db, limit=limit)
+        return run_mock_labeler(db, limit=limit, asset_id=kwargs.get("asset_id") or "")
     if provider == "gemini":
         api_key = get_gemini_api_key(str(kwargs.get("api_key") or ""))
         if not api_key:
@@ -1294,6 +1299,7 @@ def run_ai_labeler(db: Db, *, provider: str, limit: int = 0, **kwargs: Any) -> d
             model=model,
             limit=limit,
             source=kwargs.get("source") or "",
+            asset_id=kwargs.get("asset_id") or "",
             image_kind=kwargs.get("image_kind") or "thumb",
             force=bool(kwargs.get("force")),
             store_dir=kwargs.get("store_dir"),

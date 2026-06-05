@@ -1,5 +1,9 @@
 # Jim Decision Tickets (Mar 2, 2026)
 
+> Historical decision packet (2026-06-03): these tickets remain useful for the
+> ingest and video-poster decisions they record. Collaborator-access references
+> are legacy under D021.
+
 Purpose: explicit product decisions and acceptance gates for the bug-fix sprint.
 
 Status: `APPROVED BY JIM`

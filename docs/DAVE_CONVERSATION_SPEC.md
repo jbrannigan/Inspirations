@@ -1,5 +1,9 @@
 # Dave — Conversational Design Librarian
 
+> Historical design spec note (2026-06-03): Dave remains active, but any
+> collaborator-hosting or magic-link integration options in this document are
+> not current product direction under D021.
+
 **Date:** 2026-03-20
 **Status:** Draft
 **Author:** Jim + Claude
@@ -833,7 +837,9 @@ Questions often span categories — organize your response with clear sections.
 TRUST HIERARCHY (when sources conflict):
 1. Source boards — Leslie's intentional curation (highest)
 2. Human triage decisions (keeper/hidden) — durable intent
-3. Collections — "pins:" = source mirrors, "CB:" = AI-derived
+3. Collections — deliberate working subsets; "CB:" = AI-derived representative sets.
+   Historical "pins:" source mirrors are retired; browse live source boards through
+   `assets.board` metadata.
 4. AI rooms/styles — Gemini analysis, good enrichment
 5. AI labels — useful for search, lowest priority
 

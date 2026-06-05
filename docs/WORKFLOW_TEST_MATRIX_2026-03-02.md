@@ -1,5 +1,10 @@
 # Workflow Test Matrix (Mar 2, 2026)
 
+> Legacy note (2026-06-03): this matrix records the March collaborator-era
+> bug-fix sprint and is not the current acceptance matrix. Live sharing is
+> retired by D021; current verification is recorded in
+> `docs/CURRENT_HANDOFF.md`.
+
 This matrix ties known workflows to automated validation and manual checks for the bug-fix sprint.
 
 ## Automated Matrix

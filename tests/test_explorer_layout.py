@@ -161,7 +161,7 @@ class TestComputeLayout(unittest.TestCase):
         result1 = self._run(db_path, method="pca")
 
         ids = [n["id"] for n in result1["nodes"]]
-        cache_file = self.data_dir / f"{_cache_key(ids)}.json"
+        cache_file = next(self.data_dir.glob("*.json"))
         self.assertTrue(cache_file.exists(), "Cache file should be created")
 
         cached_id = ids[0]
@@ -193,7 +193,7 @@ class TestComputeLayout(unittest.TestCase):
         result1 = self._run(db_path, method="pca")
 
         ids = [n["id"] for n in result1["nodes"]]
-        cache_file = self.data_dir / f"{_cache_key(ids)}.json"
+        cache_file = next(self.data_dir.glob("*.json"))
         cached_id = ids[0]
         cache_file.write_text(
             json.dumps(
@@ -218,6 +218,13 @@ class TestComputeLayout(unittest.TestCase):
         node_titles = [n["title"] for n in result2["nodes"]]
         self.assertNotIn("sentinel", node_titles, "refresh=True should recompute")
         self.assertEqual(len(result2["nodes"]), 20)
+
+    def test_cache_key_changes_when_embedding_changes(self):
+        ids = ["a1", "a2"]
+        self.assertNotEqual(
+            _cache_key(ids, [[1.0, 0.0], [0.0, 1.0]]),
+            _cache_key(ids, [[0.5, 0.5], [0.0, 1.0]]),
+        )
 
     def test_collection_id_filtering(self):
         cid = "col-001"

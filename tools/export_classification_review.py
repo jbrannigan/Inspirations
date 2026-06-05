@@ -74,7 +74,17 @@ def _load_assets(con: sqlite3.Connection) -> dict[str, dict[str, Any]]:
           coalesce(content_kind, '') as content_kind,
           coalesce(triage_status, '') as triage_status,
           coalesce(thumb_path, '') as thumb_path,
-          coalesce(stored_path, '') as stored_path
+          coalesce(stored_path, '') as stored_path,
+          coalesce((
+            select axis_value
+            from asset_overrides
+            where asset_id=assets.id
+              and axis_name='media_reliability'
+              and operation='set'
+              and expires_at is null
+            order by created_at desc, id desc
+            limit 1
+          ), '') as media_reliability
         from assets
         """
     ).fetchall()

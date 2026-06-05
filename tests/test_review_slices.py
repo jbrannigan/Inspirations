@@ -3,6 +3,7 @@ import unittest
 from inspirations.review_slices import (
     AMBIGUOUS_LOW_SIGNAL_URL,
     AMBIGUOUS_MEDIA_LINK_MISMATCH,
+    AMBIGUOUS_MEDIA_MISMATCH,
     AMBIGUOUS_MEDIA_WEAK_THUMBNAIL,
     AMBIGUOUS_TRUE_CONTESTED,
     classify_ambiguous_review_bucket,
@@ -72,6 +73,31 @@ class TestReviewSlices(unittest.TestCase):
         self.assertEqual(bucket, AMBIGUOUS_MEDIA_WEAK_THUMBNAIL)
         self.assertEqual(suggested_track, "")
         self.assertIn("thumbnail", suggested_reason.lower())
+
+    def test_trust_title_source_suppresses_resolved_thumbnail_mismatch(self):
+        asset = {
+            "title": "Best Greige Paint Colors | Julie Blanner",
+            "board": "paint",
+            "source_ref": "https://julieblanner.com/greige-paint-colors",
+            "source_url": "",
+            "source_domain": "",
+            "media_reliability": "trust_title_source",
+        }
+        track = {
+            "track_reason": "winner=style_product_decor. scores: style_product_decor=0.08. top evidence: assets.category=home_design",
+        }
+        ai = {
+            "summary": "A portrait of a woman outdoors.",
+            "payload": {
+                "image_type": "other",
+                "tags": ["portrait", "person", "outdoor"],
+            },
+        }
+        bucket, suggested_track, suggested_reason = classify_ambiguous_review_bucket(asset, track, ai)
+        self.assertNotIn(
+            bucket,
+            {AMBIGUOUS_MEDIA_MISMATCH, AMBIGUOUS_MEDIA_LINK_MISMATCH, AMBIGUOUS_MEDIA_WEAK_THUMBNAIL},
+        )
 
     def test_media_weak_thumbnail_detects_anonymous_placeholder_avatar(self):
         asset = {

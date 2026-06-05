@@ -40,8 +40,9 @@ def _assets_has_column(db: Db, column_name: str) -> bool:
     return any(str(r["name"]) == column_name for r in rows)
 
 
-def _cache_key(asset_ids: list[str]) -> str:
-    joined = ",".join(sorted(asset_ids))
+def _cache_key(asset_ids: list[str], vectors: list[list[float]] | None = None) -> str:
+    pairs = list(zip(asset_ids, vectors or [[] for _asset_id in asset_ids]))
+    joined = json.dumps(sorted(pairs, key=lambda pair: pair[0]), separators=(",", ":"))
     return hashlib.sha256(joined.encode()).hexdigest()[:16]
 
 
@@ -315,7 +316,7 @@ def compute_layout(
         if not visible_ids:
             return {"nodes": [], "clusters": []}
 
-    cache_file = data_dir / f"{_cache_key(ids)}.json"
+    cache_file = data_dir / f"{_cache_key(ids, vectors)}.json"
     if not refresh and cache_file.exists():
         try:
             cached = json.loads(cache_file.read_text())

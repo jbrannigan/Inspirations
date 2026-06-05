@@ -7,16 +7,18 @@ import re
 import signal
 import subprocess
 import sys
+import textwrap
 import time
 import urllib.error
 import urllib.request
 import uuid
+from io import BytesIO
 from datetime import datetime, timezone
-from html import unescape
+from html import escape as html_escape, unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, unquote, urljoin, urlparse
 
 from .db import Db
 from .security import is_safe_public_url
@@ -31,8 +33,11 @@ DEFAULT_BROWSER_WAIT_MS = 1500
 USER_AGENT = "Inspirations/0.1"
 HTML_CONTENT_HINTS = ("text/html", "application/xhtml+xml", "text/plain")
 PLATFORM_WRAPPER_HOSTS = {"pinterest.com", "facebook.com"}
+HTTPS_UPGRADE_HOSTS = {"blogspot.com"}
 DEFAULT_AUTH_BROWSER_CHANNEL = "chrome"
 DEFAULT_AUTH_BROWSER_SESSION = "media-repair-auth"
+TEXT_CARD_CANDIDATE_ID = "text-card"
+DEFAULT_MAX_MEDIA_CANDIDATES = 48
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -47,6 +52,7 @@ class _HeadMetaParser(HTMLParser):
         self._title_parts: list[str] = []
         self.meta: dict[str, str] = {}
         self.links: dict[str, str] = {}
+        self.images: list[dict[str, str]] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attrs_map = {str(key or "").lower(): str(value or "") for key, value in attrs}
@@ -65,6 +71,11 @@ class _HeadMetaParser(HTMLParser):
             href = (attrs_map.get("href") or "").strip()
             if rel and href and rel not in self.links:
                 self.links[rel] = href
+            return
+        if tag == "img":
+            src = (attrs_map.get("src") or attrs_map.get("data-src") or "").strip()
+            if src:
+                self.images.append({"url": src, "alt": (attrs_map.get("alt") or "").strip()})
 
     def handle_endtag(self, tag: str) -> None:
         if str(tag or "").lower() == "title":
@@ -151,6 +162,45 @@ def _is_platform_wrapper_host(host: str) -> bool:
     if text.startswith("www."):
         text = text[4:]
     return text in PLATFORM_WRAPPER_HOSTS or any(text.endswith("." + item) for item in PLATFORM_WRAPPER_HOSTS)
+
+
+def _upgrade_known_https_url(url: str) -> str:
+    try:
+        parsed = urlparse(str(url or "").strip())
+    except Exception:
+        return str(url or "").strip()
+    host = (parsed.hostname or "").strip().lower().strip(".")
+    if parsed.scheme != "http" or not host:
+        return str(url or "").strip()
+    if host in HTTPS_UPGRADE_HOSTS or any(host.endswith("." + item) for item in HTTPS_UPGRADE_HOSTS):
+        return parsed._replace(scheme="https").geturl()
+    return str(url or "").strip()
+
+
+def _safe_external_outbound_url(value: Any) -> str:
+    url = _upgrade_known_https_url(_normalize_space(value))
+    host = _extract_domain(url)
+    if not host or _is_platform_wrapper_host(host):
+        return ""
+    if not is_safe_public_url(url, allow_http=True):
+        return ""
+    return url
+
+
+def _first_safe_external_outbound_url(raw: Any) -> str:
+    if not isinstance(raw, list):
+        return ""
+    ranked: list[tuple[int, int, str]] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            continue
+        url = _safe_external_outbound_url(item.get("url", ""))
+        if not url:
+            continue
+        label = _normalize_space(item.get("text", "")).lower()
+        ranked.append((0 if "visit site" in label else 1, index, url))
+    ranked.sort()
+    return ranked[0][2] if ranked else ""
 
 
 def _best_source_url(asset: dict[str, Any]) -> str:
@@ -276,6 +326,15 @@ def _parse_html_payload(raw_text: str, *, final_url: str) -> dict[str, Any]:
         "hero_image_url": "",
         "hero_image_alt": "",
         "hero_text_excerpt": "",
+        "media_candidates": [
+            {
+                "url": urljoin(final_url, item.get("url", "")),
+                "alt": _normalize_space(item.get("alt", "")),
+                "label": f"Page image {index + 1}",
+            }
+            for index, item in enumerate(parser.images)
+            if item.get("url")
+        ],
     }
 
 
@@ -296,6 +355,7 @@ def _parse_text_payload(raw_text: str) -> dict[str, Any]:
         "hero_image_url": "",
         "hero_image_alt": "",
         "hero_text_excerpt": "",
+        "media_candidates": [],
     }
 
 
@@ -312,6 +372,473 @@ def _stable_download_path(downloaded_path: Path, sha256: str) -> Path:
         return stable_path
     os.replace(downloaded_path, stable_path)
     return stable_path
+
+
+def _archive_and_invalidate_media_evidence(
+    db: Db,
+    *,
+    asset_id: str,
+    repair_kind: str,
+    origin_ref: str,
+    created_at: str,
+) -> dict[str, int]:
+    asset_rows = db.query(
+        """
+        select id, image_url, stored_path, thumb_path, sha256, ai_summary
+        from assets
+        where id=?
+        limit 1
+        """,
+        (asset_id,),
+    )
+    if not asset_rows:
+        raise FileNotFoundError("asset not found")
+    stale_rows = {
+        "asset": dict(asset_rows[0]),
+        "asset_ai": [dict(row) for row in db.query("select * from asset_ai where asset_id=? order by created_at, id", (asset_id,))],
+        "asset_labels": [
+            dict(row)
+            for row in db.query("select * from asset_labels where asset_id=? and source='ai' order by created_at, id", (asset_id,))
+        ],
+        "asset_embeddings": [
+            dict(row) for row in db.query("select * from asset_embeddings where asset_id=? order by created_at, id", (asset_id,))
+        ],
+        "asset_track_assessments": [
+            dict(row) for row in db.query("select * from asset_track_assessments where asset_id=? order by created_at, id", (asset_id,))
+        ],
+        "asset_axis_memberships": [
+            dict(row) for row in db.query("select * from asset_axis_memberships where asset_id=? order by created_at, id", (asset_id,))
+        ],
+        "asset_axis_evidence": [
+            dict(row) for row in db.query("select * from asset_axis_evidence where asset_id=? order by created_at, id", (asset_id,))
+        ],
+        "asset_source_link_qc": [
+            dict(row) for row in db.query("select * from asset_source_link_qc where asset_id=? order by created_at, id", (asset_id,))
+        ],
+    }
+    counts = {key: len(rows) for key, rows in stale_rows.items() if isinstance(rows, list)}
+    db.exec(
+        """
+        insert into asset_media_repair_audit
+          (id, asset_id, repair_kind, origin_ref, stale_evidence_json, created_at)
+        values (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(uuid.uuid4()),
+            asset_id,
+            repair_kind,
+            origin_ref or None,
+            json.dumps(stale_rows, ensure_ascii=True, sort_keys=True),
+            created_at,
+        ),
+    )
+    db.exec("delete from asset_ai where asset_id=?", (asset_id,))
+    db.exec("delete from asset_labels where asset_id=? and source='ai'", (asset_id,))
+    db.exec("delete from asset_embeddings where asset_id=?", (asset_id,))
+    db.exec("delete from asset_track_assessments where asset_id=?", (asset_id,))
+    db.exec("delete from asset_axis_memberships where asset_id=?", (asset_id,))
+    db.exec("delete from asset_axis_evidence where asset_id=?", (asset_id,))
+    db.exec("delete from asset_source_link_qc where asset_id=?", (asset_id,))
+    db.exec("update assets set ai_summary=null where id=?", (asset_id,))
+    _record_field_provenance(
+        db,
+        asset_id=asset_id,
+        field_name="media_evidence_status",
+        field_value=f"refresh_required:{repair_kind}",
+        origin_type="media_repair",
+        origin_ref=origin_ref,
+        actor="source_link_enrichment",
+        confidence=1.0,
+        created_at=created_at,
+    )
+    return counts
+
+
+def list_pending_media_repairs(db: Db) -> list[dict[str, str]]:
+    rows = db.query(
+        """
+        select p.asset_id, p.field_value, p.created_at,
+               coalesce(a.title, '') as title
+        from asset_field_provenance p
+        join assets a on a.id=p.asset_id
+        where p.field_name='media_evidence_status'
+          and p.is_current=1
+          and p.field_value like 'refresh_required:%'
+        order by p.created_at, p.asset_id
+        """
+    )
+    pending: list[dict[str, str]] = []
+    for row in rows:
+        status = str(row["field_value"] or "").strip()
+        pending.append(
+            {
+                "asset_id": str(row["asset_id"]),
+                "title": str(row["title"] or ""),
+                "status": status,
+                "repair_kind": status.split(":", 1)[1] if ":" in status else "",
+                "created_at": str(row["created_at"] or ""),
+            }
+        )
+    return pending
+
+
+def mark_media_repair_evidence_refreshed(
+    db: Db,
+    *,
+    asset_id: str,
+    repair_kind: str,
+    origin_ref: str,
+) -> None:
+    _record_field_provenance(
+        db,
+        asset_id=asset_id,
+        field_name="media_evidence_status",
+        field_value=f"refreshed:{repair_kind}",
+        origin_type="media_repair",
+        origin_ref=origin_ref,
+        actor="admin_refresh",
+        confidence=1.0,
+        created_at=_now_iso(),
+    )
+
+
+def _media_candidate_id(url: str) -> str:
+    digest = hashlib.sha1(str(url or "").strip().encode("utf-8", errors="ignore")).hexdigest()[:16]
+    return f"source-{digest}"
+
+
+def _media_candidate_filename_hint(url: str) -> str:
+    try:
+        name = Path(unquote(urlparse(str(url or "")).path)).stem
+    except Exception:
+        return ""
+    name = re.sub(r"\[\d+\]$", "", name)
+    name = _normalize_space(re.sub(r"[-_+]+", " ", name))
+    if len(name) < 4 or len(name) > 90 or re.fullmatch(r"[0-9a-f]{16,}", name, re.IGNORECASE):
+        return ""
+    return name[0].upper() + name[1:]
+
+
+def _normalize_media_candidates(raw: Any, *, limit: int = DEFAULT_MAX_MEDIA_CANDIDATES) -> list[dict[str, str]]:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = []
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        url = _normalize_space(item.get("url", ""))
+        if not url or url in seen or not is_safe_public_url(url, allow_http=False):
+            continue
+        seen.add(url)
+        normalized = {
+            "id": _media_candidate_id(url),
+            "kind": "post_image",
+            "label": _normalize_space(item.get("label", "")) or f"Post image {len(out) + 1}",
+            "url": url,
+            "alt": _normalize_space(item.get("alt", "")),
+            "text": _normalize_space(item.get("text", "")),
+        }
+        source_page_url = _safe_external_outbound_url(item.get("source_page_url", ""))
+        if source_page_url:
+            normalized["source_page_url"] = source_page_url
+            normalized["source_page_label"] = _normalize_space(item.get("source_page_label", "")) or "Linked source page"
+        out.append(normalized)
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
+
+
+def _media_representation_label(value: str) -> str:
+    return {
+        "generated_text_card": "Generated text card",
+        "source_image": "Source image",
+        "saved_image": "Saved image",
+    }.get(str(value or "").strip(), "Saved image")
+
+
+def _media_repair_audit_asset(raw: Any) -> dict[str, Any]:
+    try:
+        payload = json.loads(str(raw or "{}"))
+    except Exception:
+        return {}
+    asset = payload.get("asset") if isinstance(payload, dict) else None
+    return dict(asset) if isinstance(asset, dict) else {}
+
+
+def _store_media_path(raw_path: Any, *, store_dir: Path | None) -> tuple[Path, str] | None:
+    if not store_dir:
+        return None
+    try:
+        base = Path(store_dir).resolve()
+        target = Path(str(raw_path or "").strip()).resolve()
+        relative = target.relative_to(base).as_posix()
+    except Exception:
+        return None
+    if not target.is_file():
+        return None
+    return target, relative
+
+
+def _media_representation_before(db: Db, *, asset_id: str, created_at: str) -> str:
+    return str(
+        db.query_value(
+            """
+            select field_value
+            from asset_field_provenance
+            where asset_id=? and field_name='media_representation' and created_at < ?
+            order by created_at desc, id desc
+            limit 1
+            """,
+            (asset_id, created_at),
+        )
+        or ""
+    ).strip()
+
+
+def _archived_media_candidates_for_asset(
+    db: Db,
+    *,
+    asset_id: str,
+    store_dir: Path | None,
+    current_stored_path: str,
+    current_sha256: str,
+) -> list[dict[str, Any]]:
+    if not store_dir:
+        return []
+    rows = db.query(
+        """
+        select id, stale_evidence_json, created_at
+        from asset_media_repair_audit
+        where asset_id=?
+        order by created_at desc, id desc
+        """,
+        (asset_id,),
+    )
+    seen = {value for value in (current_sha256, current_stored_path) if value}
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        archived = _media_repair_audit_asset(row["stale_evidence_json"])
+        stored_path = str(archived.get("stored_path") or "").strip()
+        sha256 = str(archived.get("sha256") or "").strip()
+        store_path = _store_media_path(stored_path, store_dir=store_dir)
+        if not store_path:
+            continue
+        _target, relative = store_path
+        key = sha256 or stored_path
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        representation = _media_representation_before(
+            db,
+            asset_id=asset_id,
+            created_at=str(row["created_at"] or ""),
+        ) or "saved_image"
+        version = f"?v={quote(sha256)}" if sha256 else ""
+        candidates.append(
+            {
+                "id": f"history-{row['id']}",
+                "kind": "saved_media",
+                "label": f"Previously used: {_media_representation_label(representation)}",
+                "preview_url": f"/store/{quote(relative, safe='/')}{version}",
+                "selectable": True,
+                "current": False,
+                "representation": representation,
+            }
+        )
+    return candidates
+
+
+def _archived_media_candidate_for_asset(
+    db: Db,
+    *,
+    asset_id: str,
+    candidate_id: str,
+    store_dir: Path,
+) -> dict[str, Any] | None:
+    audit_id = str(candidate_id or "").removeprefix("history-").strip()
+    if not audit_id or audit_id == candidate_id:
+        return None
+    rows = db.query(
+        """
+        select id, stale_evidence_json, created_at
+        from asset_media_repair_audit
+        where id=? and asset_id=?
+        limit 1
+        """,
+        (audit_id, asset_id),
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    archived = _media_repair_audit_asset(row["stale_evidence_json"])
+    store_path = _store_media_path(archived.get("stored_path"), store_dir=store_dir)
+    if not store_path:
+        return None
+    target, _relative = store_path
+    representation = _media_representation_before(
+        db,
+        asset_id=asset_id,
+        created_at=str(row["created_at"] or ""),
+    ) or "saved_image"
+    return {
+        "audit_id": audit_id,
+        "stored_path": str(target),
+        "image_url": str(archived.get("image_url") or "").strip(),
+        "sha256": str(archived.get("sha256") or "").strip(),
+        "representation": representation,
+    }
+
+
+def _text_card_lines(text: str, *, width: int = 34) -> list[str]:
+    normalized = _normalize_space(text)
+    if not normalized:
+        return []
+    return textwrap.wrap(normalized, width=width, break_long_words=False, break_on_hyphens=False)[:8]
+
+
+def _text_card_svg(text: str) -> bytes:
+    lines = _text_card_lines(text)
+    line_height = 62
+    start_y = 360 - ((len(lines) - 1) * line_height // 2)
+    tspans = "".join(
+        f'<tspan x="600" y="{start_y + (index * line_height)}">{html_escape(line)}</tspan>'
+        for index, line in enumerate(lines)
+    )
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675">
+  <defs>
+    <linearGradient id="card-gradient" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0%" stop-color="#bd258d"/>
+      <stop offset="48%" stop-color="#755bd5"/>
+      <stop offset="100%" stop-color="#60c4ee"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="675" fill="url(#card-gradient)"/>
+  <text x="600" y="{start_y}" fill="#ffffff" text-anchor="middle"
+        font-family="Arial, Helvetica, sans-serif" font-size="54" font-weight="700">{tspans}</text>
+</svg>
+"""
+    return svg.encode("utf-8")
+
+
+def _text_card_png(text: str) -> bytes | None:
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        return None
+
+    width, height = 1200, 675
+    top = (189, 37, 141)
+    bottom = (96, 196, 238)
+    image = Image.new("RGB", (width, height))
+    draw = ImageDraw.Draw(image)
+    for y in range(height):
+        ratio = y / max(1, height - 1)
+        color = tuple(round(top[channel] + ((bottom[channel] - top[channel]) * ratio)) for channel in range(3))
+        draw.line((0, y, width, y), fill=color)
+
+    font = None
+    for font_path in (
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "/Library/Fonts/Arial Bold.ttf",
+        "/System/Library/Fonts/SFNS.ttf",
+    ):
+        try:
+            font = ImageFont.truetype(font_path, 54)
+            break
+        except Exception:
+            continue
+    if font is None:
+        try:
+            font = ImageFont.load_default(size=54)
+        except TypeError:
+            font = ImageFont.load_default()
+
+    lines = _text_card_lines(text)
+    multiline = "\n".join(lines)
+    spacing = 12
+    box = draw.multiline_textbbox((0, 0), multiline, font=font, spacing=spacing, align="center")
+    x = width / 2
+    y = (height - (box[3] - box[1])) / 2
+    draw.multiline_text((x, y), multiline, font=font, fill="white", anchor="ma", spacing=spacing, align="center")
+    output = BytesIO()
+    image.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
+def _promote_text_card(
+    db: Db,
+    *,
+    asset: dict[str, Any],
+    text: str,
+    store_dir: Path,
+    created_at: str,
+    run_id: str,
+) -> dict[str, Any]:
+    asset_id = str(asset.get("id") or "").strip()
+    source = str(asset.get("source") or "").strip() or "enriched"
+    if not asset_id or not _normalize_space(text):
+        raise ValueError("no source text is available for a generated text card")
+    payload = _text_card_png(text)
+    ext = ".png"
+    if payload is None:
+        payload = _text_card_svg(text)
+        ext = ".svg"
+    sha256 = hashlib.sha256(payload).hexdigest()
+    target = store_dir / "originals" / source / f"{sha256}{ext}"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        target.write_bytes(payload)
+    invalidated = _archive_and_invalidate_media_evidence(
+        db,
+        asset_id=asset_id,
+        repair_kind="generated_text_card",
+        origin_ref=run_id,
+        created_at=created_at,
+    )
+    db.exec(
+        """
+        update assets
+        set stored_path=?, sha256=?, thumb_path=null, media_status='image'
+        where id=?
+        """,
+        (str(target), sha256, asset_id),
+    )
+    _record_field_provenance(
+        db,
+        asset_id=asset_id,
+        field_name="stored_path",
+        field_value=str(target),
+        origin_type="generated_text_card",
+        origin_ref=run_id,
+        actor="source_link_enrichment",
+        confidence=1.0,
+        created_at=created_at,
+    )
+    _record_field_provenance(
+        db,
+        asset_id=asset_id,
+        field_name="media_representation",
+        field_value="generated_text_card",
+        origin_type="generated_text_card",
+        origin_ref=run_id,
+        actor="source_link_enrichment",
+        confidence=1.0,
+        created_at=created_at,
+    )
+    generate_thumbnails(db, store_dir=store_dir, source=source, limit=0)
+    return {
+        "promoted": True,
+        "stored_path": str(target),
+        "sha256": sha256,
+        "kind": "text_card",
+        "invalidated": invalidated,
+    }
 
 
 def _promote_hero_image(
@@ -334,6 +861,13 @@ def _promote_hero_image(
     )
     stable_path = _stable_download_path(tmp_path, sha256)
     stable_str = str(stable_path)
+    invalidated = _archive_and_invalidate_media_evidence(
+        db,
+        asset_id=asset_id,
+        repair_kind="source_image",
+        origin_ref=run_id,
+        created_at=created_at,
+    )
     db.exec(
         """
         update assets
@@ -353,7 +887,92 @@ def _promote_hero_image(
         confidence=0.9,
         created_at=created_at,
     )
-    return {"promoted": True, "stored_path": stable_str, "thumb_generated": False}
+    _record_field_provenance(
+        db,
+        asset_id=asset_id,
+        field_name="media_representation",
+        field_value="source_image",
+        origin_type="source_link_enrichment",
+        origin_ref=run_id,
+        actor="source_link_enrichment",
+        confidence=1.0,
+        created_at=created_at,
+    )
+    return {"promoted": True, "stored_path": stable_str, "thumb_generated": False, "invalidated": invalidated}
+
+
+def _promote_archived_media(
+    db: Db,
+    *,
+    asset: dict[str, Any],
+    archived: dict[str, Any],
+    created_at: str,
+    origin_ref: str,
+) -> dict[str, Any]:
+    asset_id = str(asset.get("id") or "").strip()
+    stored_path = str(archived.get("stored_path") or "").strip()
+    if not asset_id or not stored_path:
+        raise ValueError("previously used media is not available")
+    invalidated = _archive_and_invalidate_media_evidence(
+        db,
+        asset_id=asset_id,
+        repair_kind="restored_saved_media",
+        origin_ref=origin_ref,
+        created_at=created_at,
+    )
+    image_url = str(archived.get("image_url") or "").strip()
+    sha256 = str(archived.get("sha256") or "").strip()
+    representation = str(archived.get("representation") or "").strip() or "saved_image"
+    db.exec(
+        """
+        update assets
+        set image_url=?, stored_path=?, sha256=?, thumb_path=null, media_status='image'
+        where id=?
+        """,
+        (image_url or None, stored_path, sha256 or None, asset_id),
+    )
+    _record_field_provenance(
+        db,
+        asset_id=asset_id,
+        field_name="stored_path",
+        field_value=stored_path,
+        origin_type="media_repair_restore",
+        origin_ref=origin_ref,
+        actor="source_link_enrichment",
+        confidence=1.0,
+        created_at=created_at,
+    )
+    if image_url:
+        _record_field_provenance(
+            db,
+            asset_id=asset_id,
+            field_name="image_url",
+            field_value=image_url,
+            origin_type="media_repair_restore",
+            origin_ref=origin_ref,
+            actor="source_link_enrichment",
+            confidence=1.0,
+            created_at=created_at,
+        )
+    _record_field_provenance(
+        db,
+        asset_id=asset_id,
+        field_name="media_representation",
+        field_value=representation,
+        origin_type="media_repair_restore",
+        origin_ref=origin_ref,
+        actor="source_link_enrichment",
+        confidence=1.0,
+        created_at=created_at,
+    )
+    return {
+        "promoted": True,
+        "stored_path": stored_path,
+        "sha256": sha256,
+        "kind": "saved_media",
+        "representation": representation,
+        "invalidated": invalidated,
+    }
 
 
 def _fetch_source_page(
@@ -637,17 +1256,11 @@ def _fetch_source_page_browser(
         if profile_dir is not None:
             nav_command = ["goto", url]
         _run_playwright_cli(nav_command, session_name=session_name, timeout_s=timeout_s, profile_dir=profile_dir)
-        if wait_ms > 0:
-            _run_playwright_cli(
-                ["run-code", f"await page.waitForTimeout({int(wait_ms)});"],
-                session_name=session_name,
-                timeout_s=timeout_s,
-                profile_dir=profile_dir,
-            )
         stdout = _run_playwright_cli(
             [
                 "eval",
-                """() => {
+                """async () => {
+                  await new Promise(resolve => setTimeout(resolve, WAIT_MS_PLACEHOLDER));
                   const UI_NOISE_PATTERNS = [
                     /Remember Password/gi,
                     /Next time you log in on this browser, just click your profile picture instead of typing a password\\./gi,
@@ -678,6 +1291,61 @@ def _fetch_source_page_browser(
                   const normalizedNeedle = titleNeedle.toLowerCase().replace(/[’']/g, "'");
                   const viewportW = window.innerWidth || document.documentElement.clientWidth || 0;
                   const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
+                  const scrolledImageSnapshots = [];
+                  const collectScrolledImages = (root = null) => {
+                    const seen = new Set(scrolledImageSnapshots.map(item => item && item.src).filter(Boolean));
+                    for (const img of Array.from(document.querySelectorAll('img'))) {
+                      try {
+                        if (root && root !== document.scrollingElement && root !== document.documentElement && !root.contains(img)) continue;
+                        const rect = img.getBoundingClientRect();
+                        const src = img.currentSrc || img.src || '';
+                        if (!src || src.startsWith('data:') || seen.has(src)) continue;
+                        if (rect.width < 80 || rect.height < 80 || rect.bottom <= 0 || rect.right <= 0 || rect.top >= viewportH || rect.left >= viewportW) continue;
+                        const context = img.closest('[role="article"], article, [aria-label], [role="dialog"], div');
+                        scrolledImageSnapshots.push({
+                          src,
+                          alt: clean(img.alt || '', 240),
+                          width: Math.round(rect.width),
+                          height: Math.round(rect.height),
+                          text: clean(context ? (context.getAttribute('aria-label') || context.innerText || context.textContent || '') : '', 420),
+                        });
+                        seen.add(src);
+                      } catch (_err) {}
+                    }
+                  };
+                  if (location.hostname && location.hostname.includes('facebook.com')) {
+                    const scrollRoots = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], main, [role="main"], div'))
+                      .map(node => {
+                        try {
+                          const rect = node.getBoundingClientRect();
+                          const overflow = node.scrollHeight - node.clientHeight;
+                          const text = clean(node.innerText || node.textContent || '', 900);
+                          let score = overflow;
+                          if (titleNeedle && text.toLowerCase().includes(titleNeedle.toLowerCase())) score += 2500;
+                          if (node.getAttribute('role') === 'dialog' || node.getAttribute('aria-modal') === 'true') score += 1800;
+                          if (rect.width >= Math.min(520, viewportW * 0.45) && rect.height >= Math.min(360, viewportH * 0.45)) score += 700;
+                          if (rect.left > viewportW * 0.92 || rect.right < viewportW * 0.08) score -= 1200;
+                          return { node, overflow, score };
+                        } catch (_err) {
+                          return null;
+                        }
+                      })
+                      .filter(item => item && item.overflow > 120)
+                      .sort((a, b) => b.score - a.score);
+                    const root = scrollRoots[0] ? scrollRoots[0].node : (document.scrollingElement || document.documentElement);
+                    collectScrolledImages(root);
+                    const originalTop = root.scrollTop || 0;
+                    const step = Math.max(260, Math.round((root.clientHeight || viewportH || 700) * 0.72));
+                    for (let i = 0; i < 10; i += 1) {
+                      const before = root.scrollTop || 0;
+                      root.scrollTop = before + step;
+                      await new Promise(resolve => setTimeout(resolve, 340));
+                      collectScrolledImages(root);
+                      if ((root.scrollTop || 0) === before) break;
+                    }
+                    root.scrollTop = originalTop;
+                    await new Promise(resolve => setTimeout(resolve, 120));
+                  }
                   const containsNeedle = (node) => {
                     if (!node || !normalizedNeedle) return false;
                     const text = clean(node.textContent || '', 3000).toLowerCase().replace(/[’']/g, "'");
@@ -748,12 +1416,12 @@ def _fetch_source_page_browser(
                     .sort((a, b) => b.score - a.score);
                   const primaryRoot = anchoredRoot || (rankedRoots[0] ? rankedRoots[0].node : (document.querySelector('main, [role="main"]') || document.body));
                   const primaryText = clean(primaryRoot ? primaryRoot.innerText : ((document.body && document.body.innerText) || ''), 1600);
-                  const scoreImage = (img) => {
+                  const scoreImage = (img, minSize = 140) => {
                     try {
                       const rect = img.getBoundingClientRect();
                       const src = img.currentSrc || img.src || '';
                       if (!src || src.startsWith('data:')) return null;
-                      if (rect.width < 140 || rect.height < 140) return null;
+                      if (rect.width < minSize || rect.height < minSize) return null;
                       const area = rect.width * rect.height;
                       const centerX = rect.left + rect.width / 2;
                       const centerY = rect.top + rect.height / 2;
@@ -777,8 +1445,90 @@ def _fetch_source_page_browser(
                       return null;
                     }
                   };
-                  const images = Array.from(document.images || []).map(scoreImage).filter(Boolean).sort((a, b) => b.score - a.score);
+                  // Do not borrow a visually prominent image from an unrelated feed post.
+                  // A text-only anchored post should produce useful text evidence with no image candidate.
+                  const imageScope = primaryRoot && primaryRoot !== document.body ? primaryRoot : null;
+                  const imageNodes = imageScope ? Array.from(imageScope.querySelectorAll('img')) : [];
+                  const images = imageNodes.map(scoreImage).filter(Boolean).sort((a, b) => b.score - a.score);
                   const hero = images[0] || null;
+                  const mediaCandidates = [];
+                  const seenCandidateUrls = new Set();
+                  const pushCandidate = (item, labelPrefix = 'Post image', labelNumber = null) => {
+                    if (!item.src || seenCandidateUrls.has(item.src)) return;
+                    seenCandidateUrls.add(item.src);
+                    mediaCandidates.push({
+                      url: item.src,
+                      alt: item.alt,
+                      text: item.text,
+                      label: `${labelPrefix} ${labelNumber || mediaCandidates.length + 1}`,
+                    });
+                  };
+                  for (const item of images) {
+                    pushCandidate(item, 'Post image');
+                    if (mediaCandidates.length >= 12) break;
+                  }
+                  const primaryRect = primaryRoot && primaryRoot.getBoundingClientRect ? primaryRoot.getBoundingClientRect() : null;
+                  const isNearPrimaryPost = (rect) => {
+                    if (!primaryRect || !rect) return false;
+                    const verticalOk = rect.top >= primaryRect.top - 80 && rect.top <= primaryRect.bottom + Math.max(900, viewportH * 2.2);
+                    const centerX = rect.left + rect.width / 2;
+                    const horizontalOk = centerX >= Math.max(0, primaryRect.left - 80) && centerX <= Math.min(viewportW || 99999, primaryRect.right + 80);
+                    return verticalOk && horizontalOk;
+                  };
+                  const looksLikeCommentContext = (node) => {
+                    if (!node) return false;
+                    const label = clean(node.getAttribute && node.getAttribute('aria-label') || '', 240).toLowerCase();
+                    const text = clean(node.innerText || node.textContent || '', 420).toLowerCase();
+                    return label.includes('comment') || text.includes('reply') || text.includes('comment') || text.includes('like');
+                  };
+                  const commentImageNodes = Array.from(document.querySelectorAll('img'))
+                    .filter(img => {
+                      try {
+                        if (imageScope && imageScope.contains(img)) return false;
+                        const rect = img.getBoundingClientRect();
+                        if (!rect || rect.width < 80 || rect.height < 80) return false;
+                        if (!isNearPrimaryPost(rect)) return false;
+                        const context = img.closest('[aria-label], [role="article"], div');
+                        return looksLikeCommentContext(context);
+                      } catch (_err) {
+                        return false;
+                      }
+                    });
+                  const commentImages = commentImageNodes
+                    .map(img => scoreImage(img, 80))
+                    .filter(Boolean)
+                    .sort((a, b) => b.score - a.score);
+                  let commentCount = 0;
+                  for (const item of commentImages) {
+                    commentCount += 1;
+                    pushCandidate(item, 'Comment image', commentCount);
+                    if (mediaCandidates.length >= 12 || commentCount >= 6) break;
+                  }
+                  const scrolledImages = scrolledImageSnapshots
+                    .map((item) => ({
+                      src: item && item.src || '',
+                      alt: clean(item && item.alt || '', 240),
+                      width: Number(item && item.width || 0),
+                      height: Number(item && item.height || 0),
+                      score: Number(item && item.width || 0) * Number(item && item.height || 0),
+                      text: clean(item && item.text || '', 420),
+                    }))
+                    .filter(item => item.src && item.width >= 80 && item.height >= 80)
+                    .sort((a, b) => b.score - a.score);
+                  let scrolledCount = 0;
+                  for (const item of scrolledImages) {
+                    if (seenCandidateUrls.has(item.src)) continue;
+                    scrolledCount += 1;
+                    pushCandidate(item, 'Scrolled comment image', scrolledCount);
+                    if (mediaCandidates.length >= 12 || scrolledCount >= 8) break;
+                  }
+                  const outboundLinks = Array.from((primaryRoot || document).querySelectorAll('a[href]'))
+                    .map(link => ({
+                      url: link.href || '',
+                      text: clean(link.innerText || link.textContent || '', 160),
+                    }))
+                    .filter(item => /^https?:\\/\\//i.test(item.url))
+                    .slice(0, 60);
                   return {
                     url: location.href,
                     title: document.title || '',
@@ -787,8 +1537,10 @@ def _fetch_source_page_browser(
                     heroImageUrl: hero ? hero.src : '',
                     heroImageAlt: hero ? hero.alt : '',
                     heroText: hero ? hero.text : '',
+                    mediaCandidates,
+                    outboundLinks,
                   };
-                }""",
+                }""".replace("WAIT_MS_PLACEHOLDER", str(max(0, int(wait_ms)))),
             ],
             session_name=session_name,
             timeout_s=timeout_s,
@@ -809,6 +1561,35 @@ def _fetch_source_page_browser(
         content_hash = ""
         if text_excerpt:
             content_hash = hashlib.sha256(text_excerpt.encode("utf-8", errors="ignore")).hexdigest()
+        media_candidates = _normalize_media_candidates(payload.get("mediaCandidates", []))
+        if _is_platform_wrapper_host(_extract_domain(final_url)) and _extract_domain(final_url).endswith("pinterest.com"):
+            outbound_url = _first_safe_external_outbound_url(payload.get("outboundLinks", []))
+            if outbound_url:
+                linked = _fetch_source_page(
+                    url=outbound_url,
+                    timeout_s=timeout_s,
+                    max_bytes=DEFAULT_MAX_BYTES,
+                    max_redirects=DEFAULT_MAX_REDIRECTS,
+                    allow_http=True,
+                )
+                linked_source_url = _safe_external_outbound_url(linked.get("final_url", "")) or outbound_url
+                linked_media = [
+                    {
+                        **item,
+                        "label": " · ".join(
+                            part
+                            for part in [
+                                f"Linked page image {index + 1}",
+                                _media_candidate_filename_hint(str(item.get("url") or "")),
+                            ]
+                            if part
+                        ),
+                        "source_page_url": linked_source_url,
+                        "source_page_label": "Linked source page",
+                    }
+                    for index, item in enumerate(_normalize_media_candidates(linked.get("media_candidates", [])))
+                ]
+                media_candidates = _normalize_media_candidates([*media_candidates, *linked_media])
         return {
             "input_url": url,
             "final_url": final_url,
@@ -823,6 +1604,7 @@ def _fetch_source_page_browser(
             "hero_image_url": _normalize_space(payload.get("heroImageUrl", "")),
             "hero_image_alt": _normalize_space(payload.get("heroImageAlt", "")),
             "hero_text_excerpt": _normalize_space(payload.get("heroText", "")),
+            "media_candidates": media_candidates,
             "content_type": "browser/document",
             "http_status": 200,
             "redirect_count": 0,
@@ -858,9 +1640,9 @@ def _fetch_source_page_browser(
         detail = _normalize_space(exc.stderr or exc.stdout or str(exc))
         if profile_dir is not None and ("session" in detail.lower() or "browser" in detail.lower()):
             detail = (
-                detail
-                or f"Authenticated browser session '{session_name}' is not running. "
-                f"Start it with tools/open_media_repair_auth_browser.sh and keep it open during capture."
+                f"Candidate capture browser '{session_name}' is not running. "
+                "On the Mac, run tools/open_media_repair_auth_browser.sh, sign into Facebook in the Chrome window "
+                "if prompted, leave that window open, and try Find source media again."
             )
         return {
             "input_url": url,
@@ -1215,6 +1997,7 @@ def run_source_link_enrichment(
                     _db_text(result.get("hero_image_url")),
                     _db_text(result.get("hero_image_alt")),
                     _db_text(result.get("hero_text_excerpt")),
+                    _db_text(json.dumps(_normalize_media_candidates(result.get("media_candidates", [])), sort_keys=True)),
                     _db_text(result.get("content_type")),
                     result.get("http_status"),
                     int(result.get("redirect_count") or 0),
@@ -1257,9 +2040,9 @@ def run_source_link_enrichment(
             insert into asset_source_link_enrichment (
               id, run_id, asset_id, input_url, final_url, final_domain, canonical_url, og_image_url,
               page_title, og_title, meta_description, og_description, text_excerpt, hero_image_url,
-              hero_image_alt, hero_text_excerpt, content_type, http_status, redirect_count, truncated,
+              hero_image_alt, hero_text_excerpt, media_candidates_json, content_type, http_status, redirect_count, truncated,
               fetch_status, error, content_hash, created_at
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows_to_insert,
         )
@@ -1299,7 +2082,7 @@ def latest_source_link_enrichment_for_asset(db: Db, *, asset_id: str) -> dict[st
         """
         select run_id, input_url, final_url, final_domain, canonical_url, og_image_url,
                page_title, og_title, meta_description, og_description, text_excerpt,
-               hero_image_url, hero_image_alt, hero_text_excerpt,
+               hero_image_url, hero_image_alt, hero_text_excerpt, media_candidates_json,
                content_type, http_status, redirect_count, truncated, fetch_status, error, created_at
         from asset_source_link_enrichment
         where asset_id=?
@@ -1309,6 +2092,240 @@ def latest_source_link_enrichment_for_asset(db: Db, *, asset_id: str) -> dict[st
         (asset_id,),
     )
     return dict(rows[0]) if rows else {}
+
+
+def _generated_text_card_text(*, asset: dict[str, Any], latest: dict[str, Any]) -> str:
+    return (
+        _normalize_space(asset.get("title", ""))
+        or _normalize_space(latest.get("text_excerpt", ""))
+        or _normalize_space(asset.get("description", ""))
+    )
+
+
+def media_repair_gallery_for_asset(
+    db: Db,
+    *,
+    asset_id: str,
+    store_dir: Path | None = None,
+) -> list[dict[str, Any]]:
+    asset_rows = db.query(
+        """
+        select id, source, title, description, image_url, stored_path, thumb_path, sha256
+        from assets
+        where id=?
+        limit 1
+        """,
+        (asset_id,),
+    )
+    if not asset_rows:
+        raise FileNotFoundError("asset not found")
+    asset = dict(asset_rows[0])
+    latest = latest_source_link_enrichment_for_asset(db, asset_id=asset_id)
+    representation = str(
+        db.query_value(
+            """
+            select field_value
+            from asset_field_provenance
+            where asset_id=? and field_name='media_representation' and is_current=1
+            limit 1
+            """,
+            (asset_id,),
+        )
+        or ""
+    ).strip()
+    evidence_status = str(
+        db.query_value(
+            """
+            select field_value
+            from asset_field_provenance
+            where asset_id=? and field_name='media_evidence_status' and is_current=1
+            limit 1
+            """,
+            (asset_id,),
+        )
+        or ""
+    ).strip()
+    representation_label = _media_representation_label(representation)
+    gallery: list[dict[str, Any]] = []
+    current_preview = ""
+    current_version = str(asset.get("sha256") or "").strip()
+    current_suffix = f"&v={quote(current_version)}" if current_version else ""
+    if str(asset.get("stored_path") or "").strip():
+        current_preview = f"/media/{asset_id}?kind=original{current_suffix}"
+    elif str(asset.get("thumb_path") or "").strip():
+        current_preview = f"/media/{asset_id}?kind=thumb{current_suffix}"
+    else:
+        current_preview = str(asset.get("image_url") or "").strip()
+    if current_preview:
+        gallery.append(
+            {
+                "id": "current-media",
+                "kind": "current_media",
+                "label": f"In use: {representation_label}",
+                "preview_url": current_preview,
+                "selectable": False,
+                "current": True,
+                "representation": representation or "saved_image",
+                "representation_label": representation_label,
+                "evidence_status": evidence_status,
+            }
+        )
+    for item in _normalize_media_candidates(latest.get("media_candidates_json", "[]")):
+        gallery.append(
+            {
+                **item,
+                "preview_url": item["url"],
+                "selectable": True,
+                "current": False,
+            }
+        )
+    gallery.extend(
+        _archived_media_candidates_for_asset(
+            db,
+            asset_id=asset_id,
+            store_dir=store_dir,
+            current_stored_path=str(asset.get("stored_path") or "").strip(),
+            current_sha256=str(asset.get("sha256") or "").strip(),
+        )
+    )
+    text = _generated_text_card_text(asset=asset, latest=latest)
+    if text:
+        gallery.append(
+            {
+                "id": TEXT_CARD_CANDIDATE_ID,
+                "kind": "text_card",
+                "label": "Generated text card",
+                "text": text,
+                "selectable": True,
+                "current": False,
+            }
+        )
+    return gallery
+
+
+def promote_media_repair_candidate_for_asset(
+    db: Db,
+    *,
+    asset_id: str,
+    candidate_id: str,
+    store_dir: Path,
+    notes: str = "",
+) -> dict[str, Any]:
+    asset_rows = db.query(
+        """
+        select id, source, title, description, image_url, stored_path, thumb_path, source_url, source_ref
+        from assets
+        where id=?
+        limit 1
+        """,
+        (asset_id,),
+    )
+    if not asset_rows:
+        raise FileNotFoundError("asset not found")
+    asset = dict(asset_rows[0])
+    latest = latest_source_link_enrichment_for_asset(db, asset_id=asset_id)
+    candidate_id = str(candidate_id or "").strip()
+    if not candidate_id:
+        raise ValueError("choose source media before using it")
+    created_at = _now_iso()
+    run_id = str(latest.get("run_id") or "").strip()
+    archived = _archived_media_candidate_for_asset(
+        db,
+        asset_id=asset_id,
+        candidate_id=candidate_id,
+        store_dir=store_dir,
+    )
+    if archived:
+        origin_ref = str(archived.get("audit_id") or "").strip() or run_id
+        report = _promote_archived_media(
+            db,
+            asset=asset,
+            archived=archived,
+            created_at=created_at,
+            origin_ref=origin_ref,
+        )
+        generate_thumbnails(db, store_dir=store_dir, source=str(asset.get("source") or "").strip() or None, limit=0)
+        return {
+            "ok": True,
+            "asset_id": asset_id,
+            "candidate_id": candidate_id,
+            "kind": "saved_media",
+            "promoted": bool(report.get("promoted")),
+            "invalidated": report.get("invalidated") or {},
+            "refresh_required": ["image_tagging", "embedding", "classification"],
+            "notes": notes,
+        }
+    if candidate_id == TEXT_CARD_CANDIDATE_ID:
+        text = _generated_text_card_text(asset=asset, latest=latest)
+        report = _promote_text_card(
+            db,
+            asset=asset,
+            text=text,
+            store_dir=store_dir,
+            created_at=created_at,
+            run_id=run_id,
+        )
+        return {
+            "ok": True,
+            "asset_id": asset_id,
+            "candidate_id": candidate_id,
+            "kind": "text_card",
+            "promoted": bool(report.get("promoted")),
+            "invalidated": report.get("invalidated") or {},
+            "refresh_required": ["embedding", "classification"],
+            "notes": notes,
+        }
+    selected = next(
+        (
+            item
+            for item in _normalize_media_candidates(latest.get("media_candidates_json", "[]"))
+            if str(item.get("id") or "") == candidate_id
+        ),
+        None,
+    )
+    if not selected:
+        raise ValueError("selected source media candidate is not available")
+    report = _promote_hero_image(
+        db,
+        asset=asset,
+        hero_image_url=str(selected.get("url") or "").strip(),
+        store_dir=store_dir,
+        created_at=created_at,
+        run_id=run_id,
+    )
+    promoted_source_url = ""
+    selected_source_url = _safe_external_outbound_url(selected.get("source_page_url", ""))
+    current_source_url = str(asset.get("source_url") or "").strip()
+    if selected_source_url and (not current_source_url or _is_platform_wrapper_host(_extract_domain(current_source_url))):
+        promoted_source_url = selected_source_url
+        db.exec(
+            "update assets set source_url=?, source_domain=? where id=?",
+            (promoted_source_url, _extract_domain(promoted_source_url) or None, asset_id),
+        )
+        _record_field_provenance(
+            db,
+            asset_id=asset_id,
+            field_name="source_url",
+            field_value=promoted_source_url,
+            origin_type="media_repair_linked_page",
+            origin_ref=run_id,
+            actor="source_link_enrichment",
+            confidence=0.92,
+            created_at=created_at,
+        )
+    generate_thumbnails(db, store_dir=store_dir, source=str(asset.get("source") or "").strip() or None, limit=0)
+    return {
+        "ok": True,
+        "asset_id": asset_id,
+        "candidate_id": candidate_id,
+        "kind": "post_image",
+        "hero_image_url": str(selected.get("url") or "").strip(),
+        "promoted_source_url": promoted_source_url,
+        "promoted": bool(report.get("promoted")),
+        "invalidated": report.get("invalidated") or {},
+        "refresh_required": ["image_tagging", "embedding", "classification"],
+        "notes": notes,
+    }
 
 
 def promote_latest_hero_image_for_asset(
@@ -1562,9 +2579,9 @@ def _capture_single_asset_source_link_enrichment(
         insert into asset_source_link_enrichment (
           id, run_id, asset_id, input_url, final_url, final_domain, canonical_url, og_image_url,
           page_title, og_title, meta_description, og_description, text_excerpt, hero_image_url,
-          hero_image_alt, hero_text_excerpt, content_type, http_status, redirect_count, truncated,
+          hero_image_alt, hero_text_excerpt, media_candidates_json, content_type, http_status, redirect_count, truncated,
           fetch_status, error, content_hash, created_at
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             str(uuid.uuid4()),
@@ -1583,6 +2600,7 @@ def _capture_single_asset_source_link_enrichment(
             _db_text(result.get("hero_image_url")),
             _db_text(result.get("hero_image_alt")),
             _db_text(result.get("hero_text_excerpt")),
+            _db_text(json.dumps(_normalize_media_candidates(result.get("media_candidates", [])), sort_keys=True)),
             _db_text(result.get("content_type")),
             result.get("http_status"),
             int(result.get("redirect_count") or 0),
@@ -1602,6 +2620,7 @@ def _capture_single_asset_source_link_enrichment(
         "hero_image_url": str(result.get("hero_image_url") or ""),
         "hero_image_alt": str(result.get("hero_image_alt") or ""),
         "hero_text_excerpt": str(result.get("hero_text_excerpt") or ""),
+        "media_candidates": _normalize_media_candidates(result.get("media_candidates", [])),
         "promoted_source_url": promoted_url,
         "promoted_hero_image": promoted_hero,
     }

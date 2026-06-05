@@ -6,6 +6,16 @@ from inspirations.db import Db, ensure_schema
 
 
 class TestDbSchema(unittest.TestCase):
+    def test_source_link_enrichment_schema_includes_media_candidate_gallery(self):
+        with tempfile.TemporaryDirectory() as td:
+            with Db(Path(td) / "t.sqlite") as db:
+                ensure_schema(db)
+                columns = {
+                    str(row["name"])
+                    for row in db.query("pragma table_info(asset_source_link_enrichment)")
+                }
+        self.assertIn("media_candidates_json", columns)
+
     def test_ensure_schema_creates_v2_classification_tables(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "t.sqlite"
@@ -25,6 +35,7 @@ class TestDbSchema(unittest.TestCase):
                             'asset_axis_memberships',
                             'asset_axis_evidence',
                             'asset_overrides',
+                            'asset_media_repair_audit',
                             'asset_source_link_enrichment',
                             'asset_source_link_qc'
                           )
@@ -40,6 +51,7 @@ class TestDbSchema(unittest.TestCase):
                     "asset_axis_memberships",
                     "asset_axis_evidence",
                     "asset_overrides",
+                    "asset_media_repair_audit",
                     "asset_source_link_enrichment",
                     "asset_source_link_qc",
                 },

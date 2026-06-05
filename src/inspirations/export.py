@@ -7,6 +7,8 @@ import json
 import os
 import re
 import shutil
+import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -16,6 +18,18 @@ from .db import Db
 PORTAL_EMBED_PREVIEW_MAX_ITEMS = 180
 _SCAN_REF_RE = re.compile(r"^scan://([a-f0-9]{64})(?:#p(\d+))?$", re.IGNORECASE)
 _SCAN_DOC_RE = re.compile(r"\s-\sdoc\s+(\d+)(?:\s+p(\d+))?$", re.IGNORECASE)
+
+
+class PdfExportError(RuntimeError):
+    """Base error for collection PDF export failures."""
+
+
+class PdfToolUnavailableError(PdfExportError):
+    """Raised when required local PDF tools are unavailable."""
+
+
+class PdfRenderError(PdfExportError):
+    """Raised when the local PDF renderer fails."""
 
 
 def _looks_like_image_ref(value: str) -> bool:
@@ -682,6 +696,493 @@ def export_html_gallery(
         "source": source or None,
         "collection_id": collection_id or None,
         "limit": limit if limit > 0 else None,
+    }
+
+
+def _slugify_filename(value: str, *, fallback: str = "collection") -> str:
+    text = re.sub(r"[^a-zA-Z0-9._-]+", "-", str(value or "").strip().lower())
+    text = re.sub(r"-+", "-", text).strip("-._")
+    return text[:80] or fallback
+
+
+def _markdown_escape(value: Any) -> str:
+    text = str(value or "")
+    # Keep prose readable while avoiding accidental Markdown structure.
+    return text.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
+def _latex_escape(value: Any) -> str:
+    text = str(value or "")
+    replacements = {
+        "\\": r"\textbackslash{}",
+        "&": r"\&",
+        "%": r"\%",
+        "$": r"\$",
+        "#": r"\#",
+        "_": r"\_",
+        "{": r"\{",
+        "}": r"\}",
+        "~": r"\textasciitilde{}",
+        "^": r"\textasciicircum{}",
+    }
+    return "".join(replacements.get(ch, ch) for ch in text)
+
+
+def _latex_url_arg(value: str) -> str:
+    # \url handles normal URL punctuation, but braces terminate the TeX arg.
+    return str(value or "").replace("\\", "%5C").replace("{", "%7B").replace("}", "%7D")
+
+
+def _collection_pdf_detail_text(notes: str, description: str) -> str:
+    text = (notes or description or "").strip()
+    text = re.sub(r"\s+", " ", text)
+    if len(text) <= 320:
+        return text
+    return text[:317].rstrip() + "..."
+
+
+def _collection_pdf_image_height(
+    *,
+    title: str,
+    detail_text: str,
+    annotations: list[dict[str, Any]],
+    label_count: int,
+) -> str:
+    detail_units = 0
+    if len(title) > 110:
+        detail_units += 1
+    if detail_text:
+        detail_units += 2 if len(detail_text) > 160 else 1
+    if label_count:
+        detail_units += 1
+    if annotations:
+        detail_units += min(2, len(annotations))
+    if detail_units >= 6:
+        return "5.55in"
+    if detail_units >= 4:
+        return "5.95in"
+    if detail_units >= 2:
+        return "6.25in"
+    if detail_units >= 1:
+        return "6.45in"
+    return "6.70in"
+
+
+def _collection_pdf_labels_by_asset(db: Db, *, asset_ids: list[str]) -> dict[str, list[str]]:
+    if not asset_ids:
+        return {}
+    placeholders = ",".join(["?"] * len(asset_ids))
+    rows = db.query(
+        f"""
+        select asset_id, label
+        from asset_labels
+        where asset_id in ({placeholders})
+        order by lower(label), label
+        """,
+        tuple(asset_ids),
+    )
+    grouped: dict[str, list[str]] = {aid: [] for aid in asset_ids}
+    seen: dict[str, set[str]] = {aid: set() for aid in asset_ids}
+    for row in rows:
+        asset_id = str(row["asset_id"] or "")
+        label = str(row["label"] or "").strip()
+        key = label.casefold()
+        if not asset_id or not label or key in seen.setdefault(asset_id, set()):
+            continue
+        seen[asset_id].add(key)
+        grouped.setdefault(asset_id, []).append(label)
+    return grouped
+
+
+def _is_private_or_local_host(host: str) -> bool:
+    clean = str(host or "").strip().lower().strip("[]")
+    if not clean:
+        return True
+    if clean in {"localhost", "0.0.0.0", "::1"}:
+        return True
+    if clean.endswith(".local"):
+        return True
+    if clean.startswith("127."):
+        return True
+    if clean.startswith("10."):
+        return True
+    if clean.startswith("192.168."):
+        return True
+    parts = clean.split(".")
+    if len(parts) >= 2 and parts[0] == "172":
+        try:
+            second = int(parts[1])
+        except ValueError:
+            second = -1
+        if 16 <= second <= 31:
+            return True
+    return False
+
+
+def _external_source_url(row: dict[str, Any]) -> str:
+    for key in ("source_url", "source_ref"):
+        raw = str(row.get(key) or "").strip()
+        if not raw:
+            continue
+        parsed = urlparse(raw)
+        if parsed.scheme.lower() not in {"http", "https"}:
+            continue
+        if not parsed.netloc or _is_private_or_local_host(parsed.hostname or ""):
+            continue
+        path = parsed.path or ""
+        if path.startswith(("/api", "/media", "/store", "/app")):
+            continue
+        return raw
+    return ""
+
+
+def _collection_pdf_rows(db: Db, *, collection_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    collection_rows = db.query(
+        """
+        select id, name, description, created_at, updated_at
+        from collections
+        where id = ?
+        limit 1
+        """,
+        (collection_id,),
+    )
+    if not collection_rows:
+        raise FileNotFoundError("collection not found")
+
+    hidden_collection_id = str(
+        db.query_value("select id from collections where lower(name)='hidden' limit 1") or ""
+    )
+    params: list[Any] = [collection_id]
+    hidden_filter = ""
+    if hidden_collection_id:
+        hidden_filter = """
+          and a.id not in (
+            select h.asset_id
+            from collection_items h
+            where h.collection_id = ?
+          )
+        """
+        params.append(hidden_collection_id)
+
+    rows = db.query(
+        f"""
+        select
+          a.id,
+          a.source,
+          a.source_ref,
+          a.source_url,
+          a.source_domain,
+          a.source_name,
+          a.title,
+          a.description,
+          a.board,
+          a.notes,
+          a.image_url,
+          a.stored_path,
+          a.thumb_path,
+          a.imported_at,
+          a.media_status,
+          a.content_kind,
+          a.creator_name,
+          ci.position
+        from collection_items ci
+        join assets a on a.id = ci.asset_id
+        where ci.collection_id = ?
+          and (a.triage_status is null or a.triage_status != 'hidden')
+          {hidden_filter}
+        order by ci.position asc, a.imported_at desc
+        """,
+        tuple(params),
+    )
+    return dict(collection_rows[0]), [dict(row) for row in rows]
+
+
+def _collection_pdf_image_path(row: dict[str, Any]) -> Path | None:
+    stored_path = _existing_local_path(row.get("stored_path"))
+    if stored_path and _looks_like_image_ref(str(row.get("stored_path") or "")):
+        return stored_path
+    thumb_path = _existing_local_path(row.get("thumb_path"))
+    if thumb_path:
+        return thumb_path
+    return None
+
+
+def _write_collection_pdf_markdown(
+    *,
+    db: Db,
+    collection: dict[str, Any],
+    rows: list[dict[str, Any]],
+    markdown_path: Path,
+    media_dir: Path,
+) -> dict[str, Any]:
+    copied_preview_urls: dict[str, str] = {}
+    asset_ids = [str(row.get("id") or "").strip() for row in rows if str(row.get("id") or "").strip()]
+    annotations_by_asset = _annotations_by_asset(db, asset_ids=asset_ids)
+    labels_by_asset = _collection_pdf_labels_by_asset(db, asset_ids=asset_ids)
+    collection_name = str(collection.get("name") or "Collection").strip() or "Collection"
+    collection_description = str(collection.get("description") or "").strip()
+    exported_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    lines: list[str] = [
+        "---",
+        f'title-meta: "{collection_name.replace(chr(34), chr(39))}"',
+        "geometry: margin=0.35in",
+        "urlcolor: blue",
+        "linkcolor: blue",
+        "header-includes:",
+        r"  - \usepackage{graphicx}",
+        r"  - \usepackage{url}",
+        r"  - \usepackage{tikz}",
+        r"  - \usepackage{xcolor}",
+        r"  - \usepackage{fancyhdr}",
+        r"  - \definecolor{plateText}{HTML}{2C2825}",
+        r"  - \definecolor{plateMuted}{HTML}{5F5852}",
+        r"  - \definecolor{plateLabel}{HTML}{6B6158}",
+        r"  - \definecolor{plateRule}{HTML}{D8D4CF}",
+        r"  - \definecolor{plateChip}{HTML}{F7F4EF}",
+        r"  - \definecolor{plateChipMore}{HTML}{FBF6E8}",
+        r"  - \definecolor{markerOne}{HTML}{6F5AA8}",
+        r"  - \definecolor{markerTwo}{HTML}{C4787A}",
+        r"  - \definecolor{markerThree}{HTML}{7A9B8A}",
+        r"  - \definecolor{markerFour}{HTML}{B8860B}",
+        r"  - \definecolor{markerFive}{HTML}{5A8FC4}",
+        r"  - \setlength{\parindent}{0pt}",
+        r"  - \setlength{\parskip}{0.2em}",
+        r"  - \setlength{\footskip}{0.20in}",
+        r"  - \color{plateText}",
+        r"  - \pagestyle{fancy}",
+        r"  - \fancyhf{}",
+        r"  - \renewcommand{\headrulewidth}{0pt}",
+        r"  - \renewcommand{\footrulewidth}{0pt}",
+        r"  - \fancyfoot[C]{\fontsize{7}{8}\selectfont\color{plateMuted}\thepage}",
+        r"  - \tikzset{annotationBadge/.style={circle, draw=white, line width=0.8pt, text=white, font=\scriptsize\bfseries, inner sep=0pt, minimum size=1.55em}}",
+        r"  - \tikzset{annotationBadge1/.style={annotationBadge, fill=markerOne}, annotationBadge2/.style={annotationBadge, fill=markerTwo}, annotationBadge3/.style={annotationBadge, fill=markerThree}, annotationBadge4/.style={annotationBadge, fill=markerFour}, annotationBadge5/.style={annotationBadge, fill=markerFive}}",
+        r"  - \tikzset{labelChip/.style={draw=plateRule, fill=plateChip, rounded corners=7pt, line width=0.35pt, inner xsep=5pt, inner ysep=2pt, text=plateMuted, font=\fontsize{7}{8}\selectfont}}",
+        r"  - \tikzset{labelMoreChip/.style={labelChip, fill=plateChipMore, text=plateLabel}}",
+        r"  - \newcommand{\plateSection}[1]{\vspace{0.055in}\noindent{\color{plateRule}\rule{\linewidth}{0.35pt}}\par\vspace{0.025in}{\fontsize{7.5}{9}\selectfont\bfseries\color{plateLabel}\MakeUppercase{#1}\par}\vspace{0.012in}}",
+        r"  - \newcommand{\plateChip}[1]{\tikz[baseline=(chip.base)]{\node[labelChip] (chip) {#1};}}",
+        r"  - \newcommand{\plateMoreChip}[1]{\tikz[baseline=(chip.base)]{\node[labelMoreChip] (chip) {#1};}}",
+        "---",
+        "",
+        r"\begin{titlepage}",
+        r"\vspace*{1.0in}",
+        r"\begin{minipage}{0.88\linewidth}",
+        r"{\fontsize{9}{11}\selectfont\bfseries\color{plateLabel} INSPIRATIONS\par}",
+        r"\vspace{0.12in}",
+        r"{\color{plateRule}\rule{\linewidth}{0.7pt}\par}",
+        r"\vspace{0.24in}",
+        f"{{\\fontsize{{24}}{{28}}\\selectfont\\bfseries\\color{{plateText}} {_latex_escape(collection_name)}\\par}}",
+        r"\vspace{0.16in}",
+    ]
+    if collection_description:
+        lines.extend([
+            f"{{\\fontsize{{11}}{{15}}\\selectfont\\color{{plateMuted}} {_latex_escape(collection_description)}\\par}}",
+            r"\vspace{0.18in}",
+        ])
+    lines.extend([
+        r"{\color{plateRule}\rule{0.62\linewidth}{0.45pt}\par}",
+        r"\vspace{0.14in}",
+        f"{{\\fontsize{{9}}{{12}}\\selectfont\\color{{plateMuted}} {len(rows)} items\\par}}",
+        f"{{\\fontsize{{9}}{{12}}\\selectfont\\color{{plateMuted}} Exported {_latex_escape(exported_at)}\\par}}",
+        r"\end{minipage}",
+        r"\vfill",
+        r"{\fontsize{8}{10}\selectfont\color{plateMuted} Designer-ready collection PDF\par}",
+        r"\end{titlepage}",
+        "",
+    ])
+
+    embedded_images = 0
+    missing_images = 0
+    external_links = 0
+    missing_links = 0
+    copied_images: list[str] = []
+
+    for index, row in enumerate(rows, start=1):
+        asset_id = str(row.get("id") or "").strip()
+        title = _title_for_export(row)
+        source = _source_label(str(row.get("source") or ""))
+        board = str(row.get("board") or "").strip()
+        creator_name = str(row.get("creator_name") or "").strip()
+        notes = str(row.get("notes") or "").strip()
+        description = str(row.get("description") or "").strip()
+        detail_text = _collection_pdf_detail_text(notes, description)
+        source_url = _external_source_url(row)
+        annotations = annotations_by_asset.get(asset_id, [])
+        labels = labels_by_asset.get(asset_id, [])
+        visible_labels = labels[:12]
+        extra_label_count = max(0, len(labels) - len(visible_labels))
+        image_path = _collection_pdf_image_path(row)
+        image_height = _collection_pdf_image_height(
+            title=title,
+            detail_text=detail_text,
+            annotations=annotations,
+            label_count=len(labels),
+        )
+        meta_bits = [bit for bit in (board, source, f"by {creator_name}" if creator_name else "") if bit]
+
+        lines.extend([
+            r"\begingroup",
+            r"\setlength{\parskip}{0pt}",
+            f"\\noindent{{\\fontsize{{8}}{{10}}\\selectfont\\bfseries\\color{{plateLabel}} ITEM {index}\\par}}",
+            r"\vspace{0.018in}",
+            f"\\noindent{{\\fontsize{{14}}{{16}}\\selectfont\\bfseries\\color{{plateText}} {_latex_escape(title)}\\par}}",
+            r"\vspace{0.025in}",
+            r"\begin{minipage}{\linewidth}",
+            r"\fontsize{8}{10}\selectfont\color{plateMuted}",
+        ])
+        if meta_bits:
+            lines.append(f"{_latex_escape(' · '.join(meta_bits))}\\par")
+        lines.append(f"Collection: {_latex_escape(collection_name)}\\par")
+        lines.append(f"Item ID {_latex_escape(asset_id)}\\par")
+        if source_url:
+            external_links += 1
+            lines.append(f"\\textbf{{Source URL:}} \\url{{{_latex_url_arg(source_url)}}}\\par")
+        else:
+            missing_links += 1
+            lines.append(r"\textbf{Source URL:} No source URL available\par")
+        lines.extend([r"\end{minipage}", r"\vspace{0.07in}"])
+
+        if image_path:
+            image_url = _copy_preview_to_assets(
+                image_path,
+                assets_dir=media_dir,
+                copied_urls=copied_preview_urls,
+            )
+            embedded_images += 1
+            copied_images.append(image_url)
+            lines.extend([
+                r"\begin{center}",
+                r"\begin{tikzpicture}",
+                f"\\node[inner sep=0pt,anchor=south west] (itemimage) at (0,0) {{\\includegraphics[width=0.96\\linewidth,height={image_height},keepaspectratio]{{{image_url}}}}};",
+                r"\draw[draw=plateRule, line width=0.45pt, rounded corners=7pt] ([xshift=-6pt,yshift=-6pt]itemimage.south west) rectangle ([xshift=6pt,yshift=6pt]itemimage.north east);",
+            ])
+            if annotations:
+                lines.append(r"\begin{scope}[x={(itemimage.south east)},y={(itemimage.north west)}]")
+                for ann_idx, ann in enumerate(annotations, start=1):
+                    x = max(0.0, min(1.0, float(ann.get("x") or 0)))
+                    # App annotation coordinates are top-left based; TikZ scope is bottom-left based.
+                    y = 1.0 - max(0.0, min(1.0, float(ann.get("y") or 0)))
+                    badge_style = ((ann_idx - 1) % 5) + 1
+                    lines.append(f"\\node[annotationBadge{badge_style}] at ({x:.4f},{y:.4f}) {{{ann_idx}}};")
+                lines.append(r"\end{scope}")
+            lines.extend([
+                r"\end{tikzpicture}",
+                r"\end{center}",
+                r"\vspace{-0.09in}",
+            ])
+        else:
+            missing_images += 1
+            lines.extend([
+                r"\vspace*{2.65in}",
+                r"\begin{center}{\color{plateMuted}\emph{No local preview image available.}}\end{center}",
+                r"\vspace*{2.3in}",
+            ])
+
+        lines.append(r"\begin{minipage}{\linewidth}")
+        if detail_text:
+            detail_label = "Notes" if notes else "Description"
+            lines.append(f"\\plateSection{{{detail_label}}}")
+            lines.append(f"{{\\fontsize{{8}}{{10}}\\selectfont {_latex_escape(detail_text)}\\par}}")
+
+        if visible_labels:
+            lines.append(r"\plateSection{Labels}")
+            label_parts = [
+                f"\\plateChip{{{_latex_escape(label)}}}\\allowbreak\\hspace{{0.035in}}"
+                for label in visible_labels
+            ]
+            if extra_label_count:
+                label_parts.append(f"\\plateMoreChip{{+{extra_label_count} more}}")
+            lines.append("".join(label_parts) + r"\par")
+
+        if annotations:
+            lines.append(r"\plateSection{Annotations}")
+            for ann_idx, ann in enumerate(annotations, start=1):
+                ann_text = str(ann.get("text") or "").strip() or "No text"
+                ann_text = _collection_pdf_detail_text(ann_text, "")
+                lines.append(f"{{\\fontsize{{8}}{{10}}\\selectfont\\textbf{{\\#{ann_idx}}} {_latex_escape(ann_text)}\\par}}")
+
+        lines.extend([r"\end{minipage}", r"\par", r"\endgroup", ""])
+
+        if index != len(rows):
+            lines.extend(["\\newpage", ""])
+
+    markdown_path.write_text("\n".join(lines), encoding="utf-8")
+    return {
+        "markdown_path": str(markdown_path),
+        "media_dir": str(media_dir),
+        "embedded_images": embedded_images,
+        "missing_images": missing_images,
+        "external_links": external_links,
+        "missing_links": missing_links,
+        "copied_images": sorted(set(copied_images)),
+    }
+
+
+def _render_markdown_pdf(*, markdown_path: Path, out_path: Path) -> None:
+    pandoc = shutil.which("pandoc")
+    tectonic = shutil.which("tectonic")
+    missing = [name for name, path in (("pandoc", pandoc), ("tectonic", tectonic)) if not path]
+    if missing:
+        raise PdfToolUnavailableError(f"Missing PDF tool(s): {', '.join(missing)}")
+    markdown_dir = markdown_path.parent.resolve()
+    cmd = [
+        str(pandoc),
+        str(markdown_path.name),
+        "--resource-path",
+        ".",
+        "--pdf-engine=tectonic",
+        "-o",
+        str(out_path),
+    ]
+    try:
+        completed = subprocess.run(cmd, check=False, capture_output=True, text=True, cwd=markdown_dir)
+    except OSError as exc:
+        raise PdfRenderError(f"PDF renderer failed to start: {exc}") from exc
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise PdfRenderError(detail or f"pandoc exited with status {completed.returncode}")
+
+
+def export_collection_pdf(
+    db: Db,
+    *,
+    collection_id: str,
+    out_path: Path | None = None,
+    render_pdf: bool = True,
+) -> dict[str, Any]:
+    """Generate a standalone designer-facing PDF for a single collection."""
+    collection_id = str(collection_id or "").strip()
+    if not collection_id:
+        raise ValueError("collection_id required")
+    collection, rows = _collection_pdf_rows(db, collection_id=collection_id)
+    collection_name = str(collection.get("name") or "Collection").strip() or "Collection"
+    if out_path is None:
+        out_path = Path("data") / "exports" / f"{_slugify_filename(collection_name)}.pdf"
+    out_path = out_path.expanduser().resolve()
+    if out_path.suffix.lower() != ".pdf":
+        out_path = out_path.with_suffix(".pdf")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path = out_path.with_suffix(".md")
+    media_dir = _prepare_preview_assets_dir(out_path=out_path)
+    source_report = _write_collection_pdf_markdown(
+        db=db,
+        collection=collection,
+        rows=rows,
+        markdown_path=markdown_path,
+        media_dir=media_dir,
+    )
+    if render_pdf:
+        _render_markdown_pdf(markdown_path=markdown_path, out_path=out_path)
+
+    return {
+        "ok": True,
+        "path": str(out_path),
+        "markdown_path": str(markdown_path),
+        "media_dir": str(media_dir),
+        "collection_id": collection_id,
+        "collection_name": collection_name,
+        "exported_assets": len(rows),
+        "rendered_pdf": bool(render_pdf),
+        **source_report,
     }
 
 

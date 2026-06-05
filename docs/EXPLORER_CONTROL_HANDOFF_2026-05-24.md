@@ -32,7 +32,7 @@ Changed files:
   - `setFilter()` and `setSearch()` now rebuild the visible node set instead of dimming non-matching nodes.
 - `app/styles.css`
   - Added compact `Group by` select and `Clear grouping` button styling.
-  - Moved Explorer controls into the top stats toolbar instead of a floating canvas overlay.
+  - Moved Explorer controls into the toolbar instead of a floating canvas overlay.
   - Increased chip contrast and added a panel background for the toolbar-mounted
     Categories drawer.
 - `app/app.js`
@@ -87,7 +87,10 @@ The 2D attractor map still has the older category pill/filter-group control mode
 
 ## Follow-up update
 
-A later UX pass moved the Explorer controls into the top stats toolbar, removed the duplicate card-view `Categories` mini-panel, and clarified the lazy-loading count wording from `120 of 4666 items` to `120 loaded of 4666 items`.
+A later UX pass moved the Explorer controls into the shared persistent curation
+bar, removed the duplicate card-view `Categories` mini-panel, and clarified the
+lazy-loading count wording from `120 of 4666 items` to `120 loaded of 4666
+items`.
 
 ## Follow-up update - 2026-05-25
 
@@ -201,3 +204,43 @@ Latest smoke:
 - Opening `Categories` and selecting `Pinterest` updated the hint to
   `iPad lite: 2D map (3766 items)`.
 - The top stats text also updated to `3766 items`.
+
+## Follow-up update - 2026-05-26, sidebar Refine By facets
+
+Jim reported that `Style` values such as `Mission` had effectively vanished:
+Explorer had a `Style Family` category, but the sidebar did not expose the same
+dimension, and both Explorer drawers and the sidebar had been silently clipping
+some groups to a top-N subset.
+
+Implemented:
+
+- Sidebar `Classification` is now `Refine By`.
+- Refine By choices are stackable filters, not exclusive browse scopes.
+  Source/board/collection scope can remain active while Room, Style, Material,
+  Color, etc. are layered on top.
+- Backend `/api/assets` and `/api/asset-ids` now accept repeated
+  `facet=axis:value` params:
+  - values within one axis are OR
+  - different axes are AND
+  - legacy `classification_axis` / `classification_value` still works
+- `Style`, `Materials`, and `Colors` now appear in the sidebar using the same
+  legacy metadata extraction as Explorer.
+- `Spanish / Mission` is the display label for the canonical `spanish` style.
+- Explorer category drawers now show all available chips in each category
+  instead of silently slicing to a hidden top-N.
+
+Current cache versions:
+
+- `styles.css?v=61`
+- `attractor-explorer.js?v=16`
+- `app.js?v=117`
+- lazy `attractor-explorer-3d.js?v=60`
+
+Latest smoke:
+
+- Browser sidebar showed `Refine By`, `Style`, `Materials`, and `Colors`.
+- Expanded `Style` and confirmed all 20 style chips were visible, including
+  `Spanish / Mission`.
+- Toggled `Kitchen` and `Spanish / Mission`; the summary showed
+  `Refine: Kitchen, Spanish / Mission` and both leaves stayed active.
+- `Clear filters` removed both active facet selections.

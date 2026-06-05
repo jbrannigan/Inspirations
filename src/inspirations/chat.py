@@ -72,8 +72,8 @@ She saved items to boards intentionally. Board assignments always take precedenc
 AI tags when they conflict.
 2. Human review and triage decisions — Jim/Leslie decisions made in the app are durable \
 intent signals and should not be overridden casually.
-3. Collections — "pins:" prefix = mirrored source boards. "CB:" prefix = AI-derived \
-representative groupings built from high-confidence descriptions/tagging for creative-brief \
+3. Collections — "CB:" prefix = AI-derived representative groupings built from \
+high-confidence descriptions/tagging for creative-brief \
 themes (e.g., "CB: Kitchen", "CB: Master Bath"). These are useful starting points, but \
 they are not deliberate human-curated highest-intent selections.
 4. AI-assigned rooms/styles — Gemini analyzed the images and tagged rooms, styles, \
@@ -102,8 +102,9 @@ Organization:
 - Clip subtypes under source=scan: scan, photo, video (use content_kind filter for subtype)
 - Dimensions: room (kitchen, bathroom, bedroom…), style (modern, farmhouse…), \
 magazine, other (non-home items like exercise, food, workout)
-- Collections are subsets. "pins:" prefix = mirrored source boards. "CB:" prefix = \
-AI-derived representative sets for creative-brief themes.
+- Collections are deliberate working subsets. "CB:" prefix = AI-derived representative \
+sets for creative-brief themes. Browse source boards through assets.board metadata, not \
+through historical mirror collections.
 - Most items have AI labels (rooms, styles, materials, colors) from Gemini image analysis. \
 The AI description is often more useful than the original pin title.
 
