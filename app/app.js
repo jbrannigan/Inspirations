@@ -107,6 +107,7 @@ const PHONE_ASSETS_PAGE_SIZE = 80;
 const AUTO_LOAD_MORE_MARGIN_PX = 3600;
 let _autoLoadMoreRaf = 0;
 let _autoLoadMoreObservers = [];
+const COLLECTION_BUILD_PENDING_TOAST_KEY = "inspirations.collectionBuildPendingToast";
 
 function _detectAssetsPageSize() {
   const vw = Math.max(0, window.innerWidth || 0);
@@ -3849,7 +3850,7 @@ function setCollectionFilter(collectionId) {
   }
   state.offset = 0;
   renderCatalogTree();
-  loadAssets();
+  return loadAssets();
 }
 
 function closeCollectionBuildModal() {
@@ -3898,6 +3899,24 @@ function openCollectionBuildModal(mode) {
   if (showNew) $("#collectionBuildName")?.focus();
 }
 
+async function finishCollectionBuildAndShowCollection(collectionId, collectionName, itemCount, actionLabel) {
+  const safeCollectionId = String(collectionId || "").trim();
+  if (!safeCollectionId) throw new Error("Collection id missing from response");
+  const safeName = String(collectionName || "collection").trim() || "collection";
+  const message = `${actionLabel} "${safeName}" with ${itemCount} item${itemCount === 1 ? "" : "s"}. Showing that collection now.`;
+  try {
+    window.sessionStorage?.setItem(COLLECTION_BUILD_PENDING_TOAST_KEY, message);
+  } catch {
+    // Navigation still provides the important feedback even if sessionStorage is unavailable.
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.set("collection_id", safeCollectionId);
+  url.searchParams.delete("item_id");
+  url.searchParams.delete("open");
+  url.searchParams.delete("q");
+  window.location.assign(url.toString());
+}
+
 async function addSelectedToNewCollection() {
   const ids = Array.from(state.canvasSelected);
   const name = String($("#collectionBuildName")?.value || "").trim();
@@ -3909,7 +3928,11 @@ async function addSelectedToNewCollection() {
     return;
   }
   const btn = $("#collectionBuildCreate");
-  if (btn) btn.disabled = true;
+  const originalText = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Creating…";
+  }
   try {
     const data = await api("/api/collections", {
       method: "POST",
@@ -3917,14 +3940,14 @@ async function addSelectedToNewCollection() {
     });
     const collection = data?.collection || {};
     await addAssetsToCollections(ids, [collection.id]);
-    await refreshSidebarTrees();
-    closeCollectionBuildModal();
-    clearCanvasSelection();
-    Shared.showToast(`Created "${name}" with ${ids.length} item${ids.length === 1 ? "" : "s"}.`, { type: "success" });
+    await finishCollectionBuildAndShowCollection(collection.id, name, ids.length, "Created");
   } catch (e) {
     Shared.showToast(`Collection creation failed: ${formatApiError(e)}`, { type: "error" });
   } finally {
-    if (btn) btn.disabled = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = originalText || "Create and add selected";
+    }
   }
 }
 
@@ -3934,17 +3957,21 @@ async function addSelectedToExistingCollection() {
   if (!ids.length || !collectionId) return;
   const collection = (state.collections || []).find((row) => row.id === collectionId) || null;
   const btn = $("#collectionBuildAdd");
-  if (btn) btn.disabled = true;
+  const originalText = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Adding…";
+  }
   try {
     await addAssetsToCollections(ids, [collectionId]);
-    await refreshSidebarTrees();
-    closeCollectionBuildModal();
-    clearCanvasSelection();
-    Shared.showToast(`Added ${ids.length} item${ids.length === 1 ? "" : "s"} to "${collection?.name || "collection"}".`, { type: "success" });
+    await finishCollectionBuildAndShowCollection(collectionId, collection?.name || "collection", ids.length, "Added");
   } catch (e) {
     Shared.showToast(`Add failed: ${formatApiError(e)}`, { type: "error" });
   } finally {
-    if (btn) btn.disabled = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = originalText || "Add selected";
+    }
   }
 }
 
@@ -8720,6 +8747,17 @@ function clearAllActiveFilters() {
   loadAssets();
 }
 
+function showPendingCollectionBuildToast() {
+  let message = "";
+  try {
+    message = String(window.sessionStorage?.getItem(COLLECTION_BUILD_PENDING_TOAST_KEY) || "").trim();
+    window.sessionStorage?.removeItem(COLLECTION_BUILD_PENDING_TOAST_KEY);
+  } catch {
+    message = "";
+  }
+  if (message) Shared.showToast(message, { type: "success", duration: 4200 });
+}
+
 function updateFilterIndicator() {
   const bar = $("#filterSummary");
   const text = $("#filterSummaryText");
@@ -9408,6 +9446,7 @@ function applyRoleVisibility() {
     applyCollectionScopeFromUrl();
     _applyCollaboratorCollectionsDefaultScope();
     await loadAssets();
+    showPendingCollectionBuildToast();
     await Promise.all([facetsPromise, catalogTreePromise]);
     const viewFromUrl = _readViewModeFromUrl();
     let preferredView = viewFromUrl || _readViewModePref();

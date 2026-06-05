@@ -3510,7 +3510,15 @@ class TestServerApi(unittest.TestCase):
         self.assertIn(b"enterCollectionBuild({ initialSelectionId: a.id })", app_js)
         self.assertIn(b"Collection selection started. Choose more cards", app_js)
         self.assertIn(b"function handleCollectionBuildLaunchClick", app_js)
+        self.assertIn(b"function finishCollectionBuildAndShowCollection", app_js)
+        self.assertIn(b"COLLECTION_BUILD_PENDING_TOAST_KEY", app_js)
+        self.assertIn(b"showPendingCollectionBuildToast", app_js)
         self.assertIn(b'openCollectionBuildModal("new")', app_js)
+        self.assertIn(b"Showing that collection now.", app_js)
+        self.assertIn(b'url.searchParams.set("collection_id", safeCollectionId);', app_js)
+        self.assertIn(b"window.location.assign(url.toString());", app_js)
+        self.assertIn(b"Creating", app_js)
+        self.assertIn(b"Adding", app_js)
         self.assertIn(b"Create Collection (", app_js)
         self.assertNotIn(b"if (state.canvasCollectionBuild) {\n      toggleCanvasSelection(a.id, el);\n      return;\n    }", app_js)
 
@@ -3535,7 +3543,7 @@ class TestServerApi(unittest.TestCase):
         self.assertIn(b'id="addMedia" class="header-btn"', html)
         self.assertIn(b'class="header-btn adminLink"', html)
         self.assertIn(b"/app/styles.css?v=96", html)
-        self.assertIn(b"/app/app.js?v=175", html)
+        self.assertIn(b"/app/app.js?v=181", html)
 
         req = urllib.request.Request(f"{self.base_url}/app/styles.css", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
