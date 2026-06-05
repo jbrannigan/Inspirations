@@ -2130,7 +2130,8 @@ function buildCard(a) {
     ? '<button class="card-quick-restore" title="Restore to ordinary browsing" type="button">Restore</button>'
     : "";
 
-  const selectedClass = (state.canvasReview || state.canvasCollectionBuild) && state.canvasSelected.has(a.id) ? " canvas-selected" : "";
+  const isSelectionMode = state.canvasReview || state.canvasCollectionBuild;
+  const selectedClass = isSelectionMode && state.canvasSelected.has(a.id) ? " canvas-selected" : "";
   const discardedClass = ts === "hidden" ? " discarded" : "";
   el.className = "card" + discardedClass + selectedClass;
 
@@ -2144,7 +2145,7 @@ function buildCard(a) {
 
   el.innerHTML = `
     <div class="card-image">
-      <div class="card-checkbox"></div>
+      <button class="card-checkbox" type="button" aria-label="${escapeHtml(isSelectionMode ? "Toggle selected item" : "Select for collection")}" title="${escapeHtml(isSelectionMode ? "Toggle selected item" : "Select for collection")}"></button>
       ${mediaHtml}
       ${badgeHtml}
       <span class="source-badge source-${escapeHtml(a.source || "")}">${escapeHtml(sourceLabel)}</span>
@@ -2176,7 +2177,10 @@ function buildCard(a) {
   if (checkbox) {
     checkbox.addEventListener("click", (e) => {
       e.stopPropagation();
-      if (!state.canvasReview && !state.canvasCollectionBuild) return;
+      if (!state.canvasReview && !state.canvasCollectionBuild) {
+        enterCollectionBuild({ initialSelectionId: a.id });
+        return;
+      }
       toggleCanvasSelection(a.id, el);
     });
   }
@@ -6931,22 +6935,27 @@ function updateCollectionBuildSelectionCount() {
   }
 }
 
-function enterCollectionBuild() {
+function enterCollectionBuild(options = {}) {
   if (!state.assets.length) {
     Shared.showToast("No items are visible to add to a collection.", { type: "info" });
     return;
   }
+  const initialSelectionId = String(options?.initialSelectionId || "").trim();
   if (state.canvasReview) exitCanvasReview();
   if (isExplorerViewActive()) setViewMode("grid", { persist: false });
   state.canvasCollectionBuild = true;
   state.canvasSelected.clear();
+  if (initialSelectionId) state.canvasSelected.add(initialSelectionId);
   $("#browseView")?.classList.add("canvas-selection-active");
   const bar = $("#collectionBuildBar");
   if (bar) bar.hidden = false;
   $("#collectionBuildBtn")?.classList.add("active");
   updateCollectionBuildSelectionCount();
   renderGrid();
-  Shared.showToast("Select cards to add to a collection.", { type: "info", duration: 2200 });
+  Shared.showToast(
+    initialSelectionId ? "Collection selection started. Choose more cards, then create or add to a collection." : "Select cards to add to a collection.",
+    { type: "info", duration: initialSelectionId ? 3200 : 2200 }
+  );
 }
 
 function exitCollectionBuild() {

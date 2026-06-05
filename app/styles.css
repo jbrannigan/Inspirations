@@ -2433,15 +2433,28 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border: 2px solid rgba(255,255,255,0.8);
   background: rgba(0,0,0,0.3);
   cursor: pointer;
-  display: none;
+  display: grid;
   place-items: center;
   z-index: 5;
-  transition: background 0.12s, border-color 0.12s;
+  opacity: 0.42;
+  transition: background 0.12s, border-color 0.12s, opacity 0.12s, transform 0.12s;
 }
-.canvas-selection-active .card-checkbox { display: grid; }
+.card:hover .card-checkbox,
+.card:focus-within .card-checkbox,
+.canvas-selection-active .card-checkbox {
+  opacity: 1;
+}
+.card-checkbox:hover,
+.card-checkbox:focus-visible {
+  background: rgba(184,134,11,0.84);
+  border-color: #fff;
+  outline: none;
+  transform: scale(1.04);
+}
 .card.canvas-selected .card-checkbox {
   background: var(--accent);
   border-color: var(--accent);
+  opacity: 1;
 }
 .card.canvas-selected .card-checkbox::after {
   content: "✓";
