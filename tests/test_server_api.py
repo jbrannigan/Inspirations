@@ -3516,6 +3516,32 @@ class TestServerApi(unittest.TestCase):
         self.assertIn(b".card:hover .card-checkbox", styles)
         self.assertIn(b"opacity: 0.42", styles)
 
+    def test_frontend_topbar_actions_are_available_until_mode_active(self):
+        status, html, _ = self._raw_request("/")
+        self.assertEqual(status, 200)
+        self.assertIn(b'id="collectionBuildBtn" class="collection-build-launch-btn"', html)
+        self.assertIn(b'id="reviewBtn" class="review-launch-btn"', html)
+        self.assertIn(b'id="addMedia" class="header-btn"', html)
+        self.assertIn(b'class="header-btn adminLink"', html)
+        self.assertIn(b"/app/styles.css?v=95", html)
+        self.assertIn(b"/app/app.js?v=172", html)
+
+        req = urllib.request.Request(f"{self.base_url}/app/styles.css", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            styles = resp.read()
+        self.assertIn(b".header-actions .header-btn", styles)
+        self.assertIn(b".header-actions .review-launch-btn", styles)
+        self.assertIn(b".header-actions .review-launch-btn.active", styles)
+        self.assertIn(b".header-actions .collection-build-launch-btn.active", styles)
+        self.assertIn(b".header-actions .header-btn:disabled", styles)
+
+        req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            app_js = resp.read()
+        self.assertIn(b"function syncTopbarModeButtons", app_js)
+        self.assertIn(b'$("#reviewBtn")?.classList.toggle("active", isReviewModeActive());', app_js)
+        self.assertIn(b'$("#collectionBuildBtn")?.classList.toggle("active", !!state.canvasCollectionBuild);', app_js)
+
     def test_detail_modal_exposes_consistent_curation_controls(self):
         status, html, _ = self._raw_request("/")
         self.assertEqual(status, 200)

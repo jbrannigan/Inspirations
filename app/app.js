@@ -6149,6 +6149,7 @@ async function enterReview(options = {}) {
   state.reviewHidden = 0;
   state.reviewSnapshotTotal = reviewItems.length;
   state.reviewScopeTotal = Number(reviewData?.scopeTotal || reviewItems.length);
+  syncTopbarModeButtons();
 
   const browseView = $("#browseView");
   const reviewView = $("#reviewView");
@@ -6175,6 +6176,7 @@ async function enterReview(options = {}) {
 
 function exitReview() {
   state.view = "browse";
+  syncTopbarModeButtons();
   const browseView = $("#browseView");
   const reviewView = $("#reviewView");
   if (browseView) browseView.hidden = false;
@@ -6844,6 +6846,7 @@ function enterCanvasReview() {
   }
   state.canvasReview = true;
   state.canvasSelected.clear();
+  syncTopbarModeButtons();
 
   const browseView = $("#browseView");
   if (browseView) {
@@ -6872,6 +6875,7 @@ function enterCanvasReview() {
 function exitCanvasReview() {
   state.canvasReview = false;
   state.canvasSelected.clear();
+  syncTopbarModeButtons();
 
   const browseView = $("#browseView");
   if (browseView) {
@@ -6945,11 +6949,11 @@ function enterCollectionBuild(options = {}) {
   if (isExplorerViewActive()) setViewMode("grid", { persist: false });
   state.canvasCollectionBuild = true;
   state.canvasSelected.clear();
+  syncTopbarModeButtons();
   if (initialSelectionId) state.canvasSelected.add(initialSelectionId);
   $("#browseView")?.classList.add("canvas-selection-active");
   const bar = $("#collectionBuildBar");
   if (bar) bar.hidden = false;
-  $("#collectionBuildBtn")?.classList.add("active");
   updateCollectionBuildSelectionCount();
   renderGrid();
   Shared.showToast(
@@ -6964,7 +6968,7 @@ function exitCollectionBuild() {
   $("#browseView")?.classList.remove("canvas-selection-active");
   const bar = $("#collectionBuildBar");
   if (bar) bar.hidden = true;
-  $("#collectionBuildBtn")?.classList.remove("active");
+  syncTopbarModeButtons();
   $$(".card.canvas-selected").forEach((card) => card.classList.remove("canvas-selected"));
   updateCollectionBuildSelectionCount();
 }
@@ -9201,6 +9205,11 @@ function isReviewModeActive() {
   return state.view === "review" || !!state.canvasReview;
 }
 
+function syncTopbarModeButtons() {
+  $("#reviewBtn")?.classList.toggle("active", isReviewModeActive());
+  $("#collectionBuildBtn")?.classList.toggle("active", !!state.canvasCollectionBuild);
+}
+
 function isModalAdvancedEditingEnabled() {
   return isOwner() && !!state.modalAdvancedEditing;
 }
@@ -9301,6 +9310,7 @@ function applyRoleVisibility() {
   if (reviewBtnEl) reviewBtnEl.hidden = !owner;
   const collectionBuildBtnEl = $("#collectionBuildBtn");
   if (collectionBuildBtnEl) collectionBuildBtnEl.hidden = !owner;
+  syncTopbarModeButtons();
   const addMediaEl = $("#addMedia");
   if (addMediaEl) addMediaEl.hidden = !owner;
   const adminEl = $(".adminLink");
