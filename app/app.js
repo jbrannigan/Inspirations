@@ -70,6 +70,7 @@ const state = {
   modalSourceCandidateSelectedId: "",
   modalSourceCandidateBusyAction: "",
   modalSourceCandidateMessage: "",
+  modalAdvancedEditing: false,
   modalClassificationDirty: false,
 
   // Imports
@@ -4130,6 +4131,13 @@ function setTitleRow(rowId, valueId, metaId, value, meta) {
 function renderModalTitlePanel(asset) {
   const panel = $("#modalTitlePanel");
   if (!panel) return;
+  const advancedEditing = isModalAdvancedEditingEnabled();
+  if (!advancedEditing) {
+    panel.hidden = true;
+    const editor = $("#modalTitleEditor");
+    if (editor) editor.hidden = true;
+    return;
+  }
   const info = asset?.title_info || {};
   const workingTitle = String(info.working_title || asset?.title || "").trim();
   const workingMeta = String(info.working_origin_label || "").trim();
@@ -4153,7 +4161,7 @@ function renderModalTitlePanel(asset) {
   const workingInput = $("#modalWorkingTitleInput");
   const saveBtn = $("#modalTitleSaveBtn");
   const suggestedBtn = $("#modalTitleUseSuggestedBtn");
-  const owner = isOwner();
+  const owner = advancedEditing;
   if (editor) editor.hidden = !owner;
   if (workingInput) workingInput.value = workingTitle;
   if (saveBtn) saveBtn.disabled = !owner;
@@ -4379,8 +4387,9 @@ function _renderMediaReliabilityOverlay(elementId, value) {
 function renderModalSourceCandidatePanel(asset) {
   const panel = $("#modalSourceCandidatePanel");
   if (!panel) return;
-  if (!isOwner()) {
+  if (!isModalAdvancedEditingEnabled()) {
     panel.hidden = true;
+    panel.open = false;
     return;
   }
   const candidate = asset?.source_link_candidate || {};
@@ -4681,7 +4690,7 @@ function discardModalClassificationChanges() {
 function renderModalClassificationPanel(asset) {
   const panel = $("#modalClassificationPanel");
   if (!panel) return;
-  if (!isOwner()) {
+  if (!isModalAdvancedEditingEnabled()) {
     panel.hidden = true;
     return;
   }
@@ -4704,13 +4713,12 @@ function renderModalClassificationPanel(asset) {
   const statusText = _modalClassificationStatusText(review);
   const cleanedOverrideNote = _isBoilerplateClassificationReviewNote(overrideNote) ? "" : overrideNote;
 
-  panel.hidden = !needsReview;
-  if (!needsReview) return;
+  panel.hidden = false;
 
   const statusEl = $("#modalClassificationStatus");
   if (statusEl) {
-    statusEl.textContent = statusText;
-    statusEl.hidden = !statusText;
+    statusEl.textContent = statusText || (needsReview ? "" : "Advanced review tools are available for this item.");
+    statusEl.hidden = !(statusEl.textContent || "").trim();
   }
 
   const currentEl = $("#modalClassificationCurrent");
@@ -4923,8 +4931,12 @@ async function saveWorkingTitleFromModal(opts = {}) {
 
 async function openModal(asset, options = {}) {
   const shouldHydrate = options.hydrate !== false;
+  const advancedEditing = Object.prototype.hasOwnProperty.call(options, "advancedEditing")
+    ? !!options.advancedEditing
+    : isReviewModeActive();
   const modalSeq = (Number(state.modalLoadSeq || 0) + 1);
   state.modalLoadSeq = modalSeq;
+  state.modalAdvancedEditing = isOwner() && advancedEditing;
   if (String(state.modalAsset?.id || "") !== String(asset?.id || "")) {
     state.modalSourceCandidateSelectedId = "";
     state.modalSourceCandidateBusyAction = "";
@@ -5257,6 +5269,7 @@ function closeModal() {
   state.modalSourceCandidateSelectedId = "";
   state.modalSourceCandidateBusyAction = "";
   state.modalSourceCandidateMessage = "";
+  state.modalAdvancedEditing = false;
   state.modalClassificationDirty = false;
   state.annotations = [];
   state.activeAnnotationId = null;
@@ -6739,7 +6752,7 @@ function enterCanvasReview() {
   Shared.showToast(
     switchedFromExplorer
       ? "Review actions are grid-only for safety. Switched to Grid review mode."
-      : "Review mode — click a card for full details; use checkboxes for bulk actions or One-by-one for fast triage.",
+      : "Review mode — click a card for advanced details; use checkboxes for bulk actions or One-by-one for fast triage.",
     { type: "info" }
   );
 }
@@ -9083,6 +9096,10 @@ function isReviewModeActive() {
   return state.view === "review" || !!state.canvasReview;
 }
 
+function isModalAdvancedEditingEnabled() {
+  return isOwner() && !!state.modalAdvancedEditing;
+}
+
 function renderReviewSidebarSummary() {
   const section = $("#dynamicSidebarSection");
   const headingEl = $("#dynamicSidebarHeading");
@@ -9095,7 +9112,7 @@ function renderReviewSidebarSummary() {
       <div class="review-sidebar-summary">
         <div class="review-sidebar-row"><span class="muted">Scope</span><strong>${escapeHtml(scope.label || "Entire library")}</strong></div>
         <div class="review-sidebar-row"><span class="muted">Mode</span><strong>${escapeHtml(modeLabel)}</strong></div>
-      <div class="review-sidebar-note muted">Use Keepers, Flagged, or Discarded to revisit decisions in this scope. Card clicks always open full details; use checkboxes for bulk actions or One-by-one for fast triage.</div>
+      <div class="review-sidebar-note muted">Use Keepers, Flagged, or Discarded to revisit decisions in this scope. Card clicks open advanced details; use checkboxes for bulk actions or One-by-one for fast triage.</div>
     </div>
   `;
   section.hidden = false;
@@ -9194,7 +9211,7 @@ function applyRoleVisibility() {
   const shareGroup = $("#modalShareGroup");
   if (shareGroup) shareGroup.hidden = false;
 
-  // Full detail/QC always keeps the same owner curation controls.
+  // Owner curation actions remain available in item detail; advanced repair panels are Review-scoped.
   const modalCurationGroup = $("#modalCurationGroup");
   if (modalCurationGroup) modalCurationGroup.hidden = !owner;
 

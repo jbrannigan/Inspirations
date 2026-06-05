@@ -3332,6 +3332,16 @@ class TestServerApi(unittest.TestCase):
         self.assertIn(b"setModalTriageStatus", app_js)
         self.assertIn(b"toggleModalFlag", app_js)
 
+    def test_detail_modal_scopes_advanced_editing_to_review(self):
+        req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            app_js = resp.read()
+        self.assertIn(b"modalAdvancedEditing", app_js)
+        self.assertIn(b"isModalAdvancedEditingEnabled", app_js)
+        self.assertIn(b": isReviewModeActive();", app_js)
+        self.assertIn(b"panel.open = false;", app_js)
+        self.assertIn(b"Advanced review tools are available for this item.", app_js)
+
     def test_frontend_honors_scope_reload_queued_during_append(self):
         req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:

@@ -98,19 +98,20 @@ detail view opens.
 
 Card interaction rules:
 
-- normal Grid card click opens the full detail/QC modal
-- card click in Review also opens the same full detail/QC modal
+- normal Browse Grid card click opens a calmer detail view
+- Review Grid card click opens detail with advanced QC/editing tools
 - Review checkboxes select cards for bulk actions
 - the explicit `One-by-one` action opens the fast triage screen
-- one-by-one review has `Edit title / media`, which opens the full detail/QC
-  modal
+- one-by-one review has `Edit title / media`, which opens detail with advanced
+  QC/editing tools
 - Make Collection is a separate selection mode; card clicks select cards there
 - entering Explorer closes Make Collection selection mode
 
-The full detail/QC modal includes title editing, media repair, annotations,
-notes, normal detail navigation, and the same compact `Keep`,
-`Discard / Restore`, and `Flag / Unflag` curation controls in every scope.
-Edits made there must remain visible when returning to one-by-one review.
+Advanced item editing is Review-scoped. Title repair, media repair, and Track
+Review controls appear in grid Review and one-by-one `Edit title / media`, even
+for ordinary items that were not pre-flagged as ambiguous. Browse should not
+show those advanced repair panels. Edits made in Review detail must remain
+visible when returning to one-by-one review.
 
 Media repair is reversible. The gallery exposes previously used saved media
 from `asset_media_repair_audit` as selectable candidates, even when a later
@@ -192,7 +193,7 @@ The unmerged branch combines:
 - collection archive cleanup semantics and management
 - browse-first persistent curation bar
 - stable `Show` scope semantics
-- consistent full detail/QC modal behavior
+- Review-scoped advanced detail editing and calmer Browse detail
 - explicit one-by-one fast triage with `Edit title / media`
 - separate visual Make Collection mode
 - automatic Grid pagination with `Load More` fallback
@@ -214,9 +215,12 @@ Browser verification completed against `http://127.0.0.1:8001`:
 - Explorer uses the shared search field and does not show a duplicate search
   field
 - Explorer Categories and tuning controls remain available
-- flagged and usable card clicks open the same full detail/QC modal
+- Browse card clicks open calmer detail while Review card clicks expose advanced
+  QC/editing tools
+- Browse detail hides advanced title/media/track repair panels
+- grid Review detail exposes title editing, media repair, and Track Review
 - explicit one-by-one review shows `Edit title / media`
-- one-by-one `Edit title / media` opens the full detail/QC modal
+- one-by-one `Edit title / media` opens Review-scoped advanced detail
 - media repair on item `00a380ec-419b-4424-8da7-f59db468a4d3` shows the
   generated text card in use, preserves `Previously used: Saved image`, and
   reports the no-source-image result after a live source check
@@ -232,7 +236,7 @@ git diff --check
 ruff check src tests
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 
-Ran 380 tests in 54.797s
+Ran 381 tests in 64.140s
 OK
 ```
 

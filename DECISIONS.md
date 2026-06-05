@@ -327,13 +327,12 @@ compatibility and diagnostics. In everyday UX, null and `keeper` both mean
 usable, while `hidden` is presented as discarded/irrelevant. The global app
 header remains stable when modes change; Review and Make Collection add
 contextual action rows inside the curation bar instead. The `Show` selector
-changes item visibility only: card clicks always open the same full detail/QC
-modal. Review checkboxes are for bulk actions, and the explicit `One-by-one`
-action is the route to fast triage. The full detail/QC modal always retains a
-compact curation group for `Keep`, `Discard / Restore`, and `Flag / Unflag`;
-making detail behavior consistent must not remove those durable item actions.
-Flagged Grid cards use one stateful quick-action control as both the visible
-state indicator and the unflag action, rather than a second flag badge.
+changes item visibility only. Browse card clicks open a calmer detail view;
+Review card clicks open detail with advanced QC/editing tools. Review
+checkboxes are for bulk actions, and the explicit `One-by-one` action is the
+route to fast triage. Flagged Grid cards use one stateful quick-action control
+as both the visible state indicator and the unflag action, rather than a second
+flag badge.
 
 ---
 
@@ -393,6 +392,24 @@ from the UI even though it remained in the audit log.
 failure feedback. Restoring previously used media archives the current choice
 in turn, invalidates stale machine evidence, and enters the normal Admin refresh
 queue.
+
+---
+
+## D027 — Advanced item editing belongs to Review context (2026-06-04)
+
+**Decision:** Browse detail and Review detail are intentionally not identical.
+Browse opens a calmer item detail view. Review context, including grid Review
+and one-by-one `Edit title / media`, exposes title repair, media repair, and
+Track Review editing.
+
+**Why:** Browse is for looking and lightweight orientation. Review is where Jim
+does corpus QC, repairs media/title problems, and records classification
+decisions. Showing the same advanced repair UI everywhere makes Browse noisy,
+while hiding it for ordinary Review items blocks curation.
+
+**Consequence:** Advanced editing is gated by Review mode, not by whether the
+item already has an ambiguity or saved override. The Track Review editor appears
+for ordinary Review items too, so Jim can curate items as he finds them.
 
 ---
 
