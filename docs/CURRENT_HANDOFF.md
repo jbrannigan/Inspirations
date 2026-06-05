@@ -93,6 +93,11 @@ canvas. The curation bar remains visible while scrolling and owns:
 - `Flagged`
 - `Discarded`
 
+`Usable items` excludes both triage-discarded assets and assets with an active
+classification track of `irrelevant`. Intentional scopes such as `All items,
+including discarded`, `Flagged`, and the explicit `Irrelevant` track branch can
+still surface those items for QC.
+
 The `Show` selector changes visible item scope only. It must not change which
 detail view opens.
 
@@ -152,12 +157,13 @@ Obsolete `pins:` source-board mirror folders and completed `Review:` workflow
 folders were removed after a local SQLite backup. Source-board browsing now
 uses live `assets.board` metadata.
 
-Live UI counts observed during the latest browser verification:
+Live UI counts observed during the latest verification:
 
-- usable: `4666`
+- usable, excluding active `irrelevant` track: `4349`
+- usable without track exclusion: `4664`
 - all items, including discarded: `5340`
-- discarded: `674`
-- flagged: `99`
+- discarded: `676`
+- flagged: `98`
 - keepers: `0`
 
 Flagged and keeper counts are expected to change as curation continues.
@@ -176,6 +182,10 @@ Inspirations is installed as a logged-user launchd LaunchAgent:
 This starts after Jim logs into the Mac mini following a reboot. It does not
 require an open terminal or DevLauncher. See
 `docs/INSPIRATIONS_SERVICE_RUNBOOK.md`.
+
+On 2026-06-04, a stale DevLauncher-started Inspirations Python process was
+holding `8001` and preventing launchd from taking over. That repo-owned process
+was terminated, and launchd is again the active `8001` owner.
 
 `run_server()` runs `ensure_schema()` once before starting
 `ThreadingHTTPServer`. Normal API, catalog, media, and scan-PDF requests must
@@ -241,7 +251,7 @@ git diff --check
 ruff check src tests
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 
-Ran 383 tests in 58.242s
+Ran 385 tests in 64.038s
 OK
 ```
 

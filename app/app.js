@@ -869,6 +869,15 @@ function _currentTrackFilterValues() {
     .filter(Boolean);
 }
 
+function shouldExcludeIrrelevantFromUsableScope() {
+  if (state.showDiscarded || state.triageFilter) return false;
+  return !_currentTrackFilterValues().includes("irrelevant");
+}
+
+function appendUsableTrackExclusionParam(params) {
+  if (shouldExcludeIrrelevantFromUsableScope()) params.set("exclude_tracks", "irrelevant");
+}
+
 function _reviewItemMatchesCurrentScope(item) {
   if (!item) return false;
   const trackValues = _currentTrackFilterValues();
@@ -914,6 +923,7 @@ function _buildCurrentAssetQueryParams({ limit, offset = 0, ids = null } = {}) {
     params.set("triage_status", state.triageFilter);
   }
   appendShowDiscardedParam(params);
+  appendUsableTrackExclusionParam(params);
   return params;
 }
 
@@ -936,6 +946,7 @@ function _buildCurrentCatalogQueryParams({ limit, offset = 0 } = {}) {
     params.set("triage_status", state.triageFilter);
   }
   appendShowDiscardedParam(params);
+  appendUsableTrackExclusionParam(params);
   return params;
 }
 
@@ -1738,6 +1749,7 @@ async function loadAssets(opts = {}) {
     params.set("triage_status", state.triageFilter);
   }
   appendShowDiscardedParam(params);
+  appendUsableTrackExclusionParam(params);
 
   try {
     let data;
@@ -4234,6 +4246,7 @@ async function _resolveCurrentScopeAssetIds() {
     params.set("triage_status", state.triageFilter);
   }
   appendShowDiscardedParam(params);
+  appendUsableTrackExclusionParam(params);
   const data = await api(`/api/asset-ids?${params}`);
   return Array.isArray(data?.ids) ? data.ids : [];
 }
@@ -8491,6 +8504,7 @@ async function syncExplorerFilter() {
       const catalogParams = new URLSearchParams();
       for (const file of catalogFiles) catalogParams.append("file", file);
       appendShowDiscardedParam(catalogParams);
+      appendUsableTrackExclusionParam(catalogParams);
       const seq = ++_explorerFilterSeq;
       try {
         const data = await api(`/api/catalog/asset-ids?${catalogParams}`);
@@ -8527,6 +8541,7 @@ async function syncExplorerFilter() {
       params.set("triage_status", state.triageFilter);
     }
     appendShowDiscardedParam(params);
+    appendUsableTrackExclusionParam(params);
 
     const seq = ++_explorerFilterSeq;
     try {

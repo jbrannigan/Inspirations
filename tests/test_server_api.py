@@ -623,6 +623,38 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("a2", [a["id"] for a in body.get("assets", [])])
 
+    def test_assets_endpoint_exclude_tracks_honors_active_override(self):
+        self._seed_v2_classification()
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into asset_overrides
+                  (id, asset_id, track, axis_name, axis_value, operation, actor, note, created_at, expires_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "override-a2-exclude-track",
+                    "a2",
+                    "irrelevant",
+                    "track",
+                    "irrelevant",
+                    "set",
+                    "Jim",
+                    "human review marked irrelevant",
+                    "2026-03-09T17:00:00+00:00",
+                    None,
+                ),
+            )
+
+        status, body = self._request("/api/assets?exclude_tracks=irrelevant&include_hidden=1")
+        self.assertEqual(status, 200)
+        self.assertNotIn("a2", [a["id"] for a in body.get("assets", [])])
+
+        status, body = self._request("/api/asset-ids?exclude_tracks=irrelevant&include_hidden=1")
+        self.assertEqual(status, 200)
+        self.assertNotIn("a2", body.get("ids", []))
+
     def test_catalog_tree_includes_classification_sections(self):
         self._seed_v2_classification()
         catalog_dir = self.tmp_path / "catalog"
@@ -3365,6 +3397,14 @@ class TestServerApi(unittest.TestCase):
             styles = resp.read()
         self.assertIn(b".curation-sidebar-handle", styles)
         self.assertIn(b"position: static", styles)
+
+    def test_frontend_usable_items_exclude_irrelevant_track(self):
+        req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            app_js = resp.read()
+        self.assertIn(b"shouldExcludeIrrelevantFromUsableScope", app_js)
+        self.assertIn(b'params.set("exclude_tracks", "irrelevant")', app_js)
+        self.assertIn(b'getClassificationFacetValues("track")', app_js)
 
     def test_frontend_honors_scope_reload_queued_during_append(self):
         req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")

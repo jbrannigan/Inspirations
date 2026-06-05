@@ -297,6 +297,18 @@ def _collaborator_excluded_tracks_csv() -> str:
     return "home_maintenance_diy,irrelevant"
 
 
+def _requested_excluded_tracks_csv(q: dict[str, list[str]], actor: dict | None) -> str:
+    if _is_collaborator(actor):
+        return _collaborator_excluded_tracks_csv()
+    raw = ",".join(q.get("exclude_tracks", []))
+    values = []
+    for value in raw.split(","):
+        clean = value.strip()
+        if clean in CLASSIFICATION_TRACK_OPTIONS and clean not in values:
+            values.append(clean)
+    return ",".join(values)
+
+
 def _is_non_home_tree_node(node: dict) -> bool:
     if not isinstance(node, dict) or node.get("type") != "dimension":
         return False
@@ -397,10 +409,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             actor_role = str(actor.get("role") or "") if actor else ""
             actor_id = str(actor.get("id") or "") if actor else ""
             category = q.get("category", [""])[0]
-            exclude_tracks = ""
+            exclude_tracks = _requested_excluded_tracks_csv(q, actor)
             if _is_collaborator(actor):
                 category = "home_design"
-                exclude_tracks = _collaborator_excluded_tracks_csv()
             page_limit = int(q.get("limit", [str(DEFAULT_ASSETS_PAGE_SIZE)])[0])
             assets = self._with_db(
                 list_assets,
@@ -466,10 +477,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             actor_role = str(actor.get("role") or "") if actor else ""
             actor_id = str(actor.get("id") or "") if actor else ""
             category = q.get("category", [""])[0]
-            exclude_tracks = ""
+            exclude_tracks = _requested_excluded_tracks_csv(q, actor)
             if _is_collaborator(actor):
                 category = "home_design"
-                exclude_tracks = _collaborator_excluded_tracks_csv()
             ids = self._with_db(
                 list_asset_ids,
                 q=q.get("q", [""])[0],
@@ -694,10 +704,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             limit = int(q.get("limit", ["500"])[0])
             offset = int(q.get("offset", ["0"])[0])
             category = q.get("category", [""])[0]
-            exclude_tracks = ""
+            exclude_tracks = _requested_excluded_tracks_csv(q, actor)
             if _is_collaborator(actor):
                 category = "home_design"
-                exclude_tracks = _collaborator_excluded_tracks_csv()
             assets = self._with_db(
                 list_assets,
                 ids=ids_str,
@@ -742,10 +751,9 @@ class ApiHandler(BaseHTTPRequestHandler):
             if not short_ids:
                 return _send(self, 200, {"ids": []})
             category = q.get("category", [""])[0]
-            exclude_tracks = ""
+            exclude_tracks = _requested_excluded_tracks_csv(q, actor)
             if _is_collaborator(actor):
                 category = "home_design"
-                exclude_tracks = _collaborator_excluded_tracks_csv()
             ids = self._with_db(
                 list_asset_ids,
                 ids=",".join(short_ids),
