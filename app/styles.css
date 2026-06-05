@@ -2559,6 +2559,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   white-space: nowrap;
   min-width: 80px;
 }
+.canvas-selection-hint {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  flex: 1 1 220px;
+  min-width: 180px;
+}
 .canvas-selection-tool-chip {
   font-size: 11px;
   font-weight: 600;

@@ -6933,10 +6933,31 @@ function clearCanvasSelection() {
   updateCollectionBuildSelectionCount();
 }
 
+function syncCollectionBuildLaunchButton() {
+  const btn = $("#collectionBuildBtn");
+  if (!btn) return;
+  if (!state.canvasCollectionBuild) {
+    btn.textContent = "Make Collection";
+    btn.title = "Select items to create or add to a collection";
+    return;
+  }
+  const count = state.canvasSelected.size;
+  btn.textContent = count > 0 ? `Create Collection (${count})` : "Selecting Items";
+  btn.title = count > 0
+    ? "Create a new collection from the selected tiles"
+    : "Use tile checkboxes to choose items, then create a collection";
+}
+
 function updateCollectionBuildSelectionCount() {
   const count = state.canvasSelected.size;
   const countEl = $("#collectionBuildSelectionCount");
   if (countEl) countEl.textContent = `${count} selected`;
+  const hintEl = $("#collectionBuildHint");
+  if (hintEl) {
+    hintEl.textContent = count
+      ? "Ready: create a new collection or add these to an existing one."
+      : "Use tile checkboxes, then create or add to a collection.";
+  }
   const newBtn = $("#collectionBuildNew");
   if (newBtn) newBtn.disabled = count === 0;
   const existingBtn = $("#collectionBuildExisting");
@@ -6948,6 +6969,7 @@ function updateCollectionBuildSelectionCount() {
     removeBtn.hidden = !showRemove;
     removeBtn.disabled = !(showRemove && count > 0);
   }
+  syncCollectionBuildLaunchButton();
 }
 
 function enterCollectionBuild(options = {}) {
@@ -6982,6 +7004,21 @@ function exitCollectionBuild() {
   syncTopbarModeButtons();
   $$(".card.canvas-selected").forEach((card) => card.classList.remove("canvas-selected"));
   updateCollectionBuildSelectionCount();
+}
+
+function handleCollectionBuildLaunchClick() {
+  if (state.canvasCollectionBuild) {
+    if (state.canvasSelected.size > 0) {
+      openCollectionBuildModal("new");
+      return;
+    }
+    Shared.showToast("Use tile checkboxes to choose items, then create or add to a collection.", {
+      type: "info",
+      duration: 3200,
+    });
+    return;
+  }
+  enterCollectionBuild();
 }
 
 async function removeSelectedFromActiveCollection() {
@@ -7180,7 +7217,7 @@ if (canvasExitReviewBtn) canvasExitReviewBtn.addEventListener("click", exitCanva
 
 // Collection building is a separate creative selection mode.
 const collectionBuildBtn = $("#collectionBuildBtn");
-if (collectionBuildBtn) collectionBuildBtn.addEventListener("click", enterCollectionBuild);
+if (collectionBuildBtn) collectionBuildBtn.addEventListener("click", handleCollectionBuildLaunchClick);
 const collectionBuildNewBtn = $("#collectionBuildNew");
 if (collectionBuildNewBtn) collectionBuildNewBtn.addEventListener("click", () => openCollectionBuildModal("new"));
 const collectionBuildExistingBtn = $("#collectionBuildExisting");
@@ -9219,6 +9256,7 @@ function isReviewModeActive() {
 function syncTopbarModeButtons() {
   $("#reviewBtn")?.classList.toggle("active", isReviewModeActive());
   $("#collectionBuildBtn")?.classList.toggle("active", !!state.canvasCollectionBuild);
+  syncCollectionBuildLaunchButton();
 }
 
 function isModalAdvancedEditingEnabled() {

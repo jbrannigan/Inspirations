@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inspirations!</title>
-    <link rel="stylesheet" href="/app/styles.css?v=95" />
+    <link rel="stylesheet" href="/app/styles.css?v=96" />
     <script type="importmap">
       {
         "imports": {
@@ -178,16 +178,17 @@
           </div>
           <div id="collectionBuildBar" class="canvas-action-bar collection-build-bar" hidden>
             <div class="canvas-action-bar-inner">
-              <span class="collection-build-chip">Making a collection</span>
+              <span class="collection-build-chip">Collection selection mode</span>
               <span id="collectionBuildSelectionCount" class="canvas-selection-count">0 selected</span>
+              <span id="collectionBuildHint" class="canvas-selection-hint">Use tile checkboxes, then create or add to a collection.</span>
               <div class="canvas-action-buttons">
-                <button id="collectionBuildNew" class="canvas-action-btn collection-build-primary" type="button" disabled>+ New collection</button>
+                <button id="collectionBuildNew" class="canvas-action-btn collection-build-primary" type="button" disabled>Create new collection</button>
                 <button id="collectionBuildExisting" class="canvas-action-btn" type="button" disabled>Add to existing</button>
                 <button id="collectionBuildRemove" class="canvas-action-btn canvas-action-hide-local" type="button" hidden disabled>Remove from this collection</button>
                 <button id="collectionBuildClear" class="canvas-action-btn" type="button">Clear</button>
               </div>
               <div class="canvas-mode-toggle">
-                <button id="collectionBuildDone" class="canvas-action-btn" type="button">Done</button>
+                <button id="collectionBuildDone" class="canvas-action-btn" type="button">Exit selection</button>
               </div>
             </div>
           </div>
@@ -843,6 +844,6 @@
     <script src="/app/shared.js?v=5"></script>
     <script src="/app/explorer.js?v=2"></script>
     <script src="/app/attractor-explorer.js?v=16"></script>
-    <script src="/app/app.js?v=174"></script>
+    <script src="/app/app.js?v=175"></script>
   </body>
 </html>
