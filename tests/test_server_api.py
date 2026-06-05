@@ -3524,7 +3524,7 @@ class TestServerApi(unittest.TestCase):
         self.assertIn(b'id="addMedia" class="header-btn"', html)
         self.assertIn(b'class="header-btn adminLink"', html)
         self.assertIn(b"/app/styles.css?v=95", html)
-        self.assertIn(b"/app/app.js?v=172", html)
+        self.assertIn(b"/app/app.js?v=173", html)
 
         req = urllib.request.Request(f"{self.base_url}/app/styles.css", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -3539,8 +3539,12 @@ class TestServerApi(unittest.TestCase):
         with urllib.request.urlopen(req, timeout=5) as resp:
             app_js = resp.read()
         self.assertIn(b"function syncTopbarModeButtons", app_js)
+        self.assertIn(b"function toggleTopbarReviewMode", app_js)
         self.assertIn(b'$("#reviewBtn")?.classList.toggle("active", isReviewModeActive());', app_js)
         self.assertIn(b'$("#collectionBuildBtn")?.classList.toggle("active", !!state.canvasCollectionBuild);', app_js)
+        self.assertIn(b'reviewBtn.addEventListener("click", toggleTopbarReviewMode)', app_js)
+        self.assertIn(b"if (state.canvasReview) {", app_js)
+        self.assertIn(b"exitCanvasReview();", app_js)
 
     def test_detail_modal_exposes_consistent_curation_controls(self):
         status, html, _ = self._raw_request("/")

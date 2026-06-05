@@ -6894,6 +6894,21 @@ function exitCanvasReview() {
   updateSidebarModeVisibility();
 }
 
+function toggleTopbarReviewMode() {
+  if (state.view === "review") {
+    const shouldExitCanvasReview = !!state.canvasReview;
+    exitReview();
+    if (shouldExitCanvasReview) exitCanvasReview();
+    syncTopbarModeButtons();
+    return;
+  }
+  if (state.canvasReview) {
+    exitCanvasReview();
+    return;
+  }
+  enterCanvasReview();
+}
+
 function toggleCanvasSelection(id, cardEl) {
   if (state.canvasSelected.has(id)) {
     state.canvasSelected.delete(id);
@@ -7183,7 +7198,7 @@ if (collectionBuildDoneBtn) collectionBuildDoneBtn.addEventListener("click", exi
 
 // Review button — canvas review is the default
 const reviewBtn = $("#reviewBtn");
-if (reviewBtn) reviewBtn.addEventListener("click", enterCanvasReview);
+if (reviewBtn) reviewBtn.addEventListener("click", toggleTopbarReviewMode);
 
 const reviewBackBtn = $("#reviewBack");
 if (reviewBackBtn) reviewBackBtn.addEventListener("click", exitReview);
