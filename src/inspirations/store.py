@@ -992,9 +992,27 @@ def list_assets(
         exclude_tracks=exclude_tracks, viewer_role=viewer_role, viewer_actor_id=viewer_actor_id,
     )
 
-    # Total count (same filters, no limit/offset)
-    count_sql = f"select count(distinct a.id) from assets a {join_sql} {where}"
-    total_count = db.query_value(count_sql, tuple(params)) or 0
+    # Total count (same filters, no limit/offset). Collection-scoped views use
+    # the same logical scan-document collapse as the grid, so the visible count
+    # matches the number of cards the curator sees.
+    if _csv_values(collection_id):
+        total_rows = [
+            dict(r)
+            for r in db.query(
+                f"""
+                select distinct a.id, a.source, a.source_ref, a.title
+                from assets a
+                {join_sql}
+                {where}
+                order by a.id asc
+                """,
+                tuple(params),
+            )
+        ]
+        total_count = len(_collapse_scan_rows(total_rows))
+    else:
+        count_sql = f"select count(distinct a.id) from assets a {join_sql} {where}"
+        total_count = db.query_value(count_sql, tuple(params)) or 0
 
     sql = f"""
     select distinct a.id, a.source, a.source_ref, a.title, a.description, a.board, a.notes,
@@ -1427,7 +1445,7 @@ def list_collections(
     hidden_collection_id = str(
         db.query_value("select id from collections where lower(name)='hidden' limit 1") or ""
     )
-    params: list[Any] = [hidden_collection_id]
+    params: list[Any] = []
     where: list[str] = []
     role = str(viewer_role or "").strip().lower()
     actor_id = str(viewer_actor_id or "").strip()
@@ -1459,23 +1477,8 @@ def list_collections(
             c.shared_actor_id,
             coalesce(c.hidden, 0) as hidden,
             c.hidden_at,
-            (
-                select count(*)
-                from collection_items ci
-                where ci.collection_id = c.id
-            ) as count_total,
-            (
-                select count(*)
-                from collection_items ci
-                join assets a on a.id = ci.asset_id
-                where ci.collection_id = c.id
-                  and (a.triage_status is null or a.triage_status != 'hidden')
-                  and a.id not in (
-                    select h.asset_id
-                    from collection_items h
-                    where h.collection_id = ?
-                  )
-            ) as count_visible
+            0 as count_total,
+            0 as count_visible
         from collections c
     """
     if where:
@@ -1483,8 +1486,54 @@ def list_collections(
     sql += " order by c.name collate nocase asc, c.updated_at desc"
     rows = db.query(sql, tuple(params))
     collection_ids = [str(r["id"] or "").strip() for r in rows if str(r["id"] or "").strip()]
+    logical_counts_by_collection: dict[str, dict[str, int]] = {}
     shares_by_collection: dict[str, list[tuple[str, str]]] = {}
     if collection_ids:
+        placeholders = ",".join(["?"] * len(collection_ids))
+        count_rows = db.query(
+            f"""
+            select
+                ci.collection_id,
+                a.id,
+                a.source,
+                a.source_ref,
+                a.title,
+                a.triage_status,
+                case
+                  when ? != ''
+                   and exists (
+                     select 1
+                     from collection_items h
+                     where h.collection_id = ?
+                       and h.asset_id = a.id
+                   )
+                  then 1 else 0
+                end as in_hidden_collection
+            from collection_items ci
+            join assets a on a.id = ci.asset_id
+            where ci.collection_id in ({placeholders})
+            order by ci.collection_id, ci.position, a.id
+            """,
+            (hidden_collection_id, hidden_collection_id, *collection_ids),
+        )
+        rows_by_collection: dict[str, list[dict[str, Any]]] = {}
+        visible_rows_by_collection: dict[str, list[dict[str, Any]]] = {}
+        for row in count_rows:
+            item = dict(row)
+            cid = str(item.get("collection_id") or "").strip()
+            if not cid:
+                continue
+            rows_by_collection.setdefault(cid, []).append(item)
+            if (
+                str(item.get("triage_status") or "") != "hidden"
+                and int(item.get("in_hidden_collection") or 0) != 1
+            ):
+                visible_rows_by_collection.setdefault(cid, []).append(item)
+        for cid in collection_ids:
+            logical_counts_by_collection[cid] = {
+                "count_total": len(_collapse_scan_rows(rows_by_collection.get(cid, []))),
+                "count_visible": len(_collapse_scan_rows(visible_rows_by_collection.get(cid, []))),
+            }
         share_rows = db.query(
             f"""
             select cs.collection_id, cs.actor_id, a.name
@@ -1513,8 +1562,9 @@ def list_collections(
                 d["shared_actor_id"] = d["shared_actor_ids"][0] if d["shared_actor_ids"] else ""
             if not d.get("shared_actor_name"):
                 d["shared_actor_name"] = d["shared_actor_names"][0] if d["shared_actor_names"] else ""
-        d["count_total"] = int(d.get("count_total") or 0)
-        d["count_visible"] = int(d.get("count_visible") or 0)
+        logical_counts = logical_counts_by_collection.get(str(d.get("id") or ""), {})
+        d["count_total"] = int(logical_counts.get("count_total") or 0)
+        d["count_visible"] = int(logical_counts.get("count_visible") or 0)
         d["count"] = d["count_visible"]
         d["hidden"] = int(d.get("hidden") or 0)
         out.append(d)

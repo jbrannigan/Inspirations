@@ -1271,6 +1271,36 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(int(c1.get("count_visible") or 0), 0)
         self.assertEqual(int(c1.get("count_total") or 0), 2)
 
+    def test_collections_count_collapses_scan_pages_to_logical_items(self):
+        sha = "b" * 64
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            for idx in range(1, 4):
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at)
+                    values (?, ?, ?, ?, datetime('now'))
+                    """,
+                    (f"s-count-{idx}", "scan", f"scan://{sha}#p{idx}", f"Counter scan - doc 7 p{idx}"),
+                )
+                db.exec(
+                    "insert into collection_items (collection_id, asset_id, position) values (?, ?, ?)",
+                    ("c1", f"s-count-{idx}", 10 + idx),
+                )
+
+        status, body = self._request("/api/collections")
+        self.assertEqual(status, 200)
+        c1 = next((c for c in body.get("collections", []) if c.get("id") == "c1"), None)
+        self.assertIsNotNone(c1)
+        self.assertEqual(int(c1.get("count") or 0), 3)
+        self.assertEqual(int(c1.get("count_visible") or 0), 3)
+        self.assertEqual(int(c1.get("count_total") or 0), 3)
+
+        status, body = self._request("/api/assets?collection_id=c1&limit=20")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(body.get("assets", [])), 3)
+        self.assertEqual(int(body.get("total") or 0), 3)
+
     def test_collection_pdf_export_endpoint_returns_pdf_attachment(self):
         pdf_path = self.tmp_path / "exported.pdf"
         pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
