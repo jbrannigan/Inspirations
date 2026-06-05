@@ -1256,17 +1256,11 @@ def _fetch_source_page_browser(
         if profile_dir is not None:
             nav_command = ["goto", url]
         _run_playwright_cli(nav_command, session_name=session_name, timeout_s=timeout_s, profile_dir=profile_dir)
-        if wait_ms > 0:
-            _run_playwright_cli(
-                ["run-code", f"await page.waitForTimeout({int(wait_ms)});"],
-                session_name=session_name,
-                timeout_s=timeout_s,
-                profile_dir=profile_dir,
-            )
         stdout = _run_playwright_cli(
             [
                 "eval",
-                """() => {
+                """async () => {
+                  await new Promise(resolve => setTimeout(resolve, WAIT_MS_PLACEHOLDER));
                   const UI_NOISE_PATTERNS = [
                     /Remember Password/gi,
                     /Next time you log in on this browser, just click your profile picture instead of typing a password\\./gi,
@@ -1297,6 +1291,61 @@ def _fetch_source_page_browser(
                   const normalizedNeedle = titleNeedle.toLowerCase().replace(/[’']/g, "'");
                   const viewportW = window.innerWidth || document.documentElement.clientWidth || 0;
                   const viewportH = window.innerHeight || document.documentElement.clientHeight || 0;
+                  const scrolledImageSnapshots = [];
+                  const collectScrolledImages = (root = null) => {
+                    const seen = new Set(scrolledImageSnapshots.map(item => item && item.src).filter(Boolean));
+                    for (const img of Array.from(document.querySelectorAll('img'))) {
+                      try {
+                        if (root && root !== document.scrollingElement && root !== document.documentElement && !root.contains(img)) continue;
+                        const rect = img.getBoundingClientRect();
+                        const src = img.currentSrc || img.src || '';
+                        if (!src || src.startsWith('data:') || seen.has(src)) continue;
+                        if (rect.width < 80 || rect.height < 80 || rect.bottom <= 0 || rect.right <= 0 || rect.top >= viewportH || rect.left >= viewportW) continue;
+                        const context = img.closest('[role="article"], article, [aria-label], [role="dialog"], div');
+                        scrolledImageSnapshots.push({
+                          src,
+                          alt: clean(img.alt || '', 240),
+                          width: Math.round(rect.width),
+                          height: Math.round(rect.height),
+                          text: clean(context ? (context.getAttribute('aria-label') || context.innerText || context.textContent || '') : '', 420),
+                        });
+                        seen.add(src);
+                      } catch (_err) {}
+                    }
+                  };
+                  if (location.hostname && location.hostname.includes('facebook.com')) {
+                    const scrollRoots = Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"], main, [role="main"], div'))
+                      .map(node => {
+                        try {
+                          const rect = node.getBoundingClientRect();
+                          const overflow = node.scrollHeight - node.clientHeight;
+                          const text = clean(node.innerText || node.textContent || '', 900);
+                          let score = overflow;
+                          if (titleNeedle && text.toLowerCase().includes(titleNeedle.toLowerCase())) score += 2500;
+                          if (node.getAttribute('role') === 'dialog' || node.getAttribute('aria-modal') === 'true') score += 1800;
+                          if (rect.width >= Math.min(520, viewportW * 0.45) && rect.height >= Math.min(360, viewportH * 0.45)) score += 700;
+                          if (rect.left > viewportW * 0.92 || rect.right < viewportW * 0.08) score -= 1200;
+                          return { node, overflow, score };
+                        } catch (_err) {
+                          return null;
+                        }
+                      })
+                      .filter(item => item && item.overflow > 120)
+                      .sort((a, b) => b.score - a.score);
+                    const root = scrollRoots[0] ? scrollRoots[0].node : (document.scrollingElement || document.documentElement);
+                    collectScrolledImages(root);
+                    const originalTop = root.scrollTop || 0;
+                    const step = Math.max(260, Math.round((root.clientHeight || viewportH || 700) * 0.72));
+                    for (let i = 0; i < 10; i += 1) {
+                      const before = root.scrollTop || 0;
+                      root.scrollTop = before + step;
+                      await new Promise(resolve => setTimeout(resolve, 340));
+                      collectScrolledImages(root);
+                      if ((root.scrollTop || 0) === before) break;
+                    }
+                    root.scrollTop = originalTop;
+                    await new Promise(resolve => setTimeout(resolve, 120));
+                  }
                   const containsNeedle = (node) => {
                     if (!node || !normalizedNeedle) return false;
                     const text = clean(node.textContent || '', 3000).toLowerCase().replace(/[’']/g, "'");
@@ -1367,12 +1416,12 @@ def _fetch_source_page_browser(
                     .sort((a, b) => b.score - a.score);
                   const primaryRoot = anchoredRoot || (rankedRoots[0] ? rankedRoots[0].node : (document.querySelector('main, [role="main"]') || document.body));
                   const primaryText = clean(primaryRoot ? primaryRoot.innerText : ((document.body && document.body.innerText) || ''), 1600);
-                  const scoreImage = (img) => {
+                  const scoreImage = (img, minSize = 140) => {
                     try {
                       const rect = img.getBoundingClientRect();
                       const src = img.currentSrc || img.src || '';
                       if (!src || src.startsWith('data:')) return null;
-                      if (rect.width < 140 || rect.height < 140) return null;
+                      if (rect.width < minSize || rect.height < minSize) return null;
                       const area = rect.width * rect.height;
                       const centerX = rect.left + rect.width / 2;
                       const centerY = rect.top + rect.height / 2;
@@ -1404,16 +1453,74 @@ def _fetch_source_page_browser(
                   const hero = images[0] || null;
                   const mediaCandidates = [];
                   const seenCandidateUrls = new Set();
-                  for (const item of images) {
-                    if (!item.src || seenCandidateUrls.has(item.src)) continue;
+                  const pushCandidate = (item, labelPrefix = 'Post image', labelNumber = null) => {
+                    if (!item.src || seenCandidateUrls.has(item.src)) return;
                     seenCandidateUrls.add(item.src);
                     mediaCandidates.push({
                       url: item.src,
                       alt: item.alt,
                       text: item.text,
-                      label: `Post image ${mediaCandidates.length + 1}`,
+                      label: `${labelPrefix} ${labelNumber || mediaCandidates.length + 1}`,
                     });
+                  };
+                  for (const item of images) {
+                    pushCandidate(item, 'Post image');
                     if (mediaCandidates.length >= 12) break;
+                  }
+                  const primaryRect = primaryRoot && primaryRoot.getBoundingClientRect ? primaryRoot.getBoundingClientRect() : null;
+                  const isNearPrimaryPost = (rect) => {
+                    if (!primaryRect || !rect) return false;
+                    const verticalOk = rect.top >= primaryRect.top - 80 && rect.top <= primaryRect.bottom + Math.max(900, viewportH * 2.2);
+                    const centerX = rect.left + rect.width / 2;
+                    const horizontalOk = centerX >= Math.max(0, primaryRect.left - 80) && centerX <= Math.min(viewportW || 99999, primaryRect.right + 80);
+                    return verticalOk && horizontalOk;
+                  };
+                  const looksLikeCommentContext = (node) => {
+                    if (!node) return false;
+                    const label = clean(node.getAttribute && node.getAttribute('aria-label') || '', 240).toLowerCase();
+                    const text = clean(node.innerText || node.textContent || '', 420).toLowerCase();
+                    return label.includes('comment') || text.includes('reply') || text.includes('comment') || text.includes('like');
+                  };
+                  const commentImageNodes = Array.from(document.querySelectorAll('img'))
+                    .filter(img => {
+                      try {
+                        if (imageScope && imageScope.contains(img)) return false;
+                        const rect = img.getBoundingClientRect();
+                        if (!rect || rect.width < 80 || rect.height < 80) return false;
+                        if (!isNearPrimaryPost(rect)) return false;
+                        const context = img.closest('[aria-label], [role="article"], div');
+                        return looksLikeCommentContext(context);
+                      } catch (_err) {
+                        return false;
+                      }
+                    });
+                  const commentImages = commentImageNodes
+                    .map(img => scoreImage(img, 80))
+                    .filter(Boolean)
+                    .sort((a, b) => b.score - a.score);
+                  let commentCount = 0;
+                  for (const item of commentImages) {
+                    commentCount += 1;
+                    pushCandidate(item, 'Comment image', commentCount);
+                    if (mediaCandidates.length >= 12 || commentCount >= 6) break;
+                  }
+                  const scrolledImages = scrolledImageSnapshots
+                    .map((item) => ({
+                      src: item && item.src || '',
+                      alt: clean(item && item.alt || '', 240),
+                      width: Number(item && item.width || 0),
+                      height: Number(item && item.height || 0),
+                      score: Number(item && item.width || 0) * Number(item && item.height || 0),
+                      text: clean(item && item.text || '', 420),
+                    }))
+                    .filter(item => item.src && item.width >= 80 && item.height >= 80)
+                    .sort((a, b) => b.score - a.score);
+                  let scrolledCount = 0;
+                  for (const item of scrolledImages) {
+                    if (seenCandidateUrls.has(item.src)) continue;
+                    scrolledCount += 1;
+                    pushCandidate(item, 'Scrolled comment image', scrolledCount);
+                    if (mediaCandidates.length >= 12 || scrolledCount >= 8) break;
                   }
                   const outboundLinks = Array.from((primaryRoot || document).querySelectorAll('a[href]'))
                     .map(link => ({
@@ -1433,7 +1540,7 @@ def _fetch_source_page_browser(
                     mediaCandidates,
                     outboundLinks,
                   };
-                }""",
+                }""".replace("WAIT_MS_PLACEHOLDER", str(max(0, int(wait_ms)))),
             ],
             session_name=session_name,
             timeout_s=timeout_s,

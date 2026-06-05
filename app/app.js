@@ -1400,12 +1400,91 @@ function _scanPdfHrefForAsset(asset) {
   return `${_B}/api/scan/doc-pdf?asset_id=${encodeURIComponent(asset.id)}#page=${page}`;
 }
 
+function sourceLinkCheckInfo(asset) {
+  const candidate = asset?.source_link_candidate || {};
+  const status = String(candidate.fetch_status || "").trim();
+  const httpStatus = Number(candidate.http_status || 0);
+  const checkedAt = String(candidate.created_at || "").trim();
+  const error = String(candidate.error || "").trim();
+  if (!status) {
+    return {
+      tone: "unknown",
+      label: "Source not checked",
+      note: "Open the link before discarding; this may be fixable.",
+      checkedAt,
+    };
+  }
+  if (status === "fetched") {
+    return {
+      tone: "ok",
+      label: httpStatus ? `Source reachable (${httpStatus})` : "Source reachable",
+      note: "This link worked during the latest source check.",
+      checkedAt,
+    };
+  }
+  if (status === "http_error") {
+    return {
+      tone: "bad",
+      label: httpStatus ? `HTTP ${httpStatus}` : "HTTP error",
+      note: "The source responded with an error. It may still work in a logged-in browser.",
+      checkedAt,
+      error,
+    };
+  }
+  if (["browser_error", "browser_timeout", "network_error", "error", "redirect_limit"].includes(status)) {
+    return {
+      tone: "unknown",
+      label: status.replace(/_/g, " "),
+      note: "The check failed, but that does not prove the source link is broken.",
+      checkedAt,
+      error,
+    };
+  }
+  if (status === "platform_wrapper_skipped") {
+    return {
+      tone: "unknown",
+      label: "Source check skipped",
+      note: "Platform links often need an authenticated browser check.",
+      checkedAt,
+    };
+  }
+  if (status === "no_url" || status === "unsafe_url" || status === "browser_unsafe_url") {
+    return {
+      tone: "bad",
+      label: status.replace(/_/g, " "),
+      note: "There is no safe source URL to open from the app.",
+      checkedAt,
+      error,
+    };
+  }
+  return {
+    tone: "unknown",
+    label: status.replace(/_/g, " "),
+    note: "Open the source before deciding whether to discard.",
+    checkedAt,
+    error,
+  };
+}
+
+function formatSourceCheckTooltip(info) {
+  if (!info) return "";
+  const parts = [info.note || ""];
+  if (info.checkedAt) parts.push(`Last checked: ${info.checkedAt}`);
+  if (info.error) parts.push(info.error);
+  return parts.filter(Boolean).join("\n");
+}
+
+function isBrokenSourceDiscardAsset(asset) {
+  return String(asset?.flagged_note || "").trim().toLowerCase() === "broken source link";
+}
+
 function renderModalSourceLinks(asset) {
   if (!asset) return;
   const ref = asset.source_ref || "";
   const isHttpRef = ref.startsWith("http://") || ref.startsWith("https://");
   const siteUrl = asset.source_url || "";
   const isHttpSite = siteUrl.startsWith("http://") || siteUrl.startsWith("https://");
+  const brokenSourceDiscarded = isBrokenSourceDiscardAsset(asset);
 
   const sourceLink = $("#sourceLink");
   if (sourceLink) {
@@ -1438,11 +1517,32 @@ function renderModalSourceLinks(asset) {
     sourceSiteRow.hidden = true;
   }
 
+  const checkInfo = sourceLinkCheckInfo(asset);
+  const sourceCheckStatus = $("#modalSourceCheckStatus");
+  if (sourceCheckStatus) {
+    sourceCheckStatus.textContent = checkInfo.label;
+    sourceCheckStatus.title = formatSourceCheckTooltip(checkInfo);
+    sourceCheckStatus.dataset.tone = checkInfo.tone;
+    sourceCheckStatus.hidden = asset.source === "scan" || !(isHttpRef || isHttpSite);
+  }
+
   const brokenSourceBtn = $("#modalBrokenSourceBtn");
   if (brokenSourceBtn) {
-    brokenSourceBtn.hidden = !(isOwner() && asset.source !== "scan" && (isHttpRef || isHttpSite));
+    brokenSourceBtn.hidden = !(isOwner() && asset.source !== "scan" && (isHttpRef || isHttpSite) && !brokenSourceDiscarded);
     brokenSourceBtn.disabled = false;
+    brokenSourceBtn.textContent = checkInfo.tone === "bad"
+      ? "Broken link · discard item"
+      : "Mark source unusable · discard";
+    brokenSourceBtn.title = checkInfo.note || "";
     brokenSourceBtn.onclick = () => { void markModalBrokenSourceLink(asset); };
+  }
+
+  const restoreBrokenSourceBtn = $("#modalRestoreBrokenSourceBtn");
+  if (restoreBrokenSourceBtn) {
+    restoreBrokenSourceBtn.hidden = !(isOwner() && brokenSourceDiscarded && asset.source !== "scan" && (isHttpRef || isHttpSite));
+    restoreBrokenSourceBtn.disabled = false;
+    restoreBrokenSourceBtn.title = "Clear the broken-source flag and restore this item to ordinary browsing. The original source link is kept.";
+    restoreBrokenSourceBtn.onclick = () => { void restoreModalBrokenSourceLink(asset); };
   }
 
   const sourceLinksWrap = $("#modalSourceLinks");
@@ -1450,14 +1550,19 @@ function renderModalSourceLinks(asset) {
     const primaryVisible = !!(sourceLink && !sourceLink.hidden);
     const secondaryVisible = !!(sourceSiteRow && !sourceSiteRow.hidden);
     const brokenActionVisible = !!(brokenSourceBtn && !brokenSourceBtn.hidden);
-    sourceLinksWrap.hidden = !(primaryVisible || secondaryVisible || brokenActionVisible);
+    const restoreActionVisible = !!(restoreBrokenSourceBtn && !restoreBrokenSourceBtn.hidden);
+    sourceLinksWrap.hidden = !(primaryVisible || secondaryVisible || brokenActionVisible || restoreActionVisible);
   }
 
 }
 
 async function markModalBrokenSourceLink(asset) {
   if (!asset?.id || !isOwner()) return;
-  if (!window.confirm("Flag this item as a broken source link and discard it from ordinary browsing?")) return;
+  const checkInfo = sourceLinkCheckInfo(asset);
+  const caution = checkInfo.tone === "bad"
+    ? "The latest source check found a source-link problem."
+    : "The app has not confirmed this source is broken. If the link opens in Safari, this is probably fixable and should not be discarded as broken.";
+  if (!window.confirm(`${caution}\n\nDiscard this item from ordinary browsing and mark its source link unusable?`)) return;
   const button = $("#modalBrokenSourceBtn");
   if (button) button.disabled = true;
   try {
@@ -1471,6 +1576,29 @@ async function markModalBrokenSourceLink(asset) {
     Shared.showToast("Broken source link flagged and discarded.", { type: "success", duration: 3000 });
   } catch (e) {
     Shared.showToast(`Unable to discard broken link: ${formatApiError(e)}`, { type: "error", duration: 3200 });
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function restoreModalBrokenSourceLink(asset) {
+  if (!asset?.id || !isOwner()) return;
+  if (!window.confirm("Clear the broken-source discard mark and restore this item to ordinary browsing?\n\nThe original source link will be kept.")) return;
+  const button = $("#modalRestoreBrokenSourceBtn");
+  if (button) button.disabled = true;
+  try {
+    const data = await api(`/api/assets/${encodeURIComponent(asset.id)}/broken-source/restore`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    if (data.asset) {
+      replaceAssetInState(data.asset);
+      await openModal(data.asset, { hydrate: false });
+    }
+    await Promise.all([loadAssets(), loadCatalogTree(), loadCollections()]);
+    Shared.showToast("Source restored; item is back in ordinary browsing.", { type: "success", duration: 3000 });
+  } catch (e) {
+    Shared.showToast(`Unable to restore source item: ${formatApiError(e)}`, { type: "error", duration: 3200 });
   } finally {
     if (button) button.disabled = false;
   }
@@ -2303,7 +2431,6 @@ function renderCatalogTree() {
     });
   }
 
-  wrap.appendChild(buildReviewStatusGroupNode());
   if (sourceNodes.length) {
     wrap.appendChild(buildBrowseGroupNode({
       id: "browse-group:sources",
@@ -2325,6 +2452,7 @@ function renderCatalogTree() {
       builder: (node) => node.type === "dimension" ? buildDimensionNode(node) : buildClassificationNode(node),
     }));
   }
+  wrap.appendChild(buildReviewStatusGroupNode());
 
   updateSidebarModeVisibility();
 }
@@ -2342,7 +2470,7 @@ function buildReviewStatusGroupNode() {
     id: "browse-group:review-status",
     label: "Review Status",
     nodes,
-    defaultExpanded: true,
+    defaultExpanded: false,
     builder: (node) => buildReviewStatusLeaf(node),
   });
 }
@@ -2802,7 +2930,7 @@ function buildCollectionsGroupNode(node) {
     : (node.children || []);
   const isActiveHeader = state.currentTreeNodeId === node.id;
   const toggle = document.createElement("button");
-  const groupLabel = focusedLandingId ? "Shared Collection" : "Collections";
+  const groupLabel = focusedLandingId ? "Shared Collection" : "All Collections";
   const groupCount = focusedLandingId
     ? visibleChildren.reduce((sum, child) => sum + Number(child.count || 0), 0)
     : Number(node.count || 0);
@@ -3122,6 +3250,13 @@ function _currentCollectionDetailFormState() {
   };
 }
 
+function _currentCollectionCreateFormState() {
+  return {
+    name: String($("#collectionCreateName")?.value || "").trim(),
+    description: String($("#collectionCreateDescription")?.value || "").trim(),
+  };
+}
+
 function _sameStringList(a, b) {
   const left = Array.isArray(a) ? a.map((v) => String(v || "").trim()).filter(Boolean) : [];
   const right = Array.isArray(b) ? b.map((v) => String(v || "").trim()).filter(Boolean) : [];
@@ -3432,6 +3567,7 @@ function renderCollectionShareModal() {
   renderCollectionShareFilterButtons();
   renderCollectionShareList();
   renderCollectionDetailEditor();
+  renderCollectionBulkModal();
 }
 
 async function _refreshCollectionViewsAfterBulkChange() {
@@ -3511,7 +3647,7 @@ async function openCollectionBulkModal() {
   }
   await loadCollectionsForManager();
   renderCollectionBulkModal();
-  $("#collectionBulkModal")?.classList.remove("hidden");
+  $("#collectionShareModal")?.classList.remove("hidden");
 }
 
 function closeCollectionBulkModal() {
@@ -3519,7 +3655,7 @@ function closeCollectionBulkModal() {
   collectionBulkSelection.hidden.clear();
   state.collectionManagerSelectedId = null;
   renderCollectionBulkModal();
-  $("#collectionBulkModal")?.classList.add("hidden");
+  $("#collectionShareModal")?.classList.add("hidden");
 }
 
 async function openCollectionShareModal() {
@@ -3529,14 +3665,63 @@ async function openCollectionShareModal() {
   }
   await loadCollectionsForManager();
   renderCollectionShareModal();
+  const createStatus = $("#collectionCreateStatus");
+  if (createStatus) createStatus.textContent = "";
   $("#collectionShareModal")?.classList.remove("hidden");
 }
 
 function closeCollectionShareModal() {
   state.collectionManagerSelectedId = null;
   state.collectionShareFilter = "all";
+  collectionBulkSelection.active.clear();
+  collectionBulkSelection.hidden.clear();
+  const createName = $("#collectionCreateName");
+  const createDescription = $("#collectionCreateDescription");
+  const createStatus = $("#collectionCreateStatus");
+  if (createName) createName.value = "";
+  if (createDescription) createDescription.value = "";
+  if (createStatus) createStatus.textContent = "";
   renderCollectionShareModal();
   $("#collectionShareModal")?.classList.add("hidden");
+}
+
+async function createEmptyCollectionFromManager() {
+  if (!isOwner()) {
+    Shared.showToast("Owner access required.", { type: "error" });
+    return;
+  }
+  const payload = _currentCollectionCreateFormState();
+  const statusEl = $("#collectionCreateStatus");
+  const createBtn = $("#collectionCreateBtn");
+  if (!payload.name) {
+    if (statusEl) statusEl.textContent = "Name required";
+    $("#collectionCreateName")?.focus();
+    return;
+  }
+  if (createBtn) createBtn.disabled = true;
+  if (statusEl) statusEl.textContent = "Creating…";
+  try {
+    const data = await api("/api/collections", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    const collection = data?.collection || {};
+    state.collectionManagerSelectedId = String(collection.id || "");
+    const nameEl = $("#collectionCreateName");
+    const descEl = $("#collectionCreateDescription");
+    if (nameEl) nameEl.value = "";
+    if (descEl) descEl.value = "";
+    await loadCollectionsForManager();
+    await Promise.all([loadCollections(), loadCatalogTree()]);
+    renderCollectionShareModal();
+    renderCatalogTree();
+    Shared.showToast(`Created collection "${payload.name}".`, { type: "success" });
+  } catch (e) {
+    if (statusEl) statusEl.textContent = "Create failed";
+    Shared.showToast(`Create failed: ${formatApiError(e)}`, { type: "error" });
+  } finally {
+    if (createBtn) createBtn.disabled = false;
+  }
 }
 
 async function saveCollectionDetails() {
@@ -3763,19 +3948,6 @@ async function addSelectedToExistingCollection() {
   }
 }
 
-$("#newCollection").addEventListener("click", async () => {
-  const name = prompt("Collection name:");
-  if (!name || !name.trim()) return;
-  try {
-    await api("/api/collections", { method: "POST", body: JSON.stringify({ name: name.trim() }) });
-    await loadCollections();
-    await loadCatalogTree();
-    Shared.showToast(`Created collection "${name.trim()}"`, { type: "success" });
-  } catch (e) {
-    Shared.showToast(`Failed: ${formatApiError(e)}`, { type: "error" });
-  }
-});
-
 const exportCollectionPdfBtn = $("#exportCollectionPdf");
 if (exportCollectionPdfBtn) {
   exportCollectionPdfBtn.addEventListener("click", exportCurrentCollectionPdf);
@@ -3798,20 +3970,10 @@ if (manageCollectionsBtn) {
     await openCollectionShareModal();
   });
 }
-const manageCollectionVisibilityBtn = $("#manageCollectionVisibility");
-if (manageCollectionVisibilityBtn) {
-  manageCollectionVisibilityBtn.addEventListener("click", async () => {
-    await openCollectionBulkModal();
-  });
-}
 const closeCollectionShareBtn = $("#closeCollectionShare");
 if (closeCollectionShareBtn) closeCollectionShareBtn.addEventListener("click", closeCollectionShareModal);
 const cancelCollectionShareBtn = $("#cancelCollectionShare");
 if (cancelCollectionShareBtn) cancelCollectionShareBtn.addEventListener("click", closeCollectionShareModal);
-const closeCollectionBulkBtn = $("#closeCollectionBulk");
-if (closeCollectionBulkBtn) closeCollectionBulkBtn.addEventListener("click", closeCollectionBulkModal);
-const cancelCollectionBulkBtn = $("#cancelCollectionBulk");
-if (cancelCollectionBulkBtn) cancelCollectionBulkBtn.addEventListener("click", closeCollectionBulkModal);
 const collectionBulkHideBtn = $("#collectionBulkHideBtn");
 if (collectionBulkHideBtn) collectionBulkHideBtn.addEventListener("click", bulkHideCollections);
 const collectionBulkRestoreBtn = $("#collectionBulkRestoreBtn");
@@ -3820,6 +3982,8 @@ const collectionBulkDeleteBtn = $("#collectionBulkDeleteBtn");
 if (collectionBulkDeleteBtn) collectionBulkDeleteBtn.addEventListener("click", bulkDeleteHiddenCollections);
 const collectionDetailSaveBtn = $("#collectionDetailSaveBtn");
 if (collectionDetailSaveBtn) collectionDetailSaveBtn.addEventListener("click", saveCollectionDetails);
+const collectionCreateBtn = $("#collectionCreateBtn");
+if (collectionCreateBtn) collectionCreateBtn.addEventListener("click", createEmptyCollectionFromManager);
 const collectionDetailIntent = $("#collectionDetailIntent");
 if (collectionDetailIntent) {
   collectionDetailIntent.addEventListener("change", () => _updateCollectionDetailDerivedUI(_selectedCollectionForManager()));
@@ -4368,9 +4532,12 @@ function renderModalSourceCandidatePanel(asset) {
       parts.push(state.modalSourceCandidateMessage);
     } else if (fetchStatus === "fetched") {
       const sourceImageCount = mediaCandidates.filter((item) => item?.kind === "post_image").length;
+      const commentImageCount = mediaCandidates.filter((item) => item?.kind === "post_image" && /comment image/i.test(String(item?.label || ""))).length;
       const savedMediaCount = mediaCandidates.filter((item) => item?.kind === "saved_media").length;
       parts.push(sourceImageCount
-        ? "Source media found. Choose a post image or a generated text card."
+        ? (commentImageCount
+          ? "Source media found, including comment images. Choose a replacement only if it is better."
+          : "Source media found. Choose a post image or a generated text card.")
         : (savedMediaCount
           ? "No source images were found in the post. Previously used media remains available below."
           : "No source images were found in the post. The current media was not changed."));
@@ -4509,9 +4676,10 @@ async function runModalSourceCandidateAction(action) {
         ? updated.source_link_candidate.media_candidates
         : [];
       const sourceImageCount = mediaCandidates.filter((item) => item?.kind === "post_image").length;
+      const commentImageCount = mediaCandidates.filter((item) => item?.kind === "post_image" && /comment image/i.test(String(item?.label || ""))).length;
       const savedMediaCount = mediaCandidates.filter((item) => item?.kind === "saved_media").length;
       state.modalSourceCandidateMessage = sourceImageCount
-        ? `${sourceImageCount} source image${sourceImageCount === 1 ? "" : "s"} found. Choose a replacement only if it is better.`
+        ? `${sourceImageCount} source image${sourceImageCount === 1 ? "" : "s"} found${commentImageCount ? `, including ${commentImageCount} from comments` : ""}. Choose a replacement only if it is better.`
         : (savedMediaCount
           ? "No source images were found in this post. Previously used media is still available below."
           : "No source images were found in this post. The current media was not changed.");
@@ -9088,7 +9256,7 @@ function updateSidebarModeVisibility() {
   const sidebar = $(".sidebar");
   const treeSection = $("#catalogTree")?.closest(".sidebar-section");
   const collectionsSection = $("#collectionTree")?.closest(".sidebar-section");
-  const collectionActionsSection = $("#newCollection")?.closest(".sidebar-section");
+  const collectionActionsSection = $("#manageCollections")?.closest(".sidebar-section");
   const collectionsHeading = $("#collectionSidebarSection .sidebar-heading");
 
   if (treeSection) treeSection.hidden = inReview || focusedShared;
@@ -9131,8 +9299,6 @@ function applyRoleVisibility() {
   syncCollectionPdfExportButton();
   const manageCollectionsEl = $("#manageCollections");
   if (manageCollectionsEl) manageCollectionsEl.hidden = !owner;
-  const manageCollectionVisibilityEl = $("#manageCollectionVisibility");
-  if (manageCollectionVisibilityEl) manageCollectionVisibilityEl.hidden = !owner;
 
   const printBtn = document.getElementById("printAssetBtn");
   if (printBtn) printBtn.hidden = false;
@@ -9155,10 +9321,6 @@ function applyRoleVisibility() {
   if (reviewFlagBtnEl) reviewFlagBtnEl.hidden = !canUseFlag();
 
   // Notes and image annotations are local corpus-management tools.
-
-  // New collection button — owner-only
-  const newCollBtn = $("#newCollection");
-  if (newCollBtn) newCollBtn.hidden = !owner;
   updateActorContextChips();
   updateReviewScopeChips();
   updateSidebarModeVisibility();

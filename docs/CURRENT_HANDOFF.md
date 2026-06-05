@@ -1,6 +1,6 @@
 # Inspirations Current Handoff
 
-Last updated: 2026-06-04
+Last updated: 2026-06-05
 
 This is the authoritative reboot and lost-context resume document. Historical
 handoffs and sprint plans remain in `docs/` for provenance, but they do not
@@ -129,9 +129,30 @@ immediately, shows an in-progress state, and reports whether source images were
 found, none were found, or the check failed. Choosing a previous image archives
 the current media in turn and queues the normal Admin search-evidence refresh.
 
+For Facebook/Pinterest hard cases, `Find source media` depends on the named
+authenticated Playwright/Chrome session `media-repair-auth`. Open it with:
+
+```bash
+tools/open_media_repair_auth_browser.sh
+```
+
+Sign into Facebook/Pinterest in that Chrome window if prompted and leave it
+open. The app does not read Safari or Jim's ordinary Chrome windows. Facebook
+source capture now scrolls the post/comment modal inside the final extraction
+step and labels lazy-loaded comment media as `Scrolled comment image N`. This
+was verified on item `154c5218-0ef2-46e8-b30f-5b5b4d9d2fe4`, where `Scrolled
+comment image 1` is the drywall-levels graphic.
+
 Flagged cards use one stateful quick-action control. The persistent brown
 `Unflag follow-up` button is both the flagged-state indicator and the removal
 action; there is no separate red flag badge.
+
+Source-link repair/discard is evidence-aware. Detail view shows the latest
+source check status. `Broken link · discard item` / `Mark source unusable ·
+discard` hides the item and marks `flagged_note='broken source link'`, but
+browser/network errors are not treated as proof that the source is broken. A
+discarded broken-source item exposes a restore action that clears that flag and
+returns the item to ordinary browsing while keeping the original source URL.
 
 The Grid automatically requests the next asset page before the curator reaches
 the bottom. `Load More` remains a fallback and must show a loading state rather
@@ -157,6 +178,12 @@ curation. Leslie's original board placement remains a stronger intent signal.
 Collection-folder archiving and discarded assets are separate concepts.
 Archiving or deleting a collection folder does not hide or delete its member
 assets.
+
+The collection sidebar section is a peer to `Browse`; its tree root is `All
+Collections`. There is one owner action, `Manage Collections`, which now
+contains collection creation, name/description editing, archive, restore, and
+permanent delete controls. There is no separate `New Collection` sidebar action
+and no separate `Manage Collection Archive` modal.
 
 Obsolete `pins:` source-board mirror folders and completed `Review:` workflow
 folders were removed after a local SQLite backup. Source-board browsing now
@@ -206,6 +233,8 @@ The unmerged branch combines:
 
 - standalone one-collection PDF export and retirement of active live-sharing UI
 - collection archive cleanup semantics and management
+- consolidated collection manager with create/edit/archive/restore/delete in
+  one dialog
 - browse-first persistent curation bar
 - stable sidebar `Review Status` scope semantics
 - Review-scoped advanced detail editing and calmer Browse detail

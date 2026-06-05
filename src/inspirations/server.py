@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import gzip
 import ipaddress
 import mimetypes
@@ -665,6 +666,19 @@ class ApiHandler(BaseHTTPRequestHandler):
             if not catalog_dir:
                 return _send(self, 200, {"tree": []})
             actor = _resolve_actor(self)
+            role = str((actor or {}).get("role") or "").strip().lower()
+            is_collaborator = _is_collaborator(actor)
+            exclude_tracks = _collaborator_excluded_tracks_csv() if is_collaborator else ""
+            cache_key = self._catalog_tree_cache_key(
+                Path(catalog_dir),
+                role=role,
+                home_only=is_collaborator,
+                exclude_tracks=exclude_tracks,
+            )
+            if cache_key is not None:
+                cached = getattr(self.server, "catalog_tree_cache", {}).get(cache_key)
+                if cached is not None:
+                    return _send(self, 200, {"tree": copy.deepcopy(cached)})
             try:
                 tree = self._build_catalog_tree(Path(catalog_dir), actor=actor)
             except Exception:
@@ -673,13 +687,15 @@ class ApiHandler(BaseHTTPRequestHandler):
             try:
                 self._adjust_tree_counts_for_hidden(
                     tree,
-                    home_only=_is_collaborator(actor),
-                    exclude_tracks=_collaborator_excluded_tracks_csv() if _is_collaborator(actor) else "",
+                    home_only=is_collaborator,
+                    exclude_tracks=exclude_tracks,
                 )
             except Exception:
                 pass
-            if _is_collaborator(actor):
+            if is_collaborator:
                 tree = [node for node in tree if not _is_non_home_tree_node(node)]
+            if cache_key is not None:
+                self.server.catalog_tree_cache = {cache_key: copy.deepcopy(tree)}
             return _send(self, 200, {"tree": tree})
 
         if parsed.path == "/api/catalog/items":
@@ -1129,6 +1145,55 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return self._get_asset_for_modal(db, asset_id=asset_id, include_hidden=True)
 
             updated_asset = self._with_db(mark_broken_source)
+            if not updated_asset:
+                return _send(self, 404, {"error": "asset not found"})
+            return _send(self, 200, {"ok": True, "asset": updated_asset})
+
+        m = re.match(r"^/api/assets/([^/]+)/broken-source/restore$", parsed.path)
+        if m:
+            actor = _resolve_actor(self)
+            if not actor or actor.get("role") != "owner":
+                return _send(self, 403, {"error": "owner access required"})
+            asset_id = m.group(1)
+            actor_name = str(actor.get("name") or "").strip() or "ui"
+
+            def restore_broken_source(db: Db) -> dict | None:
+                row = db.query(
+                    "select id, triage_status, flagged_note from assets where id=? limit 1",
+                    (asset_id,),
+                )
+                if not row:
+                    return None
+                asset_row = dict(row[0])
+                flagged_note = str(asset_row.get("flagged_note") or "").strip().lower()
+                if flagged_note == "broken source link":
+                    db.exec(
+                        "update assets set flagged=0, flagged_by='', flagged_note='' where id=?",
+                        (asset_id,),
+                    )
+                if str(asset_row.get("triage_status") or "").strip().lower() == "hidden":
+                    set_triage_status(
+                        db,
+                        asset_id,
+                        None,
+                        reason="source works now; restored from broken-link discard",
+                        actor=actor_name,
+                    )
+                broken_collection_ids = [
+                    str(r["id"] or "").strip()
+                    for r in db.query(
+                        "select id from collections where lower(name)='broken source links'"
+                    )
+                    if str(r["id"] or "").strip()
+                ]
+                for collection_id in broken_collection_ids:
+                    db.exec(
+                        "delete from collection_items where collection_id=? and asset_id=?",
+                        (collection_id, asset_id),
+                    )
+                return self._get_asset_for_modal(db, asset_id=asset_id, include_hidden=True)
+
+            updated_asset = self._with_db(restore_broken_source)
             if not updated_asset:
                 return _send(self, 404, {"error": "asset not found"})
             return _send(self, 200, {"ok": True, "asset": updated_asset})
@@ -1959,6 +2024,35 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return catalog_dir
             self.server.catalog_dir = None
             return None
+
+    def _catalog_tree_cache_key(
+        self,
+        catalog_dir: Path,
+        *,
+        role: str,
+        home_only: bool,
+        exclude_tracks: str,
+    ) -> tuple[object, ...] | None:
+        """Return a cache key that changes when DB/catalog inputs change."""
+        db_path = Path(self.server.db_path).resolve()
+        index_path = catalog_dir / "_index.md"
+        manifest_path = catalog_dir / "_manifest.json"
+        try:
+            db_stat = db_path.stat()
+            index_stat = index_path.stat()
+            manifest_mtime = manifest_path.stat().st_mtime_ns if manifest_path.exists() else 0
+        except OSError:
+            return None
+        return (
+            str(db_path),
+            db_stat.st_mtime_ns,
+            str(catalog_dir.resolve()),
+            index_stat.st_mtime_ns,
+            manifest_mtime,
+            role,
+            bool(home_only),
+            str(exclude_tracks or ""),
+        )
 
     def _apply_ingest_metadata(
         self,
@@ -3167,6 +3261,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             "hero_image_url": str(row.get("hero_image_url") or "").strip(),
             "hero_image_alt": str(row.get("hero_image_alt") or "").strip(),
             "hero_text_excerpt": str(row.get("hero_text_excerpt") or "").strip(),
+            "http_status": int(row.get("http_status") or 0),
             "fetch_status": str(row.get("fetch_status") or "").strip(),
             "error": str(row.get("error") or "").strip(),
             "created_at": str(row.get("created_at") or "").strip(),
@@ -3577,6 +3672,7 @@ def run_server(*, host: str, port: int, db_path: Path, app_dir: Path, store_dir:
     server.store_dir = store_dir
     server.imports_dir = app_dir.resolve().parent / "imports"
     server.admin_tokens = {}
+    server.catalog_tree_cache = {}
 
     # Catalog directory for chat "dictionary" data (auto-refreshed on chat requests).
     catalog_dir = Path(db_path).resolve().parent / "catalog"

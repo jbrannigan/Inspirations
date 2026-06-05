@@ -708,6 +708,33 @@ class TestServerApi(unittest.TestCase):
         self.assertIn("Kitchen", [child.get("label") for child in classification_nodes["Rooms"].get("children", [])])
         self.assertIn("Spanish / Mission", [child.get("label") for child in classification_nodes["Style"].get("children", [])])
 
+    def test_catalog_tree_uses_cache_when_inputs_are_unchanged(self):
+        catalog_dir = self.tmp_path / "catalog-cache"
+        catalog_dir.mkdir(parents=True, exist_ok=True)
+        (catalog_dir / "_index.md").write_text("", encoding="utf-8")
+        self.server.catalog_dir = catalog_dir
+
+        with mock.patch.object(
+            ApiHandler,
+            "_build_catalog_tree",
+            return_value=[
+                {
+                    "id": "classification:track",
+                    "label": "Track",
+                    "count": 1,
+                    "type": "classification",
+                    "children": [],
+                }
+            ],
+        ) as mocked:
+            first_status, first_body = self._request("/api/catalog/tree")
+            second_status, second_body = self._request("/api/catalog/tree")
+
+        self.assertEqual(first_status, 200)
+        self.assertEqual(second_status, 200)
+        self.assertEqual(first_body.get("tree"), second_body.get("tree"))
+        self.assertEqual(mocked.call_count, 1)
+
     def test_catalog_tree_track_counts_include_non_home_irrelevant_items(self):
         self._seed_v2_classification()
         catalog_dir = self.tmp_path / "catalog-track"
@@ -2940,6 +2967,55 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(log.get("reason"), "broken source link (UI)")
         self.assertEqual(log.get("actor"), "Jim")
 
+    def test_broken_source_restore_clears_discard_without_changing_link(self):
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into collections (id, name, description, created_at, updated_at)
+                values (?, ?, ?, datetime('now'), datetime('now'))
+                """,
+                ("broken-links", "Broken Source Links", ""),
+            )
+            db.exec(
+                "insert into collection_items (collection_id, asset_id, position) values (?, ?, ?)",
+                ("broken-links", "a2", 1),
+            )
+            source_ref_before = db.query_value("select source_ref from assets where id='a2'")
+
+        status, body = self._request("/api/assets/a2/broken-source", method="POST", payload={})
+        self.assertEqual(status, 200)
+        self.assertEqual((body.get("asset") or {}).get("flagged_note"), "broken source link")
+
+        status, body = self._request("/api/assets/a2/broken-source/restore", method="POST", payload={})
+        self.assertEqual(status, 200)
+        asset = body.get("asset") or {}
+        self.assertIsNone(asset.get("triage_status"))
+        self.assertEqual(asset.get("flagged"), 0)
+        self.assertEqual(asset.get("flagged_note"), "")
+        self.assertEqual(asset.get("source_ref"), source_ref_before)
+
+        with Db(self.db_path) as db:
+            remaining = db.query_value(
+                "select count(*) from collection_items where collection_id='broken-links' and asset_id='a2'"
+            )
+            log = dict(
+                db.query(
+                    """
+                    select old_status, new_status, reason, actor
+                    from triage_log
+                    where asset_id='a2'
+                    order by id desc
+                    limit 1
+                    """
+                )[0]
+            )
+        self.assertEqual(int(remaining or 0), 0)
+        self.assertEqual(log.get("old_status"), "hidden")
+        self.assertIsNone(log.get("new_status"))
+        self.assertEqual(log.get("reason"), "source works now; restored from broken-link discard")
+        self.assertEqual(log.get("actor"), "Jim")
+
     def test_assets_endpoint_supports_label_mode_all(self):
         with Db(self.db_path) as db:
             ensure_schema(db)
@@ -3385,6 +3461,47 @@ class TestServerApi(unittest.TestCase):
             self.assertEqual(resp.status, 200)
             self.assertEqual(resp.headers.get("Cache-Control"), "public, max-age=300")
 
+    def test_frontend_places_review_status_at_bottom_of_browse_tree(self):
+        req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            app_js = resp.read()
+        self.assertIn(b"buildReviewStatusGroupNode", app_js)
+        self.assertLess(app_js.index(b'browse-group:sources'), app_js.index(b"buildReviewStatusGroupNode());"))
+        self.assertLess(app_js.index(b'browse-group:non-home'), app_js.index(b"buildReviewStatusGroupNode());"))
+        review_status_section = app_js[app_js.index(b'browse-group:review-status'):app_js.index(b"function buildReviewStatusLeaf")]
+        self.assertIn(b"defaultExpanded: false", review_status_section)
+
+    def test_frontend_places_new_collection_inside_collections_section(self):
+        status, html, _ = self._raw_request("/")
+        self.assertEqual(status, 200)
+        collection_section = html[
+            html.index(b'id="collectionSidebarSection"'):
+            html.index(b'id="browseSidebarSection"')
+        ]
+        self.assertIn(b'id="manageCollections"', collection_section)
+        self.assertNotIn(b'id="newCollection"', html)
+        self.assertNotIn(b'id="manageCollectionVisibility"', html)
+        self.assertLess(html.index(b'id="collectionSidebarSection"'), html.index(b'id="browseSidebarSection"'))
+        share_modal = html[
+            html.index(b'id="collectionShareModal"'):
+            html.index(b'<!-- Add media modal -->')
+        ]
+        self.assertIn(b'Manage Collections', share_modal)
+        self.assertIn(b'id="collectionCreateName"', share_modal)
+        self.assertIn(b'id="collectionCreateDescription"', share_modal)
+        self.assertIn(b'id="collectionCreateBtn"', share_modal)
+        self.assertIn(b'Archive selected', share_modal)
+        self.assertIn(b'Restore selected', share_modal)
+        self.assertIn(b'Delete archived', share_modal)
+
+        req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            app_js = resp.read()
+        self.assertIn(b'focusedLandingId ? "Shared Collection" : "All Collections"', app_js)
+        self.assertNotIn(b"manageCollectionVisibility", app_js)
+        self.assertNotIn(b"prompt(\"Collection name", app_js)
+        self.assertIn(b"createEmptyCollectionFromManager", app_js)
+
     def test_detail_modal_exposes_consistent_curation_controls(self):
         status, html, _ = self._raw_request("/")
         self.assertEqual(status, 200)
@@ -3407,6 +3524,21 @@ class TestServerApi(unittest.TestCase):
         self.assertIn(b": isReviewModeActive();", app_js)
         self.assertIn(b"panel.open = false;", app_js)
         self.assertIn(b"Advanced review tools are available for this item.", app_js)
+
+    def test_detail_modal_explains_source_link_check_state(self):
+        status, html, _ = self._raw_request("/")
+        self.assertEqual(status, 200)
+        self.assertIn(b'id="modalSourceCheckStatus"', html)
+        self.assertIn(b'id="modalRestoreBrokenSourceBtn"', html)
+
+        req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            app_js = resp.read()
+        self.assertIn(b"sourceLinkCheckInfo", app_js)
+        self.assertIn(b"does not prove the source link is broken", app_js)
+        self.assertIn(b"Mark source unusable", app_js)
+        self.assertIn(b"restoreModalBrokenSourceLink", app_js)
+        self.assertIn(b"broken-source/restore", app_js)
 
     def test_frontend_shows_saved_irrelevant_as_disabled_state(self):
         req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")

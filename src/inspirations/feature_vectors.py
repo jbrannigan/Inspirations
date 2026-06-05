@@ -480,7 +480,13 @@ def build_legacy_facet_memberships(
 
     asset_id_set = {str(row["id"] or "").strip() for row in assets}
 
-    ai_rows = db.query("select asset_id, provider, json from asset_ai")
+    if selected_ids:
+        ai_rows = db.query(
+            f"select asset_id, provider, json from asset_ai where asset_id in ({placeholders})",
+            tuple(params),
+        )
+    else:
+        ai_rows = db.query("select asset_id, provider, json from asset_ai")
     ai_by_asset: dict[str, list[tuple[str, dict]]] = {}
     for row in ai_rows:
         asset_id = str(row["asset_id"] or "").strip()
@@ -493,7 +499,13 @@ def build_legacy_facet_memberships(
         if isinstance(parsed, dict):
             ai_by_asset.setdefault(asset_id, []).append((str(row["provider"] or ""), parsed))
 
-    label_rows = db.query("select asset_id, label from asset_labels")
+    if selected_ids:
+        label_rows = db.query(
+            f"select asset_id, label from asset_labels where asset_id in ({placeholders})",
+            tuple(params),
+        )
+    else:
+        label_rows = db.query("select asset_id, label from asset_labels")
     labels_by_asset: dict[str, list[str]] = {}
     for row in label_rows:
         asset_id = str(row["asset_id"] or "").strip()

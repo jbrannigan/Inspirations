@@ -30,6 +30,8 @@ The item modal now has a first-class `Repair media` gallery:
 - `Use selected media` promotes only the human-selected candidate.
 - Previously used saved media is recovered from `asset_media_repair_audit` and remains selectable after later source checks, including checks that find no post images.
 - `Find source media` opens the gallery immediately and reports searching, images-found, no-images-found, and failure states instead of relying on a disabled cursor.
+- Facebook source capture uses the named authenticated Playwright/Chrome session `media-repair-auth`. Safari and Jim's ordinary Chrome windows are not visible to the capture tool.
+- Facebook post/comment modals are scrolled during the final extraction pass; lazy-loaded comment media is offered as `Scrolled comment image N`.
 - Generated cards use the normal local storage and thumbnail pathways, so Grid, detail view, and standalone collection PDF export use them without app-dependent links.
 - Promotion records provenance in `asset_field_provenance`.
 - Promotion archives stale machine evidence in `asset_media_repair_audit`, then clears old AI summaries, AI labels, embeddings, derived classification rows, and source-link QC rows for that asset.
@@ -37,7 +39,8 @@ The item modal now has a first-class `Repair media` gallery:
 - Explorer PCA cache keys include embedding vectors, so refreshed embeddings produce refreshed coordinates.
 
 Important capture rule:
-- never borrow a visually prominent image from another feed post or nearby comment
+- never borrow a visually prominent image from another feed post or unrelated sidebar region
+- nearby and scrolled comment images may be offered when they are inside the authenticated source post/comment modal
 - a text-only anchored post should produce useful text evidence with no unrelated image candidate
 
 ### Refresh after promotion

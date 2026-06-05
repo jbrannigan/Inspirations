@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inspirations!</title>
-    <link rel="stylesheet" href="/app/styles.css?v=89" />
+    <link rel="stylesheet" href="/app/styles.css?v=93" />
     <script type="importmap">
       {
         "imports": {
@@ -118,6 +118,9 @@
           <div id="collectionTree" class="catalog-tree">
             <div class="muted sidebar-loading">Loading…</div>
           </div>
+          <div class="sidebar-collection-actions">
+            <button id="manageCollections" class="new-item-btn new-item-btn-secondary" type="button">Manage Collections</button>
+          </div>
         </div>
         <div class="sidebar-section sidebar-tree-section" id="browseSidebarSection">
           <h3 class="sidebar-heading">Browse</h3>
@@ -128,11 +131,6 @@
         <div class="sidebar-section" id="dynamicSidebarSection" hidden>
           <h3 id="dynamicSidebarHeading" class="sidebar-heading"></h3>
           <div id="dynamicSidebarContent"></div>
-        </div>
-        <div class="sidebar-section">
-          <button id="newCollection" class="new-item-btn" type="button">+ New Collection</button>
-          <button id="manageCollections" class="new-item-btn new-item-btn-secondary" type="button">Manage Collections</button>
-          <button id="manageCollectionVisibility" class="new-item-btn new-item-btn-secondary" type="button">Manage Collection Archive</button>
         </div>
       </aside>
       <div id="sidebarResizeHandle" class="sidebar-resize-handle" title="Resize sidebar" aria-hidden="true"></div>
@@ -372,7 +370,9 @@
                 <span id="sourceSiteRow" hidden>
                   <a id="sourceSiteLink" href="#" target="_blank" rel="noopener" class="source-site-link">Original site ↗</a>
                 </span>
+                <span id="modalSourceCheckStatus" class="modal-source-check-status" hidden></span>
                 <button id="modalBrokenSourceBtn" class="modal-source-broken-btn" type="button" hidden>Broken link · discard item</button>
+                <button id="modalRestoreBrokenSourceBtn" class="modal-source-restore-btn" type="button" hidden>Source works now · restore item</button>
               </div>
             </div>
             <div class="modal-header-actions">
@@ -613,13 +613,28 @@
       <div class="modalContent collectionShareContent">
         <div class="modalHeader">
           <div>
-            <div id="collectionShareTitle" class="modalTitle">Collection Details</div>
-            <div class="muted">Edit local collection metadata. Use Export Collection PDF for designer-ready sharing.</div>
+            <div id="collectionShareTitle" class="modalTitle">Manage Collections</div>
+            <div class="muted">Edit collection details, archive old working folders, or restore archived collections.</div>
           </div>
           <button id="closeCollectionShare" type="button">Close</button>
         </div>
         <div class="collectionShareBody">
           <section class="collectionShareListSection">
+            <div class="collectionCreatePanel">
+              <div class="collectionBulkSectionHeader">
+                <h3>Create Empty Collection</h3>
+                <span id="collectionCreateStatus" class="muted"></span>
+              </div>
+              <label class="collectionDetailField">
+                <span>Name</span>
+                <input id="collectionCreateName" type="text" maxlength="160" placeholder="e.g., Powder room ideas" />
+              </label>
+              <label class="collectionDetailField">
+                <span>Description</span>
+                <textarea id="collectionCreateDescription" rows="2" maxlength="500" placeholder="Optional note about what belongs here"></textarea>
+              </label>
+              <button id="collectionCreateBtn" type="button">Create collection</button>
+            </div>
             <div class="collectionBulkSectionHeader">
               <h3>Collections</h3>
               <span id="collectionShareCount" class="muted">0 collections</span>
@@ -656,43 +671,35 @@
             </div>
           </section>
         </div>
+        <div class="collectionArchivePanel">
+          <div class="collectionBulkSectionHeader">
+            <h3>Archive</h3>
+            <span class="muted">Archive folders without hiding or deleting their items.</span>
+          </div>
+          <div class="collectionBulkBody">
+            <section class="collectionBulkSection">
+              <div class="collectionBulkSectionHeader">
+                <h3>Active Collections</h3>
+                <span id="collectionBulkActiveCount" class="muted">0 collections</span>
+              </div>
+              <div id="collectionBulkActiveList" class="collectionBulkList"></div>
+            </section>
+            <section class="collectionBulkSection">
+              <div class="collectionBulkSectionHeader">
+                <h3>Archived Collections</h3>
+                <span id="collectionBulkHiddenCount" class="muted">0 collections</span>
+              </div>
+              <div id="collectionBulkHiddenList" class="collectionBulkList"></div>
+            </section>
+          </div>
+          <div class="collectionBulkActions collectionArchiveActions">
+            <button id="collectionBulkHideBtn" type="button">Archive selected</button>
+            <button id="collectionBulkRestoreBtn" type="button">Restore selected</button>
+            <button id="collectionBulkDeleteBtn" type="button">Delete archived</button>
+          </div>
+        </div>
         <div class="collectionBulkActions">
           <button id="cancelCollectionShare" type="button">Done</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Collection visibility modal -->
-    <div id="collectionBulkModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="collectionBulkTitle">
-      <div class="modalContent collectionBulkContent">
-        <div class="modalHeader">
-          <div>
-            <div id="collectionBulkTitle" class="modalTitle">Manage Collection Archive</div>
-            <div class="muted">Archive active collection folders, restore archived ones, or permanently delete obsolete archive folders. Items inside are not hidden or deleted.</div>
-          </div>
-          <button id="closeCollectionBulk" type="button">Close</button>
-        </div>
-        <div class="collectionBulkBody">
-          <section class="collectionBulkSection">
-            <div class="collectionBulkSectionHeader">
-              <h3>Active Collections</h3>
-              <span id="collectionBulkActiveCount" class="muted">0 collections</span>
-            </div>
-            <div id="collectionBulkActiveList" class="collectionBulkList"></div>
-          </section>
-          <section class="collectionBulkSection">
-            <div class="collectionBulkSectionHeader">
-              <h3>Archived Collections</h3>
-              <span id="collectionBulkHiddenCount" class="muted">0 collections</span>
-            </div>
-            <div id="collectionBulkHiddenList" class="collectionBulkList"></div>
-          </section>
-        </div>
-        <div class="collectionBulkActions">
-          <button id="collectionBulkHideBtn" type="button">Archive selected</button>
-          <button id="collectionBulkRestoreBtn" type="button">Restore selected</button>
-          <button id="collectionBulkDeleteBtn" type="button">Delete archived</button>
-          <button id="cancelCollectionBulk" type="button">Done</button>
         </div>
       </div>
     </div>
@@ -836,6 +843,6 @@
     <script src="/app/shared.js?v=5"></script>
     <script src="/app/explorer.js?v=2"></script>
     <script src="/app/attractor-explorer.js?v=16"></script>
-    <script src="/app/app.js?v=161"></script>
+    <script src="/app/app.js?v=170"></script>
   </body>
 </html>

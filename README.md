@@ -127,10 +127,9 @@ BASE_PATH=/inspirations-app PYTHONPATH=src python3 -m inspirations serve --port 
 - Generated text cards skip visual retagging and receive text embeddings only
 
 ### Collection PDF Export
-- Use **+ New Collection** to create a collection
+- Use **Manage Collections** to create an empty collection, rename collections, edit descriptions, archive obsolete folders, restore archived folders, or permanently delete archived folders.
 - Use **Make Collection** for the primary visual workflow: select cards from the current browse scope, then create a new collection or add them to an existing one
-- Use **Manage Collections** to rename collections and edit their descriptions
-- Use **Manage Collection Archive** to archive, restore, or permanently delete obsolete collection folders. Archiving a folder does not hide or delete its items.
+- Archiving a collection folder does not hide or delete its items.
 - Select exactly one collection in the sidebar, then click **Export Collection PDF** in the persistent curation bar
 - CLI equivalent:
 ```sh
@@ -186,6 +185,7 @@ board browsing now uses `assets.board` metadata directly.
 ## Future Work
 
 - Improve PDF layout quality, ordering controls, and source-link completeness for designer handoffs.
+- Continue polishing source/media repair for Facebook and Pinterest edge cases where platform UI hides source evidence behind authenticated or lazy-loaded views.
 - Keep static HTML/portal exports as legacy/debug utilities unless intentionally revived.
 
 ## Docs

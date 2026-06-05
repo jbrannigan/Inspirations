@@ -1314,6 +1314,9 @@ class TestSourceLinkEnrichment(unittest.TestCase):
 
         self.assertEqual(len(eval_scripts), 1)
         self.assertIn("imageScope.querySelectorAll('img')", eval_scripts[0])
+        self.assertIn("isNearPrimaryPost", eval_scripts[0])
+        self.assertIn("Comment image", eval_scripts[0])
+        self.assertIn("Scrolled comment image", eval_scripts[0])
         self.assertNotIn("Array.from(document.images || [])", eval_scripts[0])
 
     def test_parse_html_payload_collects_page_images(self):
