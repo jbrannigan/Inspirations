@@ -15,10 +15,10 @@ const state = {
   currentClassificationAxis: null,   // v2 browse axis filter (e.g. room, track)
   currentClassificationValue: null,  // optional v2 axis value (e.g. kitchen)
   currentClassificationLabel: "",    // display label for v2 classification scope
-  classificationFacets: {},     // stackable Refine By filters: axis -> [values]
+  classificationFacets: {},     // stackable browse filters: axis -> [values]
   classificationFacetLabels: {}, // display labels keyed as "axis:value"
   currentTreeNodeId: null,      // active sidebar tree node ID
-  triageFilter: "",             // "" | "pending" | "keeper" | "hidden" | "needs-comment" | "flagged"
+  triageFilter: "",             // "" | "pending" | "keeper" | "hidden" | "needs-comment" | "flagged" | "irrelevant-discarded"
   showDiscarded: false,         // Browse discarded items alongside ordinary items.
 
   // Assets
@@ -878,6 +878,28 @@ function appendUsableTrackExclusionParam(params) {
   if (shouldExcludeIrrelevantFromUsableScope()) params.set("exclude_tracks", "irrelevant");
 }
 
+function isIrrelevantDiscardedReviewScope(value = state.triageFilter) {
+  return value === "irrelevant-discarded";
+}
+
+function appendReviewScopeParams(params, { includeHiddenForOwner = true } = {}) {
+  if (state.triageFilter === "needs-comment") {
+    params.set("needs_annotation", "1");
+    if (includeHiddenForOwner || isOwner()) params.set("include_hidden", "1");
+  } else if (_isHiddenReviewQueue()) {
+    _appendHiddenReviewQueueParams(params);
+    if (includeHiddenForOwner || isOwner()) params.set("include_hidden", "1");
+  } else if (state.triageFilter === "flagged") {
+    params.set("flagged", "1");
+    if (includeHiddenForOwner || isOwner()) params.set("include_hidden", "1");
+  } else if (isIrrelevantDiscardedReviewScope()) {
+    params.set("review_status", "irrelevant_discarded");
+    if (includeHiddenForOwner || isOwner()) params.set("include_hidden", "1");
+  } else if (state.triageFilter) {
+    params.set("triage_status", state.triageFilter);
+  }
+}
+
 function _reviewItemMatchesCurrentScope(item) {
   if (!item) return false;
   const trackValues = _currentTrackFilterValues();
@@ -910,18 +932,7 @@ function _buildCurrentAssetQueryParams({ limit, offset = 0, ids = null } = {}) {
     if (collectionIds.length) params.set("collection_id", collectionIds.join(","));
   }
 
-  if (state.triageFilter === "needs-comment") {
-    params.set("needs_annotation", "1");
-    params.set("include_hidden", "1");
-  } else if (_isHiddenReviewQueue()) {
-    _appendHiddenReviewQueueParams(params);
-    params.set("include_hidden", "1");
-  } else if (state.triageFilter === "flagged") {
-    params.set("flagged", "1");
-    params.set("include_hidden", "1");
-  } else if (state.triageFilter) {
-    params.set("triage_status", state.triageFilter);
-  }
+  appendReviewScopeParams(params);
   appendShowDiscardedParam(params);
   appendUsableTrackExclusionParam(params);
   return params;
@@ -933,18 +944,7 @@ function _buildCurrentCatalogQueryParams({ limit, offset = 0 } = {}) {
   for (const file of catalogFiles) params.append("file", file);
   if (limit != null) params.set("limit", String(limit));
   params.set("offset", String(offset));
-  if (state.triageFilter === "needs-comment") {
-    params.set("needs_annotation", "1");
-    params.set("include_hidden", "1");
-  } else if (_isHiddenReviewQueue()) {
-    _appendHiddenReviewQueueParams(params);
-    params.set("include_hidden", "1");
-  } else if (state.triageFilter === "flagged") {
-    params.set("flagged", "1");
-    params.set("include_hidden", "1");
-  } else if (state.triageFilter) {
-    params.set("triage_status", state.triageFilter);
-  }
+  appendReviewScopeParams(params);
   appendShowDiscardedParam(params);
   appendUsableTrackExclusionParam(params);
   return params;
@@ -1064,36 +1064,15 @@ const ITEM_VIEW_OPTIONS = {
     showDiscarded: false,
     emptyLabel: "No discarded items match the current scope.",
   },
+  "irrelevant-discarded": {
+    triageFilter: "irrelevant-discarded",
+    showDiscarded: false,
+    emptyLabel: "No irrelevant or discarded items match the current scope.",
+  },
 };
 
 function isReviewStatusFilterActive(status) {
   return state.triageFilter === status;
-}
-
-function currentItemView() {
-  if (state.showDiscarded && !state.triageFilter) return "all";
-  for (const [view, config] of Object.entries(ITEM_VIEW_OPTIONS)) {
-    if (config.triageFilter === state.triageFilter && config.showDiscarded === !!state.showDiscarded) {
-      return view;
-    }
-  }
-  return "current";
-}
-
-function syncItemViewControl() {
-  const select = $("#itemViewSelect");
-  if (!select) return;
-  let currentOption = select.querySelector('option[value="current"]');
-  const view = currentItemView();
-  if (view === "current" && !currentOption) {
-    currentOption = document.createElement("option");
-    currentOption.value = "current";
-    currentOption.textContent = "Filtered items";
-    select.append(currentOption);
-  } else if (view !== "current" && currentOption) {
-    currentOption.remove();
-  }
-  select.value = view;
 }
 
 function updateReviewScopeChips() {
@@ -1103,7 +1082,6 @@ function updateReviewScopeChips() {
   if (headerChip) headerChip.textContent = chipText;
   const oneByOneActorChip = $("#reviewActorChip");
   if (oneByOneActorChip) oneByOneActorChip.textContent = _reviewActorLabel();
-  syncItemViewControl();
 }
 
 function confirmGlobalHideBulk(count) {
@@ -1112,7 +1090,7 @@ function confirmGlobalHideBulk(count) {
   return window.confirm(
     `Discard ${total} ${noun}?\n\n`
     + "Discarded items leave ordinary browsing across the library.\n"
-    + "You can restore them later from Show: Discarded."
+    + "You can restore them later from Browse → Review Status → Irrelevant / Discarded."
   );
 }
 
@@ -1736,18 +1714,7 @@ async function loadAssets(opts = {}) {
   if (state.currentCollection) params.set("collection_id", state.currentCollection);
   appendClassificationFacetParams(params);
 
-  if (state.triageFilter === "needs-comment") {
-    params.set("needs_annotation", "1");
-    params.set("include_hidden", "1");
-  } else if (_isHiddenReviewQueue()) {
-    _appendHiddenReviewQueueParams(params);
-    params.set("include_hidden", "1");
-  } else if (state.triageFilter === "flagged") {
-    params.set("flagged", "1");
-    params.set("include_hidden", "1");
-  } else if (state.triageFilter) {
-    params.set("triage_status", state.triageFilter);
-  }
+  appendReviewScopeParams(params);
   appendShowDiscardedParam(params);
   appendUsableTrackExclusionParam(params);
 
@@ -2291,35 +2258,6 @@ function renderCatalogTree() {
     return;
   }
 
-  const allItemsActive = isAllItemsScopeActive();
-  const collapseRest = allItemsActive && !!state.allItemsTreeCollapsed;
-
-  // "All items" node (root order differs for collaborator view)
-  const allBtn = document.createElement("button");
-  allBtn.className = `tree-toggle tree-toggle-root${allItemsActive ? " active" : ""}${!collapseRest ? " expanded" : ""}`;
-  allBtn.innerHTML = `<span class="tree-arrow">&#9654;</span><span class="tree-label">Everything</span>`;
-  allBtn.title = "Show all items";
-  allBtn.onclick = () => {
-    if (shouldIgnorePostBrowseUnlockTreeClick()) return;
-    const wasAllItemsActive = isAllItemsScopeActive();
-    if (wasAllItemsActive) {
-      state.allItemsTreeCollapsed = !state.allItemsTreeCollapsed;
-      renderCatalogTree();
-      return;
-    }
-    resetTriageFilter();
-    state.currentSource = null;
-    state.currentBoard = null;
-    state.currentContentKind = null;
-    clearCollectionFilter();
-    clearCatalogFilter();
-    clearClassificationFilter();
-    state.currentTreeNodeId = null;
-    state.offset = 0;
-    renderCatalogTree();
-    loadAssets();
-  };
-  const appendAllItemsRoot = () => wrap.appendChild(allBtn);
   const collectionsNodes = tree.filter((n) => n.type === "collections_group");
   if (collectionWrap && collectionSection) {
     if (collectionsNodes.length) {
@@ -2332,112 +2270,105 @@ function renderCatalogTree() {
     }
   }
 
-  appendAllItemsRoot();
+  const sourceNodes = tree.filter((n) => n.type === "source");
+  const classificationNodes = tree.filter((n) => n.type === "classification");
+  const otherNode = tree.find((n) => String(n?.id || "").trim().toLowerCase() === "dimension:other") || null;
+  const nonHomeTrackValues = new Set(["home_maintenance_diy"]);
+  const primaryClassificationNodes = [];
+  const nonHomeNodes = [];
 
-  if (!collapseRest) {
-    const sourceNodes = tree.filter((n) => n.type === "source");
-    const classificationNodes = tree.filter((n) => n.type === "classification");
-    const otherNode = tree.find((n) => String(n?.id || "").trim().toLowerCase() === "dimension:other") || null;
-    const nonHomeTrackValues = new Set(["home_maintenance_diy"]);
-    const discardTrackValues = new Set(["irrelevant"]);
-    const primaryClassificationNodes = [];
-    const nonHomeNodes = [];
-    const discardNodes = [];
-
-    for (const node of classificationNodes) {
-      if (String(node.axis_name || "").trim() !== "track") {
-        primaryClassificationNodes.push(node);
-        continue;
-      }
-      const children = Array.isArray(node.children) ? node.children : [];
-      const visibleChildren = children.filter((child) => {
-        const value = String(child.axis_value || "").trim();
-        return !nonHomeTrackValues.has(value) && !discardTrackValues.has(value);
-      });
-      const nonHomeChildren = children.filter((child) => nonHomeTrackValues.has(String(child.axis_value || "").trim()));
-      const discardChildren = children.filter((child) => discardTrackValues.has(String(child.axis_value || "").trim()));
-      if (visibleChildren.length) {
-        primaryClassificationNodes.unshift({
-          ...node,
-          count: visibleChildren.reduce((sum, child) => sum + Number(child.count || 0), 0),
-          children: visibleChildren,
-        });
-      }
-      if (nonHomeChildren.length) {
-        nonHomeNodes.push({
-          ...node,
-          id: "classification:non_home_tracks",
-          label: "Track",
-          count: nonHomeChildren.reduce((sum, child) => sum + Number(child.count || 0), 0),
-          children: nonHomeChildren,
-        });
-      }
-      if (discardChildren.length) {
-        discardNodes.push({
-          ...node,
-          id: "classification:discard_tracks",
-          label: "Track",
-          count: discardChildren.reduce((sum, child) => sum + Number(child.count || 0), 0),
-          children: discardChildren,
-        });
-      }
+  for (const node of classificationNodes) {
+    if (String(node.axis_name || "").trim() !== "track") {
+      primaryClassificationNodes.push(node);
+      continue;
     }
-    if (otherNode) {
+    const nonHomeChildren = (node.children || []).filter((child) => nonHomeTrackValues.has(String(child.axis_value || "").trim()));
+    if (nonHomeChildren.length) {
       nonHomeNodes.push({
-        ...otherNode,
-        children: (otherNode.children || []).map((child) => ({
-          ...child,
-          label: normalizeOtherDimensionLabel(child.label),
-        })),
+        ...node,
+        id: "classification:non_home_tracks",
+        label: "Non-home / DIY",
+        count: nonHomeChildren.reduce((sum, child) => sum + Number(child.count || 0), 0),
+        children: nonHomeChildren,
       });
     }
+  }
+  if (otherNode) {
+    nonHomeNodes.push({
+      ...otherNode,
+      children: (otherNode.children || []).map((child) => ({
+        ...child,
+        label: normalizeOtherDimensionLabel(child.label),
+      })),
+    });
+  }
 
-    const allItemsBranch = document.createElement("div");
-    allItemsBranch.className = "all-items-branch";
-    const groups = [
-      {
-        id: "browse-group:classification",
-        label: "Refine By",
-        nodes: primaryClassificationNodes,
-        defaultExpanded: true,
-        builder: (node) => buildClassificationNode(node),
-      },
-      {
-        id: "browse-group:sources",
-        label: "Sources",
-        nodes: sourceNodes,
-        defaultExpanded: false,
-        builder: (node) => buildSourceNode(node),
-      },
-    ];
-    if (!isCollaboratorActor()) {
-      groups.splice(1, 0,
-        {
-          id: "browse-group:non-home",
-          label: "Other / Non-Home-Design",
-          nodes: nonHomeNodes,
-          defaultExpanded: false,
-          builder: (node) => node.type === "dimension" ? buildDimensionNode(node) : buildClassificationNode(node),
-        },
-        {
-          id: "browse-group:discards",
-          label: "Irrelevant / Discarded",
-          nodes: discardNodes,
-          defaultExpanded: false,
-          builder: (node) => buildClassificationNode(node),
-        },
-      );
-    }
-    for (const group of groups) {
-      if (!group.nodes.length) continue;
-      allItemsBranch.appendChild(buildBrowseGroupNode(group));
-    }
-    if (allItemsBranch.childElementCount) {
-      wrap.appendChild(allItemsBranch);
-    }
+  wrap.appendChild(buildReviewStatusGroupNode());
+  if (sourceNodes.length) {
+    wrap.appendChild(buildBrowseGroupNode({
+      id: "browse-group:sources",
+      label: "Sources",
+      nodes: sourceNodes,
+      defaultExpanded: false,
+      builder: (node) => buildSourceNode(node),
+    }));
+  }
+  for (const node of primaryClassificationNodes) {
+    wrap.appendChild(buildClassificationNode(node));
+  }
+  if (!isCollaboratorActor() && nonHomeNodes.length) {
+    wrap.appendChild(buildBrowseGroupNode({
+      id: "browse-group:non-home",
+      label: "Other / Non-Home-Design",
+      nodes: nonHomeNodes,
+      defaultExpanded: false,
+      builder: (node) => node.type === "dimension" ? buildDimensionNode(node) : buildClassificationNode(node),
+    }));
   }
 
   updateSidebarModeVisibility();
+}
+
+function buildReviewStatusGroupNode() {
+  const nodes = [
+    { id: "review-status:usable", label: "Usable items", view: "usable" },
+    { id: "review-status:flagged", label: "Flagged", view: "flagged" },
+    { id: "review-status:keeper", label: "Keepers", view: "keeper" },
+    { id: "review-status:needs-comment", label: "Needs comment", triageFilter: "needs-comment" },
+    { id: "review-status:irrelevant-discarded", label: "Irrelevant / Discarded", view: "irrelevant-discarded" },
+    { id: "review-status:all", label: "All items, including discarded", view: "all" },
+  ];
+  return buildBrowseGroupNode({
+    id: "browse-group:review-status",
+    label: "Review Status",
+    nodes,
+    defaultExpanded: true,
+    builder: (node) => buildReviewStatusLeaf(node),
+  });
+}
+
+function buildReviewStatusLeaf(node) {
+  const leaf = document.createElement("button");
+  const active = state.triageFilter === (node.triageFilter || ITEM_VIEW_OPTIONS[node.view]?.triageFilter || "")
+    && !!state.showDiscarded === !!(ITEM_VIEW_OPTIONS[node.view]?.showDiscarded || false);
+  leaf.className = `tree-leaf${active ? " active" : ""}`;
+  leaf.type = "button";
+  leaf.innerHTML = `<span>${escapeHtml(node.label)}</span>`;
+  leaf.title = node.label;
+  leaf.onclick = () => {
+    if (shouldIgnorePostBrowseUnlockTreeClick()) return;
+    if (node.view) {
+      setItemView(node.view);
+      return;
+    }
+    state.triageFilter = node.triageFilter || "";
+    state.showDiscarded = false;
+    state.offset = 0;
+    renderCatalogTree();
+    updateFilterIndicator();
+    loadAssets();
+  };
+  return leaf;
 }
 
 function _treeNodeContainsActiveSelection(node) {
@@ -3105,21 +3036,15 @@ async function setItemView(view) {
   state.triageFilter = config.triageFilter;
   state.showDiscarded = config.showDiscarded;
   state.offset = 0;
-  syncItemViewControl();
   updateReviewScopeChips();
   updateCanvasSelectionCount();
   updateCollectionBuildSelectionCount();
+  renderCatalogTree();
   updateFilterIndicator();
   await loadAssets();
   if (!state.assets.length) {
     Shared.showToast(config.emptyLabel, { type: "info" });
   }
-}
-
-function wireItemViewControl() {
-  const select = $("#itemViewSelect");
-  if (!select) return;
-  select.addEventListener("change", () => setItemView(select.value));
 }
 
 // ─── Collections ────────────────────────────────────────────────────────────────
@@ -3965,6 +3890,10 @@ function assetMatchesActiveItemView(asset) {
   if (state.triageFilter === "flagged") return asset?.flagged == 1;
   if (state.triageFilter === "needs-comment") return asset?.needs_annotation == 1;
   if (_isHiddenReviewQueue()) return status === "hidden";
+  if (isIrrelevantDiscardedReviewScope()) {
+    const effectiveTrack = _effectiveClassificationTrack(asset?.classification_review || {});
+    return status === "hidden" || effectiveTrack === "irrelevant";
+  }
   if (state.triageFilter) return status === state.triageFilter;
   if (state.showDiscarded) return true;
   return status !== "hidden";
@@ -4233,18 +4162,7 @@ async function _resolveCurrentScopeAssetIds() {
   appendClassificationFacetParams(params);
   const collectionIds = getCollectionFilterIds();
   if (collectionIds.length) params.set("collection_id", collectionIds.join(","));
-  if (state.triageFilter === "needs-comment") {
-    params.set("needs_annotation", "1");
-    if (isOwner()) params.set("include_hidden", "1");
-  } else if (_isHiddenReviewQueue()) {
-    _appendHiddenReviewQueueParams(params);
-    if (isOwner()) params.set("include_hidden", "1");
-  } else if (state.triageFilter === "flagged") {
-    params.set("flagged", "1");
-    if (isOwner()) params.set("include_hidden", "1");
-  } else if (state.triageFilter) {
-    params.set("triage_status", state.triageFilter);
-  }
+  appendReviewScopeParams(params, { includeHiddenForOwner: false });
   appendShowDiscardedParam(params);
   appendUsableTrackExclusionParam(params);
   const data = await api(`/api/asset-ids?${params}`);
@@ -8528,18 +8446,7 @@ async function syncExplorerFilter() {
     appendClassificationFacetParams(params);
     const collectionIds = getCollectionFilterIds();
     if (collectionIds.length) params.set("collection_id", collectionIds.join(","));
-    if (state.triageFilter === "needs-comment") {
-      params.set("needs_annotation", "1");
-      if (isOwner()) params.set("include_hidden", "1");
-    } else if (_isHiddenReviewQueue()) {
-      _appendHiddenReviewQueueParams(params);
-      if (_shouldExplorerIncludeHiddenData()) params.set("include_hidden", "1");
-    } else if (state.triageFilter === "flagged") {
-      params.set("flagged", "1");
-      if (isOwner()) params.set("include_hidden", "1");
-    } else if (state.triageFilter) {
-      params.set("triage_status", state.triageFilter);
-    }
+    appendReviewScopeParams(params, { includeHiddenForOwner: _shouldExplorerIncludeHiddenData() });
     appendShowDiscardedParam(params);
     appendUsableTrackExclusionParam(params);
 
@@ -8576,7 +8483,6 @@ function clearAllActiveFilters() {
   state.offset = 0;
   state.showDiscarded = false;
   resetTriageFilter();
-  syncItemViewControl();
   clearCatalogFilter();
   clearClassificationFilter();
   clearCollectionFilter();
@@ -8590,7 +8496,6 @@ function updateFilterIndicator() {
   const text = $("#filterSummaryText");
   const clearBtn = $("#clearFilterSummary");
   if (!bar || !text) return;
-  syncItemViewControl();
 
   const davePrompt = String(state.chatPrompt || "").trim();
   const parts = [];
@@ -8646,10 +8551,10 @@ function updateFilterIndicator() {
     }
   }
   if (state.triageFilter) {
-    const labels = { pending: "Pending", keeper: "Keepers", hidden: "Discarded", "hidden-manual": "Discarded manually", "hidden-ai": "Discarded by AI cleanup", "needs-comment": "Needs comment", flagged: "Flagged" };
-    parts.push(`Show: ${labels[state.triageFilter] || state.triageFilter}`);
+    const labels = { pending: "Pending", keeper: "Keepers", hidden: "Discarded", "hidden-manual": "Discarded manually", "hidden-ai": "Discarded by AI cleanup", "needs-comment": "Needs comment", flagged: "Flagged", "irrelevant-discarded": "Irrelevant / Discarded" };
+    parts.push(`Status: ${labels[state.triageFilter] || state.triageFilter}`);
   }
-  if (state.showDiscarded) parts.push("Show: All items, including discarded");
+  if (state.showDiscarded) parts.push("Status: All items, including discarded");
 
   updateReviewScopeChips();
   if (!davePrompt && parts.length === 0) {
@@ -9099,7 +9004,6 @@ refreshIngestTagPickers();
 
 // ─── Init ─────────────────────────────────────────────────────────────────────────
 
-wireItemViewControl();
 wireSidebarToggle();
 wireSidebarResize();
 

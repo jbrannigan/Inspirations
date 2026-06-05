@@ -307,15 +307,16 @@ metadata browsing.
 
 ---
 
-## D023 — Browse-first curation with a persistent curation bar (2026-06-01, revised 2026-06-02)
+## D023 — Browse-first curation with a persistent curation bar (2026-06-01, revised 2026-06-04)
 
 **Decision:** Leslie's everyday workflow is browse-first collection making, not
 completion of a corpus-wide pending queue. A sticky curation bar remains visible
 while the canvas scrolls and owns the item count, text filter, active-filter
-summary, contextual collection PDF export, and a friendly `Show` selector for
-`Usable items`, `All items, including discarded`, `Keepers`, `Flagged`, and
-`Discarded`. Review remains available as an optional focused action mode over
-the current scope.
+summary, and contextual collection PDF export. Item visibility scopes live in
+the left `Browse → Review Status` tree: `Usable items`, `Flagged`, `Keepers`,
+`Needs comment`, `Irrelevant / Discarded`, and `All items, including discarded`.
+Review remains available as an optional focused action mode over the current
+scope.
 
 **Why:** Most of the corpus is usable without item-by-item approval. The
 database's historical null=`pending` state made almost every usable item look
@@ -324,11 +325,13 @@ been done.
 
 **Consequence:** Existing triage schema and audit history stay intact for
 compatibility and diagnostics. In everyday UX, null and `keeper` both mean
-usable, while `hidden` is presented as discarded/irrelevant. The global app
-header remains stable when modes change; Review and Make Collection add
-contextual action rows inside the curation bar instead. The `Show` selector
-changes item visibility only. Browse card clicks open a calmer detail view;
-Review card clicks open detail with advanced QC/editing tools. Review
+usable, while `hidden` is presented as discarded/irrelevant. `Usable items`
+also excludes active `track=irrelevant` items. `Irrelevant / Discarded` is a
+union scope over triage-hidden items and active irrelevant-track items. The
+global app header remains stable when modes change; Review and Make Collection
+add contextual action rows inside the curation bar instead. Sidebar review
+status choices change item visibility only. Browse card clicks open a calmer
+detail view; Review card clicks open detail with advanced QC/editing tools. Review
 checkboxes are for bulk actions, and the explicit `One-by-one` action is the
 route to fast triage. Flagged Grid cards use one stateful quick-action control
 as both the visible state indicator and the unflag action, rather than a second

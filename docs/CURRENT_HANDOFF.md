@@ -49,7 +49,8 @@ ipconfig getifaddr en0
 Keep active:
 
 - Grid and Explorer, including the 2D/3D Explorer stack
-- sidebar source, board, collection, and `Refine By` filtering
+- sidebar Browse tree for review status, source, board, collection, and
+  classification filtering
 - live text filtering
 - browse-first collection making
 - optional Review/QC and one-by-one triage
@@ -80,26 +81,29 @@ canvas. The curation bar remains visible while scrolling and owns:
 - item count
 - shared text filter
 - active-filter summary and clear action
-- `Show` selector
 - contextual `Export Collection PDF` action
 - Explorer controls when Explorer is active
 - Review or Make Collection action rows when those modes are active
 
-`Show` options are:
+Item visibility scopes now live in the left `Browse` sidebar under
+`Review Status`, not in a top-bar `Show` dropdown. Review status choices are:
 
 - `Usable items`
-- `All items, including discarded`
-- `Keepers`
 - `Flagged`
-- `Discarded`
+- `Keepers`
+- `Needs comment`
+- `Irrelevant / Discarded`
+- `All items, including discarded`
 
 `Usable items` excludes both triage-discarded assets and assets with an active
-classification track of `irrelevant`. Intentional scopes such as `All items,
-including discarded`, `Flagged`, and the explicit `Irrelevant` track branch can
-still surface those items for QC.
+classification track of `irrelevant`. `Irrelevant / Discarded` is a real union
+scope: it returns items with `triage_status='hidden'` plus items whose active
+track classification is `irrelevant`. `All items, including discarded` remains
+available for owner QC.
 
-The `Show` selector changes visible item scope only. It must not change which
-detail view opens.
+Review status choices change visible item scope only. They must not change which
+detail view opens. Browse card clicks still open the calmer detail view; Review
+card clicks still open detail with advanced QC/editing tools.
 
 Card interaction rules:
 
@@ -133,7 +137,8 @@ The Grid automatically requests the next asset page before the curator reaches
 the bottom. `Load More` remains a fallback and must show a loading state rather
 than appearing inert on slower LAN/iPad requests. If the curator changes scope
 while an automatic append request is active, the queued full reload must run as
-soon as that request finishes so the selector and visible cards cannot disagree.
+soon as that request finishes so the active scope and visible cards cannot
+disagree.
 
 ## Collection And Data Baseline
 
@@ -202,7 +207,7 @@ The unmerged branch combines:
 - standalone one-collection PDF export and retirement of active live-sharing UI
 - collection archive cleanup semantics and management
 - browse-first persistent curation bar
-- stable `Show` scope semantics
+- stable sidebar `Review Status` scope semantics
 - Review-scoped advanced detail editing and calmer Browse detail
 - explicit one-by-one fast triage with `Edit title / media`
 - separate visual Make Collection mode
@@ -219,8 +224,14 @@ Local-only runtime data, exports, backups, media, and logs under `data/`,
 Browser verification completed against `http://127.0.0.1:8001`:
 
 - curation bar remains sticky while Grid scrolls
-- `Show` options return expected live counts
-- selection persists across `Show` changes
+- top-bar `Show` dropdown is gone; text filtering remains in the curation bar
+- left sidebar heading is `Browse`
+- `Browse → Review Status` exposes `Usable items`, `Flagged`, `Keepers`,
+  `Needs comment`, `Irrelevant / Discarded`, and
+  `All items, including discarded`
+- raw `Refine By` and `Track` wrappers are not shown in normal Browse IA
+- `Browse → Review Status` options return expected live counts
+- selection persists across review-status changes
 - Review and Make Collection do not change global header height
 - Explorer uses the shared search field and does not show a duplicate search
   field
@@ -251,11 +262,23 @@ git diff --check
 ruff check src tests
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 
-Ran 385 tests in 64.038s
+Ran 387 tests in 62.290s
 OK
 ```
 
-Run the same commands again after any final cleanup or before pushing.
+Live service check after the run:
+
+```text
+8001-ok
+Python PID 25635 listening on *:8001
+node PID 850 still listening on *:8003
+```
+
+Residual note: the first live `/api/catalog/tree` request can take tens of
+seconds against the full local database before the sidebar tree settles. Treat
+that as a performance follow-up, not a correctness failure.
+
+Run the same commands again after any final cleanup.
 
 ## Next Work
 

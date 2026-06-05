@@ -111,7 +111,7 @@ BASE_PATH=/inspirations-app PYTHONPATH=src python3 -m inspirations serve --port 
 
 ### Browse and Optional Review
 - Ordinary browsing shows the usable corpus; legacy `pending` and `keeper` states do not imply that Leslie must re-review the library
-- Use the persistent **Show** selector to revisit keepers, flagged items, or discarded/irrelevant items and restore any mistakes
+- Use **Browse → Review Status** in the sidebar to revisit keepers, flagged items, needs-comment items, or discarded/irrelevant items and restore any mistakes
 - Hit **Review** when a focused scope benefits from selection actions: keep, discard, restore, flag, or remove from the active collection
 - One-by-one review remains available for focused QC work
 

@@ -587,6 +587,7 @@ def _build_asset_filter(
     content_kind: str = "",
     creator: str = "",
     collection_id: str = "",
+    review_status: str = "",
     triage_status: str = "",
     triage_actor: str = "",
     category: str = "",
@@ -842,6 +843,44 @@ def _build_asset_filter(
                 % ",".join(["?"] * len(exclude_track_values))
             )
             params.extend(exclude_track_values)
+    if str(review_status or "").strip() == "irrelevant_discarded":
+        run_id = _latest_classification_run_id(db, "track_gate")
+        if run_id:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            clauses.append(
+                """
+                (
+                  a.triage_status = 'hidden'
+                  or exists (
+                    select 1
+                    from asset_track_assessments atrs
+                    left join (
+                      select ao.asset_id, ao.axis_value
+                      from asset_overrides ao
+                      join (
+                        select asset_id, max(created_at) as max_created_at
+                        from asset_overrides
+                        where axis_name='track'
+                          and operation='set'
+                          and (expires_at is null or expires_at > ?)
+                        group by asset_id
+                      ) latest
+                        on latest.asset_id = ao.asset_id
+                       and latest.max_created_at = ao.created_at
+                      where ao.axis_name='track'
+                        and ao.operation='set'
+                        and (ao.expires_at is null or ao.expires_at > ?)
+                    ) otrs on otrs.asset_id = atrs.asset_id
+                    where atrs.asset_id = a.id
+                      and atrs.run_id = ?
+                      and coalesce(otrs.axis_value, atrs.track, '') = 'irrelevant'
+                  )
+                )
+                """
+            )
+            params.extend([now_iso, now_iso, run_id])
+        else:
+            clauses.append("a.triage_status = 'hidden'")
     if triage_status:
         statuses = [s.strip() for s in triage_status.split(",") if s.strip()]
         if "pending" in statuses:
@@ -924,6 +963,7 @@ def list_assets(
     content_kind: str = "",
     creator: str = "",
     collection_id: str = "",
+    review_status: str = "",
     triage_status: str = "",
     triage_actor: str = "",
     category: str = "",
@@ -943,7 +983,7 @@ def list_assets(
     join_sql, where, params = _build_asset_filter(
         db, ids=ids, q=q, source=source, board=board, label=label,
         label_mode=label_mode, media_status=media_status, content_kind=content_kind,
-        creator=creator, collection_id=collection_id, triage_status=triage_status,
+        creator=creator, collection_id=collection_id, review_status=review_status, triage_status=triage_status,
         triage_actor=triage_actor,
         category=category, needs_annotation=needs_annotation, flagged_only=flagged_only,
         tagged_only=tagged_only, include_hidden=include_hidden,

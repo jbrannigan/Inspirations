@@ -655,6 +655,40 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertNotIn("a2", body.get("ids", []))
 
+    def test_assets_endpoint_review_status_irrelevant_discarded_is_union(self):
+        self._seed_v2_classification()
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec("update assets set triage_status='hidden' where id='a1'")
+            db.exec(
+                """
+                insert into asset_overrides
+                  (id, asset_id, track, axis_name, axis_value, operation, actor, note, created_at, expires_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "override-a2-review-status",
+                    "a2",
+                    "irrelevant",
+                    "track",
+                    "irrelevant",
+                    "set",
+                    "Jim",
+                    "human review marked irrelevant",
+                    "2026-03-09T17:00:00+00:00",
+                    None,
+                ),
+            )
+
+        status, body = self._request("/api/assets?review_status=irrelevant_discarded&include_hidden=1")
+        self.assertEqual(status, 200)
+        self.assertEqual({a["id"] for a in body.get("assets", [])}, {"a1", "a2"})
+        self.assertEqual(body.get("total"), 2)
+
+        status, body = self._request("/api/asset-ids?review_status=irrelevant_discarded&include_hidden=1")
+        self.assertEqual(status, 200)
+        self.assertEqual(set(body.get("ids", [])), {"a1", "a2"})
+
     def test_catalog_tree_includes_classification_sections(self):
         self._seed_v2_classification()
         catalog_dir = self.tmp_path / "catalog"
@@ -3405,6 +3439,22 @@ class TestServerApi(unittest.TestCase):
         self.assertIn(b"shouldExcludeIrrelevantFromUsableScope", app_js)
         self.assertIn(b'params.set("exclude_tracks", "irrelevant")', app_js)
         self.assertIn(b'getClassificationFacetValues("track")', app_js)
+
+    def test_frontend_moves_item_scope_to_browse_sidebar(self):
+        req = urllib.request.Request(f"{self.base_url}/", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            html = resp.read()
+        self.assertIn(b'<h3 class="sidebar-heading">Browse</h3>', html)
+        self.assertNotIn(b'id="itemViewSelect"', html)
+        self.assertNotIn(b"Choose which items to show", html)
+
+        req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            app_js = resp.read()
+        self.assertIn(b"Review Status", app_js)
+        self.assertIn(b"Irrelevant / Discarded", app_js)
+        self.assertIn(b'review_status", "irrelevant_discarded"', app_js)
+        self.assertNotIn(b'label: "Refine By"', app_js)
 
     def test_frontend_honors_scope_reload_queued_during_append(self):
         req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
