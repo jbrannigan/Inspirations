@@ -1,6 +1,6 @@
 # Inspirations Current Handoff
 
-Last updated: 2026-06-03
+Last updated: 2026-06-04
 
 This is the authoritative reboot and lost-context resume document. Historical
 handoffs and sprint plans remain in `docs/` for provenance, but they do not
@@ -219,6 +219,9 @@ Browser verification completed against `http://127.0.0.1:8001`:
   QC/editing tools
 - Browse detail hides advanced title/media/track repair panels
 - grid Review detail exposes title editing, media repair, and Track Review
+- Review detail renders an already irrelevant item as a grey disabled `Saved as
+  irrelevant` action while the `Exclude as irrelevant` switch remains available
+  for staging a restore
 - explicit one-by-one review shows `Edit title / media`
 - one-by-one `Edit title / media` opens Review-scoped advanced detail
 - media repair on item `00a380ec-419b-4424-8da7-f59db468a4d3` shows the
@@ -236,7 +239,7 @@ git diff --check
 ruff check src tests
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 
-Ran 381 tests in 64.140s
+Ran 382 tests in 62.888s
 OK
 ```
 

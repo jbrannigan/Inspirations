@@ -3342,6 +3342,18 @@ class TestServerApi(unittest.TestCase):
         self.assertIn(b"panel.open = false;", app_js)
         self.assertIn(b"Advanced review tools are available for this item.", app_js)
 
+    def test_frontend_shows_saved_irrelevant_as_disabled_state(self):
+        req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            app_js = resp.read()
+        self.assertIn(b"Saved as irrelevant", app_js)
+        self.assertIn(b"is-saved-state", app_js)
+        self.assertIn(b"savedIrrelevant && pendingIrrelevant", app_js)
+        req = urllib.request.Request(f"{self.base_url}/app/styles.css", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            styles = resp.read()
+        self.assertIn(b".modal-utility-btn.is-saved-state", styles)
+
     def test_frontend_honors_scope_reload_queued_during_append(self):
         req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:

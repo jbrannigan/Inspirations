@@ -2677,6 +2677,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: #fff;
   border-color: rgba(44, 40, 37, 0.35);
 }
+.modal-utility-btn.is-saved-state,
+.modal-utility-btn.is-saved-state:disabled {
+  background: #e8e5df;
+  border-color: rgba(107, 97, 88, 0.28);
+  color: #6b6158;
+  opacity: 1;
+  cursor: default;
+}
 .modal-share-group {
   padding-inline: 6px;
 }

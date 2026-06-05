@@ -4651,10 +4651,14 @@ function _syncModalClassificationControls() {
   const saveBtn = $("#modalClassificationSaveBtn");
   const savedIrrelevant = irrelevantToggle?.dataset.savedIrrelevant === "true";
   const pendingIrrelevant = !!irrelevantToggle?.checked;
+  const isSavedIrrelevant = savedIrrelevant && pendingIrrelevant;
   if (moveTo) moveTo.disabled = pendingIrrelevant;
   if (keepBtn) {
-    keepBtn.disabled = pendingIrrelevant ? false : keepBtn.dataset.savedDisabled === "true";
-    keepBtn.textContent = pendingIrrelevant
+    keepBtn.classList.toggle("is-saved-state", isSavedIrrelevant);
+    keepBtn.disabled = isSavedIrrelevant ? true : (pendingIrrelevant ? false : keepBtn.dataset.savedDisabled === "true");
+    keepBtn.textContent = isSavedIrrelevant
+      ? "Saved as irrelevant"
+      : pendingIrrelevant
       ? "Save as irrelevant"
       : (savedIrrelevant ? "Save restored track" : "Save, keep track");
   }
@@ -6197,7 +6201,12 @@ function renderReviewClassificationPanel(item) {
   if (comment) comment.value = draft && Object.prototype.hasOwnProperty.call(draft, "note") ? draft.note : (cleanedOverrideNote || "");
   if (keepBtn) keepBtn.disabled = !effectiveTrack;
   if (saveBtn) saveBtn.disabled = false;
-  if (irrelevantBtn) irrelevantBtn.disabled = false;
+  if (irrelevantBtn) {
+    const savedIrrelevant = effectiveTrack === "irrelevant";
+    irrelevantBtn.classList.toggle("is-saved-state", savedIrrelevant);
+    irrelevantBtn.textContent = savedIrrelevant ? "Saved as irrelevant" : "Mark irrelevant";
+    irrelevantBtn.disabled = savedIrrelevant;
+  }
 }
 
 function _persistCurrentReviewDraft() {
