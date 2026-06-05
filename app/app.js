@@ -2166,10 +2166,6 @@ function buildCard(a) {
 
   el.onclick = (e) => {
     if (e.target.closest(".scan-nav-btn")) return;
-    if (state.canvasCollectionBuild) {
-      toggleCanvasSelection(a.id, el);
-      return;
-    }
     openModal(a);
   };
 

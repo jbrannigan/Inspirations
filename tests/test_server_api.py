@@ -3509,6 +3509,7 @@ class TestServerApi(unittest.TestCase):
         self.assertIn(b"Select for collection", app_js)
         self.assertIn(b"enterCollectionBuild({ initialSelectionId: a.id })", app_js)
         self.assertIn(b"Collection selection started. Choose more cards", app_js)
+        self.assertNotIn(b"if (state.canvasCollectionBuild) {\n      toggleCanvasSelection(a.id, el);\n      return;\n    }", app_js)
 
         req = urllib.request.Request(f"{self.base_url}/app/styles.css", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -3524,7 +3525,7 @@ class TestServerApi(unittest.TestCase):
         self.assertIn(b'id="addMedia" class="header-btn"', html)
         self.assertIn(b'class="header-btn adminLink"', html)
         self.assertIn(b"/app/styles.css?v=95", html)
-        self.assertIn(b"/app/app.js?v=173", html)
+        self.assertIn(b"/app/app.js?v=174", html)
 
         req = urllib.request.Request(f"{self.base_url}/app/styles.css", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
