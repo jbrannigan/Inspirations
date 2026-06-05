@@ -3354,6 +3354,18 @@ class TestServerApi(unittest.TestCase):
             styles = resp.read()
         self.assertIn(b".modal-utility-btn.is-saved-state", styles)
 
+    def test_frontend_keeps_sidebar_expand_in_curation_bar(self):
+        req = urllib.request.Request(f"{self.base_url}/", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            html = resp.read()
+        self.assertIn(b"curation-sidebar-handle", html)
+        self.assertLess(html.index(b'id="sidebarExpandHandle"'), html.index(b'id="stats"'))
+        req = urllib.request.Request(f"{self.base_url}/app/styles.css", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            styles = resp.read()
+        self.assertIn(b".curation-sidebar-handle", styles)
+        self.assertIn(b"position: static", styles)
+
     def test_frontend_honors_scope_reload_queued_during_append(self):
         req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:

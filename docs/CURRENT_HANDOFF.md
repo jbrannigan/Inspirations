@@ -222,6 +222,8 @@ Browser verification completed against `http://127.0.0.1:8001`:
 - Review detail renders an already irrelevant item as a grey disabled `Saved as
   irrelevant` action while the `Exclude as irrelevant` switch remains available
   for staging a restore
+- when the left sidebar is collapsed, its expand button appears inside the
+  sticky curation/filter bar so it remains visible
 - explicit one-by-one review shows `Edit title / media`
 - one-by-one `Edit title / media` opens Review-scoped advanced detail
 - media repair on item `00a380ec-419b-4424-8da7-f59db468a4d3` shows the
@@ -239,7 +241,7 @@ git diff --check
 ruff check src tests
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 
-Ran 382 tests in 62.888s
+Ran 383 tests in 58.242s
 OK
 ```
 
