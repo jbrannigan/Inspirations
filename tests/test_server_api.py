@@ -3502,6 +3502,20 @@ class TestServerApi(unittest.TestCase):
         self.assertNotIn(b"prompt(\"Collection name", app_js)
         self.assertIn(b"createEmptyCollectionFromManager", app_js)
 
+    def test_frontend_browse_checkbox_starts_collection_selection(self):
+        req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            app_js = resp.read()
+        self.assertIn(b"Select for collection", app_js)
+        self.assertIn(b"enterCollectionBuild({ initialSelectionId: a.id })", app_js)
+        self.assertIn(b"Collection selection started. Choose more cards", app_js)
+
+        req = urllib.request.Request(f"{self.base_url}/app/styles.css", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            styles = resp.read()
+        self.assertIn(b".card:hover .card-checkbox", styles)
+        self.assertIn(b"opacity: 0.42", styles)
+
     def test_detail_modal_exposes_consistent_curation_controls(self):
         status, html, _ = self._raw_request("/")
         self.assertEqual(status, 200)
