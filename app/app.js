@@ -236,8 +236,11 @@ function semanticQueryFromInput(value) {
   return "";
 }
 
-function _mediaVersionForAsset(asset) {
-  const raw = String(asset?.sha256 || asset?.stored_video_path || asset?.stored_path || asset?.thumb_path || "").trim();
+function _mediaVersionForAsset(asset, kind = "") {
+  const mediaKind = String(kind || "").trim().toLowerCase();
+  const raw = mediaKind === "video"
+    ? String(asset?.stored_video_path || asset?.sha256 || asset?.stored_path || "").trim()
+    : String(asset?.sha256 || asset?.stored_path || asset?.thumb_path || asset?.image_url || "").trim();
   if (!raw) return "";
   let hash = 0;
   for (let i = 0; i < raw.length; i += 1) hash = ((hash << 5) - hash + raw.charCodeAt(i)) | 0;
@@ -247,7 +250,7 @@ function _mediaVersionForAsset(asset) {
 function _mediaUrlForAsset(asset, kind) {
   const assetId = String(asset?.id || "").trim();
   if (!assetId) return "";
-  const version = _mediaVersionForAsset(asset);
+  const version = _mediaVersionForAsset(asset, kind);
   return `${_B}/media/${encodeURIComponent(assetId)}?kind=${encodeURIComponent(kind)}${version ? `&v=${version}` : ""}`;
 }
 
@@ -6945,12 +6948,20 @@ function toggleCanvasSelection(id, cardEl) {
 }
 
 function selectAllCanvas() {
-  state.assets.forEach((a) => state.canvasSelected.add(a.id));
+  const visibleIds = state.assets.map((a) => String(a?.id || "").trim()).filter(Boolean);
+  visibleIds.forEach((id) => state.canvasSelected.add(id));
   $$(".card").forEach((c) => {
     const id = c.dataset.id;
     if (id && state.canvasSelected.has(id)) c.classList.add("canvas-selected");
   });
   updateCanvasSelectionCount();
+  updateCollectionBuildSelectionCount();
+  if (visibleIds.length) {
+    Shared.showToast(`Selected ${visibleIds.length} visible item${visibleIds.length === 1 ? "" : "s"}.`, {
+      type: "info",
+      duration: 1800,
+    });
+  }
 }
 
 function clearCanvasSelection() {
@@ -7222,6 +7233,8 @@ async function canvasBulkTag() {
 }
 
 // Canvas review action bar wiring
+const canvasSelectAllBtn = $("#canvasSelectAll");
+if (canvasSelectAllBtn) canvasSelectAllBtn.addEventListener("click", selectAllCanvas);
 const canvasKeepBtn = $("#canvasKeep");
 if (canvasKeepBtn) canvasKeepBtn.addEventListener("click", canvasBulkKeep);
 const canvasHideLocalBtn = $("#canvasHideLocal");
@@ -7251,6 +7264,8 @@ const collectionBuildExistingBtn = $("#collectionBuildExisting");
 if (collectionBuildExistingBtn) collectionBuildExistingBtn.addEventListener("click", () => openCollectionBuildModal("existing"));
 const collectionBuildRemoveBtn = $("#collectionBuildRemove");
 if (collectionBuildRemoveBtn) collectionBuildRemoveBtn.addEventListener("click", removeSelectedFromActiveCollection);
+const collectionBuildSelectAllBtn = $("#collectionBuildSelectAll");
+if (collectionBuildSelectAllBtn) collectionBuildSelectAllBtn.addEventListener("click", selectAllCanvas);
 const collectionBuildClearBtn = $("#collectionBuildClear");
 if (collectionBuildClearBtn) collectionBuildClearBtn.addEventListener("click", clearCanvasSelection);
 const collectionBuildDoneBtn = $("#collectionBuildDone");
@@ -7426,6 +7441,7 @@ function showChatSpinner(text) {
   const bar = $("#chatResponse");
   if (!bar) return;
   clearTimeout(addChatResponse._timer);
+  bar.classList.remove("chat-response-error", "chat-response-sticky");
   bar.innerHTML = `<span class="chat-spinner"></span>${escapeHtml(text || "Thinking…")}`;
   bar.hidden = false;
 }
@@ -7434,18 +7450,49 @@ function hideChatSpinner() {
   const bar = $("#chatResponse");
   if (!bar) return;
   clearTimeout(addChatResponse._timer);
+  bar.classList.remove("chat-response-error", "chat-response-sticky");
   bar.hidden = true;
   bar.innerHTML = "";
 }
 
-function addChatResponse(text, duration) {
+function clearChatResponse() {
   const bar = $("#chatResponse");
   if (!bar) return;
+  clearTimeout(addChatResponse._timer);
+  bar.classList.remove("chat-response-error", "chat-response-sticky");
   bar.innerHTML = "";
-  bar.textContent = text;
+  bar.hidden = true;
+}
+
+function addChatResponse(text, durationOrOptions) {
+  const bar = $("#chatResponse");
+  if (!bar) return;
+  const options = typeof durationOrOptions === "object" && durationOrOptions
+    ? durationOrOptions
+    : { duration: durationOrOptions };
+  const type = String(options.type || "info");
+  const sticky = !!options.sticky;
+  bar.innerHTML = "";
+  bar.classList.toggle("chat-response-error", type === "error");
+  bar.classList.toggle("chat-response-sticky", sticky);
+
+  const textEl = document.createElement("span");
+  textEl.className = "chat-response-text";
+  textEl.textContent = text || "";
+  bar.appendChild(textEl);
+  if (sticky) {
+    const clearBtn = document.createElement("button");
+    clearBtn.className = "chat-response-clear";
+    clearBtn.type = "button";
+    clearBtn.textContent = "Clear";
+    clearBtn.addEventListener("click", clearChatResponse);
+    bar.appendChild(clearBtn);
+  }
   bar.hidden = false;
   clearTimeout(addChatResponse._timer);
-  addChatResponse._timer = setTimeout(() => { if (bar) bar.hidden = true; }, duration || 6000);
+  if (!sticky) {
+    addChatResponse._timer = setTimeout(() => { clearChatResponse(); }, options.duration || 6000);
+  }
 }
 
 // Extract meaningful keywords from a chat message for text-search fallback.
@@ -7504,7 +7551,7 @@ async function _runOwnerTriageRollback(daysAgo) {
     );
   } catch (e) {
     hideChatSpinner();
-    addChatResponse(`Rollback failed: ${formatApiError(e)}`, 8000);
+    addChatResponse(`Rollback failed: ${formatApiError(e)}`, { type: "error", sticky: true });
   }
 }
 
@@ -7575,15 +7622,18 @@ async function processChat(text) {
         await loadAssets();
         addChatResponse(
           `Dave is unavailable right now (${errMsg}). Text fallback found no matches, so I left your current view unchanged.`,
-          9000
+          { type: "error", sticky: true }
         );
       } else {
-        addChatResponse(`Dave is unavailable right now (${errMsg}). Filtering by "${keywords}" instead.`, 9000);
+        addChatResponse(
+          `Dave is unavailable right now (${errMsg}). Filtering by "${keywords}" instead.`,
+          { type: "error", sticky: true }
+        );
       }
     } catch (loadErr) {
       addChatResponse(
         `Dave failed (${errMsg}) and fallback search failed (${formatApiError(loadErr)}).`,
-        9000
+        { type: "error", sticky: true }
       );
     }
   }
@@ -7618,7 +7668,7 @@ async function executeChatAction(action, params) {
         updateFilterIndicator();
         syncExplorerFilter();
       } catch (e) {
-        addChatResponse(`Failed to load items: ${formatApiError(e)}`, 8000);
+        addChatResponse(`Failed to load items: ${formatApiError(e)}`, { type: "error", sticky: true });
       }
       break;
     }
@@ -7770,7 +7820,7 @@ async function executeChatAction(action, params) {
           await loadCollections();
           await loadCatalogTree();
         } catch (e) {
-          addChatResponse(`Couldn't create collection: ${formatApiError(e)}`, 8000);
+          addChatResponse(`Couldn't create collection: ${formatApiError(e)}`, { type: "error", sticky: true });
         }
       }
       break;
@@ -7830,7 +7880,7 @@ async function executeChatAction(action, params) {
         if (state.canvasReview) clearCanvasSelection();
         await loadAssets();
       } catch (e) {
-        addChatResponse(`Bulk triage failed: ${formatApiError(e)}`, 8000);
+        addChatResponse(`Bulk triage failed: ${formatApiError(e)}`, { type: "error", sticky: true });
       }
       break;
     }
@@ -7854,7 +7904,7 @@ async function executeChatAction(action, params) {
         if (state.canvasReview) clearCanvasSelection();
         await loadAssets();
       } catch (e) {
-        addChatResponse(`Bulk flag failed: ${formatApiError(e)}`, 8000);
+        addChatResponse(`Bulk flag failed: ${formatApiError(e)}`, { type: "error", sticky: true });
       }
       break;
     }
@@ -7900,7 +7950,7 @@ let _explorerMode = "3d";   // "2d" | "3d"
 let _ExplorerImpl = null;
 let _disable3DForSession = false;
 let _explorer3DLoadPromise = null;
-const EXPLORER_3D_MODULE_URL = `${_B}/app/attractor-explorer-3d.js?v=60`;
+const EXPLORER_3D_MODULE_URL = `${_B}/app/attractor-explorer-3d.js?v=63`;
 // Hard refresh in Safari can cold-load Three.js from CDN; allow enough
 // headroom so we do not incorrectly drop into 2D fallback.
 const EXPLORER_3D_READY_WAIT_MS = 12000;
@@ -8437,6 +8487,15 @@ function setViewMode(mode, options = {}) {
     _writeViewModeToUrl("explorer");
     if (persist) _writeViewModePref("explorer");
     updateStats();
+    if (
+      explorerLoaded &&
+      _ExplorerImpl &&
+      _explorerPayloadIncludesHidden === _shouldExplorerIncludeHiddenData()
+    ) {
+      if (typeof _ExplorerImpl.resume === "function") _ExplorerImpl.resume();
+      syncExplorerFilter();
+      return;
+    }
     loadExplorerView();
   } else {
     state.view = "browse";

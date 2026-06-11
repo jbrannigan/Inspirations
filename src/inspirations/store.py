@@ -1021,7 +1021,7 @@ def list_assets(
              (select ai.summary from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1),
              a.ai_summary
            ) as ai_summary,
-           a.created_at, a.imported_at, a.image_url, a.stored_path, a.stored_video_path, a.thumb_path,
+           a.created_at, a.imported_at, a.image_url, a.stored_path, a.stored_video_path, a.thumb_path, a.sha256,
            a.triage_status, a.needs_annotation, a.source_url, a.seo_alt_text,
            a.post_text, a.hashtags, a.engagement_json, a.dominant_color,
            a.image_width, a.image_height, a.closeup_desc,

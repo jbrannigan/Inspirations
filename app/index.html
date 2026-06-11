@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inspirations!</title>
-    <link rel="stylesheet" href="/app/styles.css?v=96" />
+    <link rel="stylesheet" href="/app/styles.css?v=99" />
     <script type="importmap">
       {
         "imports": {
@@ -164,11 +164,12 @@
               <span id="canvasSelectionCount" class="canvas-selection-count">0 selected</span>
               <span id="reviewSelectionToolChip" class="canvas-selection-tool-chip" hidden>Selection: Checkboxes</span>
               <div class="canvas-action-buttons">
+                <button id="canvasSelectAll" class="canvas-action-btn" type="button">Select visible</button>
                 <button id="canvasKeep" class="canvas-action-btn canvas-action-keep" type="button" disabled>★ Keep</button>
                 <button id="canvasHideLocal" class="canvas-action-btn canvas-action-hide-local" type="button" disabled>↘ Hide in this collection</button>
                 <button id="canvasHideGlobal" class="canvas-action-btn canvas-action-hide-global" type="button" disabled>✗ Discard</button>
                 <button id="canvasFlag" class="canvas-action-btn canvas-action-flag" type="button" disabled>⚑ Flag</button>
-                <button id="canvasClear" class="canvas-action-btn" type="button">Clear</button>
+                <button id="canvasClear" class="canvas-action-btn" type="button">Clear selection</button>
               </div>
               <div class="canvas-mode-toggle">
                 <button id="canvasToOneByOne" class="canvas-action-btn canvas-action-switch" type="button">One-by-one</button>
@@ -182,10 +183,11 @@
               <span id="collectionBuildSelectionCount" class="canvas-selection-count">0 selected</span>
               <span id="collectionBuildHint" class="canvas-selection-hint">Use tile checkboxes, then create or add to a collection.</span>
               <div class="canvas-action-buttons">
+                <button id="collectionBuildSelectAll" class="canvas-action-btn" type="button">Select visible</button>
                 <button id="collectionBuildNew" class="canvas-action-btn collection-build-primary" type="button" disabled>Create new collection</button>
                 <button id="collectionBuildExisting" class="canvas-action-btn" type="button" disabled>Add to existing</button>
                 <button id="collectionBuildRemove" class="canvas-action-btn canvas-action-hide-local" type="button" hidden disabled>Remove from this collection</button>
-                <button id="collectionBuildClear" class="canvas-action-btn" type="button">Clear</button>
+                <button id="collectionBuildClear" class="canvas-action-btn" type="button">Clear selection</button>
               </div>
               <div class="canvas-mode-toggle">
                 <button id="collectionBuildDone" class="canvas-action-btn" type="button">Exit selection</button>
@@ -843,7 +845,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
     <script src="/app/shared.js?v=5"></script>
     <script src="/app/explorer.js?v=2"></script>
-    <script src="/app/attractor-explorer.js?v=16"></script>
-    <script src="/app/app.js?v=181"></script>
+    <script src="/app/attractor-explorer.js?v=17"></script>
+    <script src="/app/app.js?v=186"></script>
   </body>
 </html>

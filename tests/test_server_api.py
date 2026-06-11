@@ -3267,6 +3267,45 @@ class TestServerApi(unittest.TestCase):
             self.assertEqual(resp.headers.get("Content-Type"), "video/mp4")
             self.assertEqual(resp.read(), video_bytes)
 
+    def test_asset_list_includes_sha256_for_reel_thumb_cache_bust(self):
+        video = self.store_dir / "reels" / "facebook" / "reel.mp4"
+        still = self.store_dir / "originals" / "facebook" / "replacement.png"
+        thumb = self.store_dir / "thumbs" / "facebook" / "reel.jpg"
+        video.parent.mkdir(parents=True, exist_ok=True)
+        still.parent.mkdir(parents=True, exist_ok=True)
+        thumb.parent.mkdir(parents=True, exist_ok=True)
+        video.write_bytes(b"video")
+        still.write_bytes(b"replacement-still")
+        thumb.write_bytes(b"replacement-thumb")
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into assets
+                  (id, source, source_ref, title, imported_at, media_status, content_kind,
+                   stored_path, stored_video_path, thumb_path, sha256)
+                values (?, ?, ?, ?, datetime('now'), ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "reel-cache",
+                    "facebook",
+                    "https://www.facebook.com/reel/1/",
+                    "Replacement still",
+                    "image",
+                    "reel",
+                    str(still),
+                    str(video),
+                    str(thumb),
+                    "replacement-sha",
+                ),
+            )
+
+        status, body = self._request("/api/assets?ids=reel-cache")
+        self.assertEqual(status, 200)
+        asset = (body.get("assets") or [{}])[0]
+        self.assertEqual(asset.get("sha256"), "replacement-sha")
+        self.assertEqual(asset.get("stored_video_path"), str(video))
+
     def test_scan_doc_pdf_prefers_doc_scoped_pdf_when_doc_pages_exist(self):
         try:
             from PIL import Image  # type: ignore
@@ -3572,8 +3611,8 @@ class TestServerApi(unittest.TestCase):
         self.assertIn(b'id="reviewBtn" class="review-launch-btn"', html)
         self.assertIn(b'id="addMedia" class="header-btn"', html)
         self.assertIn(b'class="header-btn adminLink"', html)
-        self.assertIn(b"/app/styles.css?v=96", html)
-        self.assertIn(b"/app/app.js?v=181", html)
+        self.assertIn(b"/app/styles.css?v=99", html)
+        self.assertIn(b"/app/app.js?v=186", html)
 
         req = urllib.request.Request(f"{self.base_url}/app/styles.css", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:

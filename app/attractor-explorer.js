@@ -1297,9 +1297,12 @@
   // ─── Export ──────────────────────────────────────────────────────────────
 
   function setSearch(term) {
-    _searchTerm = (term || "").toLowerCase().trim();
+    const rawTerm = term || "";
+    const nextTerm = rawTerm.toLowerCase().trim();
     const input = _controlsEl?.querySelector(".attractor-search");
-    if (input && input.value !== (term || "")) input.value = term || "";
+    if (input && input.value !== rawTerm) input.value = rawTerm;
+    if (_searchTerm === nextTerm) return;
+    _searchTerm = nextTerm;
     if (_focusedMode) {
       _rebuildForFocusedMode();
     } else {

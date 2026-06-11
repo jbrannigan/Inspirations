@@ -251,6 +251,31 @@ class TestProcessChatMessage(unittest.TestCase):
                 )
         self.assertEqual(result["action"], "clear_filters")
 
+    def test_non_english_title_query_uses_local_metadata_scan(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                _seed_db(db)
+                db.exec(
+                    """insert into assets (id, source, source_ref, title, imported_at)
+                       values (?, ?, ?, ?, datetime('now'))""",
+                    (
+                        "foreign1-0000-0000-0000-000000000000",
+                        "pinterest",
+                        "ref://foreign1",
+                        "35 Baños pequeños y funcionales",
+                    ),
+                )
+                result = process_chat_message(
+                    db,
+                    api_key="",
+                    user_message="find titles that aren't in English",
+                )
+        self.assertEqual(result["action"], "show_items")
+        self.assertIn("foreign1-0000-0000-0000-000000000000", result["params"]["ids"])
+        self.assertIn("non-English", result["message"])
+
     def test_keywordless_fallback_returns_message_not_empty_search(self):
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "t.sqlite"
