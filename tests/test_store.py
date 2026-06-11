@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from inspirations.db import Db, ensure_schema
+from inspirations.db import Db, ensure_schema, refresh_asset_search_index
 from inspirations.store import (
     add_to_tray,
     add_items_to_collection,
@@ -264,6 +264,32 @@ class TestStore(unittest.TestCase):
                 res_summary = list_assets(db, q="rustic")
             self.assertEqual(len(res_label), 1)
             self.assertEqual(len(res_summary), 1)
+
+    def test_list_assets_query_uses_refreshed_fts_index(self):
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "t.sqlite"
+            with Db(db_path) as db:
+                ensure_schema(db)
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at, notes)
+                    values (?, ?, ?, ?, datetime('now'), ?)
+                    """,
+                    ("a1", "pinterest", "pin://1", "Mission oak cabinet", "quiet drawer pulls"),
+                )
+                db.exec(
+                    """
+                    insert into asset_labels (id, asset_id, label, confidence, source, model, run_id, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                    """,
+                    ("l1", "a1", "craftsman storage", 0.8, "ai", "test", "r1"),
+                )
+                report = refresh_asset_search_index(db, ["a1"])
+                by_prefix = list_assets(db, q="miss cab")
+                by_label = list_assets(db, q="craftsman")
+            self.assertTrue(report["ok"])
+            self.assertEqual([r["id"] for r in by_prefix], ["a1"])
+            self.assertEqual([r["id"] for r in by_label], ["a1"])
 
     def test_list_assets_label_mode_all_requires_all_selected_labels(self):
         with tempfile.TemporaryDirectory() as td:

@@ -7,6 +7,7 @@ const state = {
   setupAllowed: false,
   pendingMediaRepairs: [],
   refreshingMediaRepairs: false,
+  optimizingDb: false,
   authMessage: "",
 };
 
@@ -31,6 +32,7 @@ function setUiState() {
   $("#selectAllAssets").disabled = !unlocked || state.assets.length === 0;
   $("#clearAssetSelection").disabled = !unlocked || state.selected.size === 0;
   $("#deleteFromDb").disabled = !unlocked || state.selected.size === 0;
+  $("#optimizeDb").disabled = !unlocked || state.optimizingDb;
   $("#refreshMediaRepairs").disabled =
     !unlocked || state.refreshingMediaRepairs || state.pendingMediaRepairs.length === 0;
   $("#selectionCount").textContent = `${state.selected.size} selected`;
@@ -207,6 +209,32 @@ $("#refreshMediaRepairs").onclick = async () => {
     $("#mediaRepairStatus").textContent = `Refresh failed: ${e.message || e}`;
   } finally {
     state.refreshingMediaRepairs = false;
+    setUiState();
+  }
+};
+
+$("#optimizeDb").onclick = async () => {
+  if (!state.token || state.optimizingDb) return;
+  state.optimizingDb = true;
+  $("#dbOptimizeStatus").textContent = "Optimizing database and rebuilding text search...";
+  setUiState();
+  try {
+    const res = await api(
+      "/api/admin/database/optimize",
+      {
+        method: "POST",
+        body: JSON.stringify({ rebuild_search: true }),
+      },
+      true
+    );
+    const after = res.search_index_after || {};
+    const duration = typeof res.duration_ms === "number" ? `${res.duration_ms} ms` : "complete";
+    $("#dbOptimizeStatus").textContent =
+      `Optimized in ${duration}. Search index: ${after.indexed_assets || 0}/${after.asset_count || 0} assets.`;
+  } catch (e) {
+    $("#dbOptimizeStatus").textContent = `Optimize failed: ${e.message || e}`;
+  } finally {
+    state.optimizingDb = false;
     setUiState();
   }
 };

@@ -32,7 +32,7 @@ from .ai import (
 from .catalog import generate_catalog
 from .chat import process_chat_message
 from .classification_v2 import run_multi_axis_inference_v2, run_track_gate_v2
-from .db import Db, ensure_schema
+from .db import Db, ensure_schema, optimize_database, refresh_asset_search_index
 from .importers.scans import import_photos_inbox, import_scans_inbox, import_videos_inbox
 from .store import (
     add_items_to_collection,
@@ -96,6 +96,7 @@ BASE_PATH = os.environ.get("BASE_PATH", "").strip().rstrip("/")
 MAX_BODY = 2_000_000
 MAX_UPLOAD_BODY = 350_000_000
 DEFAULT_ASSETS_PAGE_SIZE = 240
+DYNAMIC_GZIP_LEVEL = 1
 MAX_SCAN_DOC_GROUP_PAGES = 6
 VIDEO_UPLOAD_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv", ".mpeg", ".mpg", ".wmv", ".3gp"}
 SCAN_DOC_TITLE_SUFFIX_RE = re.compile(r"(\s-\sdoc\s+\d+(?:\s+p\d+)?)\s*$", re.IGNORECASE)
@@ -233,7 +234,7 @@ def _send(handler: BaseHTTPRequestHandler, status: int, payload: dict) -> None:
     raw = json.dumps(payload).encode("utf-8")
     wants_gzip = "gzip" in (handler.headers.get("Accept-Encoding") or "").lower()
     use_gzip = wants_gzip and len(raw) >= 1024
-    data = gzip.compress(raw, compresslevel=6) if use_gzip else raw
+    data = gzip.compress(raw, compresslevel=DYNAMIC_GZIP_LEVEL) if use_gzip else raw
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
     # API responses should always be fresh to avoid stale UI state.
@@ -337,6 +338,8 @@ class ApiHandler(BaseHTTPRequestHandler):
     def do_HEAD(self) -> None:
         self._strip_base_path()
         parsed = urlparse(self.path)
+        if parsed.path == "/favicon.ico":
+            return self._serve_empty_favicon()
         if parsed.path in ("/", "/index.html"):
             return self._serve_file("index.html", "text/html", cache_control="no-cache")
         if parsed.path.startswith("/app/"):
@@ -363,6 +366,8 @@ class ApiHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         self._strip_base_path()
         parsed = urlparse(self.path)
+        if parsed.path == "/favicon.ico":
+            return self._serve_empty_favicon()
         if parsed.path in ("/", "/index.html"):
             return self._serve_file("index.html", "text/html", cache_control="no-cache")
         if parsed.path.startswith("/app/"):
@@ -440,6 +445,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 exclude_tracks=exclude_tracks,
                 viewer_role=actor_role,
                 viewer_actor_id=actor_id,
+                exact_total=not bool((q.get("q", [""])[0] or "").strip()),
                 limit=page_limit + 1,
                 offset=int(q.get("offset", ["0"])[0]),
             )
@@ -623,6 +629,14 @@ class ApiHandler(BaseHTTPRequestHandler):
             actor = _resolve_actor(self)
             include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
             data_dir = Path(self.server.db_path).parent / "explorer_layouts"
+            cache_key = self._explorer_payload_cache_key(
+                "attractor-data",
+                dims=pca_dims,
+                include_hidden=include_hidden,
+            )
+            cached_payload = self._get_explorer_payload_cache(cache_key)
+            if cached_payload is not None:
+                return _send(self, 200, cached_payload)
             try:
                 payload = self._with_db(
                     build_feature_vectors,
@@ -632,6 +646,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                 )
             except Exception as e:
                 return _send(self, 500, {"error": f"attractor data failed: {e}"})
+            self._set_explorer_payload_cache(cache_key, payload)
             return _send(self, 200, payload)
 
         if parsed.path == "/api/explorer/layout":
@@ -644,6 +659,16 @@ class ApiHandler(BaseHTTPRequestHandler):
             actor = _resolve_actor(self)
             include_hidden = bool(include_hidden_req and actor and actor.get("role") == "owner")
             data_dir = Path(self.server.db_path).parent / "explorer_layouts"
+            cache_key = self._explorer_payload_cache_key(
+                "layout",
+                collection_id=collection_id or "",
+                method=method,
+                include_hidden=include_hidden,
+            )
+            if not refresh:
+                cached_payload = self._get_explorer_payload_cache(cache_key)
+                if cached_payload is not None:
+                    return _send(self, 200, cached_payload)
             try:
                 payload = self._with_db(
                     compute_layout,
@@ -655,6 +680,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 )
             except Exception as e:
                 return _send(self, 500, {"error": f"explorer layout failed: {e}"})
+            if not refresh:
+                self._set_explorer_payload_cache(cache_key, payload)
             return _send(self, 200, payload)
 
         if parsed.path == "/api/triage/stats":
@@ -1017,6 +1044,19 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return _send(self, 503, {"error": str(e)})
             except Exception as e:
                 return _send(self, 500, {"error": f"media repair refresh failed: {e}"})
+            return _send(self, 200, report)
+
+        if parsed.path == "/api/admin/database/optimize":
+            _token, token_error = self._require_admin_token()
+            if token_error:
+                return _send(self, 403, {"error": token_error})
+            rebuild_search = body.get("rebuild_search")
+            if rebuild_search is None:
+                rebuild_search = True
+            try:
+                report = self._with_db(optimize_database, rebuild_search=bool(rebuild_search))
+            except Exception as e:
+                return _send(self, 500, {"error": f"database optimize failed: {e}"})
             return _send(self, 200, report)
 
         m = re.match(r"^/api/collections/([^/]+)/items/remove$", parsed.path)
@@ -1601,6 +1641,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     expected_title=expected_title,
                     origin_ref="api:/api/assets/title",
                 )
+                self._with_db(refresh_asset_search_index, asset_ids=[asset_id])
             except TitleNotFoundError:
                 return _send(self, 404, {"error": "asset not found"})
             except TitleConflictError as e:
@@ -1935,6 +1976,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                 ready = []
 
         remaining = self._with_db(list_pending_media_repairs)
+        refreshed_ids = [str(item.get("asset_id") or "").strip() for item in items if str(item.get("asset_id") or "").strip()]
+        search_index = self._with_db(refresh_asset_search_index, asset_ids=refreshed_ids) if refreshed_ids else {}
         return {
             "ok": not failed,
             "pending_before": len(pending),
@@ -1943,6 +1986,7 @@ class ApiHandler(BaseHTTPRequestHandler):
             "failed": failed,
             "items": items,
             "classification": classification,
+            "search_index": search_index,
         }
 
     def _backup_primary_db(self) -> str:
@@ -1991,6 +2035,44 @@ class ApiHandler(BaseHTTPRequestHandler):
     def _with_db(self, fn, **kwargs):
         with Db(self.server.db_path) as db:
             return fn(db, **kwargs)
+
+    def _explorer_payload_cache_key(self, endpoint: str, **parts: object) -> tuple[object, ...]:
+        try:
+            db_mtime_ns = Path(self.server.db_path).resolve().stat().st_mtime_ns
+        except OSError:
+            db_mtime_ns = 0
+        normalized_parts = tuple(sorted((str(k), str(v)) for k, v in parts.items()))
+        return (str(endpoint), str(Path(self.server.db_path).resolve()), db_mtime_ns, normalized_parts)
+
+    def _get_explorer_payload_cache(self, cache_key: tuple[object, ...]) -> dict | None:
+        cache = getattr(self.server, "explorer_payload_cache", None)
+        if not isinstance(cache, dict):
+            return None
+        lock = getattr(self.server, "explorer_payload_cache_lock", None)
+        if lock:
+            with lock:
+                cached = cache.get(cache_key)
+        else:
+            cached = cache.get(cache_key)
+        return cached if isinstance(cached, dict) else None
+
+    def _set_explorer_payload_cache(self, cache_key: tuple[object, ...], payload: dict) -> None:
+        if not isinstance(payload, dict):
+            return
+        cache = getattr(self.server, "explorer_payload_cache", None)
+        if not isinstance(cache, dict):
+            self.server.explorer_payload_cache = {}
+            cache = self.server.explorer_payload_cache
+        lock = getattr(self.server, "explorer_payload_cache_lock", None)
+        if lock:
+            with lock:
+                if len(cache) >= 8:
+                    cache.clear()
+                cache[cache_key] = payload
+        else:
+            if len(cache) >= 8:
+                cache.clear()
+            cache[cache_key] = payload
 
     def _ensure_chat_catalog_fresh(self) -> Path | None:
         """Ensure the markdown catalog used by chat is present and up to date with DB changes."""
@@ -2067,7 +2149,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         src = str(source or "").strip()
         stamp = str(imported_at or "").strip()
         tags = _dedupe_ingest_tags([*(tags or []), *(auto_tags or [])])
-        if not src or not stamp or (not title and not tags):
+        if not src or not stamp:
             return {"updated_titles": 0, "applied_tags": 0}
 
         rows = db.query(
@@ -2076,6 +2158,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         )
         if not rows:
             return {"updated_titles": 0, "applied_tags": 0}
+        asset_ids = [str(row["id"]) for row in rows]
 
         updated_titles = 0
         if title:
@@ -2123,7 +2206,12 @@ class ApiHandler(BaseHTTPRequestHandler):
                 )
                 applied_tags = len(label_rows)
 
-        return {"updated_titles": updated_titles, "applied_tags": applied_tags}
+        search_index = refresh_asset_search_index(db, asset_ids)
+        return {
+            "updated_titles": updated_titles,
+            "applied_tags": applied_tags,
+            "search_index_refreshed": int(search_index.get("refreshed_assets") or 0),
+        }
 
     def _resolve_context_link(
         self,
@@ -2935,7 +3023,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         wants_gzip = "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
         use_gzip = wants_gzip and len(raw) >= 1024 and self._can_gzip_mime(mime)
         if use_gzip:
-            data = gzip.compress(raw, compresslevel=6)
+            data = gzip.compress(raw, compresslevel=DYNAMIC_GZIP_LEVEL)
         self.send_response(200)
         self.send_header("Content-Type", mime)
         self.send_header("Cache-Control", cache_control)
@@ -2946,6 +3034,12 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(data)
+
+    def _serve_empty_favicon(self) -> None:
+        self.send_response(204)
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _serve_file(self, rel: str, mime: str, *, cache_control: str = "no-store") -> None:
         base = Path(self.server.app_dir).resolve()
@@ -2973,7 +3067,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         wants_gzip = "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
         use_gzip = wants_gzip and len(raw) >= 1024
         if use_gzip:
-            data = gzip.compress(raw, compresslevel=6)
+            data = gzip.compress(raw, compresslevel=DYNAMIC_GZIP_LEVEL)
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
         self.send_header("Cache-Control", cache_control)
@@ -3673,6 +3767,8 @@ def run_server(*, host: str, port: int, db_path: Path, app_dir: Path, store_dir:
     server.imports_dir = app_dir.resolve().parent / "imports"
     server.admin_tokens = {}
     server.catalog_tree_cache = {}
+    server.explorer_payload_cache = {}
+    server.explorer_payload_cache_lock = threading.RLock()
 
     # Catalog directory for chat "dictionary" data (auto-refreshed on chat requests).
     catalog_dir = Path(db_path).resolve().parent / "catalog"

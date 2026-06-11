@@ -395,6 +395,24 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body.get("refreshed"), 1)
 
+    def test_admin_database_optimize_requires_login_and_reports_index(self):
+        status, body = self._request("/api/admin/database/optimize", method="POST")
+        self.assertEqual(status, 403)
+        self.assertEqual(body.get("error"), "missing admin token")
+
+        with mock.patch.dict(os.environ, {"INSPIRATIONS_ADMIN_PASSWORD": "secret"}, clear=False):
+            status, login = self._request("/api/admin/login", method="POST", payload={"password": "secret"})
+            self.assertEqual(status, 200)
+            status, body = self._request(
+                "/api/admin/database/optimize",
+                method="POST",
+                payload={"rebuild_search": True},
+                headers={"X-Admin-Token": str(login["token"])},
+            )
+        self.assertEqual(status, 200)
+        self.assertTrue(body.get("ok"))
+        self.assertGreaterEqual(body.get("search_index_after", {}).get("indexed_assets", 0), 2)
+
     def test_admin_media_repair_refresh_runs_photo_tags_but_skips_text_card_tags(self):
         with Db(self.db_path) as db:
             ensure_schema(db)
@@ -938,6 +956,19 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         ids_owner = {n["id"] for n in body.get("nodes", [])}
         self.assertEqual(ids_owner, {"a1", "a2"})
+
+    def test_explorer_layout_endpoint_uses_in_process_cache(self):
+        payload = {"nodes": [{"id": "a1", "x": 0, "y": 0, "z": 0, "cluster_id": 0}], "clusters": []}
+        with mock.patch("inspirations.server.compute_layout", return_value=payload) as mocked:
+            status, body = self._request("/api/explorer/layout?method=pca")
+            self.assertEqual(status, 200)
+            self.assertEqual(body.get("nodes", [])[0].get("id"), "a1")
+
+            status, body = self._request("/api/explorer/layout?method=pca")
+            self.assertEqual(status, 200)
+            self.assertEqual(body.get("nodes", [])[0].get("id"), "a1")
+
+        mocked.assert_called_once()
 
     def test_asset_detail_endpoint_returns_exact_asset(self):
         status, body = self._request("/api/assets/a1")
@@ -3612,7 +3643,7 @@ class TestServerApi(unittest.TestCase):
         self.assertIn(b'id="addMedia" class="header-btn"', html)
         self.assertIn(b'class="header-btn adminLink"', html)
         self.assertIn(b"/app/styles.css?v=99", html)
-        self.assertIn(b"/app/app.js?v=186", html)
+        self.assertIn(b"/app/app.js?v=187", html)
 
         req = urllib.request.Request(f"{self.base_url}/app/styles.css", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -3727,6 +3758,16 @@ class TestServerApi(unittest.TestCase):
         self.assertIn(b"if (state.pendingAssetsReload) {", app_js)
         self.assertNotIn(b"state.pendingAssetsReload && !append", app_js)
 
+    def test_frontend_appends_lazy_loaded_cards_without_full_grid_rerender(self):
+        req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            app_js = resp.read()
+        self.assertIn(b"function appendGridAssets", app_js)
+        self.assertIn(b"appendGridAssets(newAssets)", app_js)
+        append_branch = app_js[app_js.index(b"if (append) {"):app_js.index(b"} else {", app_js.index(b"if (append) {"))]
+        self.assertNotIn(b"renderGrid();", append_branch)
+        self.assertIn(b"const frag = document.createDocumentFragment();", app_js)
+
     def test_frontend_reports_media_search_progress_and_uses_one_card_flag_control(self):
         req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -3749,6 +3790,13 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(body, {})
         self.assertEqual(headers.get("Cache-Control"), "public, max-age=300")
         self.assertEqual(headers.get("Content-Type"), "application/javascript")
+
+    def test_favicon_request_is_quiet_no_content(self):
+        req = urllib.request.Request(f"{self.base_url}/favicon.ico", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            self.assertEqual(resp.status, 204)
+            self.assertEqual(resp.headers.get("Cache-Control"), "public, max-age=86400")
+            self.assertEqual(resp.read(), b"")
 
     def test_store_files_route_serves_media(self):
         req = urllib.request.Request(f"{self.base_url}/store/originals/pinterest/a1.jpg", method="GET")

@@ -83,6 +83,18 @@
       </section>
 
       <section class="section">
+        <div class="sectionTitle">Database Performance</div>
+        <p class="muted">
+          Rebuilds the app's text-search index and asks SQLite to refresh query-planner hints. Use after big imports,
+          retagging, title cleanup, or unusual maintenance batches.
+        </p>
+        <div class="row" style="flex-wrap: wrap">
+          <button id="optimizeDb" disabled>Optimize Database</button>
+        </div>
+        <div id="dbOptimizeStatus" class="muted" style="margin-top: 8px">Enter admin mode to run database maintenance.</div>
+      </section>
+
+      <section class="section">
         <div class="sectionTitle">Repaired Media Search Evidence</div>
         <p class="muted">
           Replacement images are visible immediately. Refreshing rebuilds their AI tags, semantic-search embeddings,
@@ -118,6 +130,6 @@
     </main>
 
     <script src="/app/shared.js?v=3"></script>
-    <script src="/app/admin.js?v=2"></script>
+    <script src="/app/admin.js?v=3"></script>
   </body>
 </html>

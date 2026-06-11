@@ -1,6 +1,6 @@
 # Inspirations Current Handoff
 
-Last updated: 2026-06-05
+Last updated: 2026-06-10
 
 This is the authoritative reboot and lost-context resume document. Historical
 handoffs and sprint plans remain in `docs/` for provenance, but they do not
@@ -9,8 +9,7 @@ override this file, `README.md`, `CLAUDE.md`, or `DECISIONS.md`.
 ## Start Here
 
 - Repo: `/Users/minime/Projects/Inspirations`
-- Branch: `codex/collection-pdf-retire-sharing`
-- Draft PR: [#71](https://github.com/jbrannigan/Inspirations/pull/71)
+- Branch: `codex/topbar-action-button-states`
 - App port: `8001`
 - Live database: `data/inspirations.sqlite`
 - Active product: Jim and Leslie's local corpus curation/QC app
@@ -22,7 +21,7 @@ Resume:
 
 ```bash
 cd /Users/minime/Projects/Inspirations
-git checkout codex/collection-pdf-retire-sharing
+git checkout codex/topbar-action-button-states
 ./tools/inspirations_service.sh status
 ./tools/inspirations_service.sh logs
 ```
@@ -227,6 +226,56 @@ caused SQLite lock storms under concurrent thumbnail traffic.
 Do not stop or repurpose port `8003`; it belongs to the separate Home website
 and DevLauncher work.
 
+## Performance Baseline
+
+Latest performance sprint completed on 2026-06-10:
+
+- Grid lazy loading appends only newly fetched cards instead of rebuilding all
+  already loaded cards. Full Grid rerenders remain reserved for scope/filter
+  changes.
+- `renderGrid()` and skeleton rendering use document fragments to reduce
+  repeated DOM attachment work.
+- Explorer `attractor-data` and `layout` API responses have a small in-process
+  cache keyed by endpoint parameters plus SQLite mtime. Explicit
+  `refresh=1` layout requests still bypass this cache.
+- Dynamic gzip uses a faster compression level for local/LAN responsiveness.
+- Free-text asset search is backed by SQLite FTS5 (`asset_search_fts`) over
+  title, description, board, notes, AI summary, source text, and labels. Known
+  mutation paths refresh affected rows.
+- Free-text `/api/assets?q=...` requests skip exact total-count scans. The API
+  still returns the requested page and correct `has_more`; the UI should treat
+  `total: null` as normal for text searches.
+- Explicit DB maintenance is available from Admin **Optimize Database** or:
+
+```bash
+PYTHONPATH=src python3 -m inspirations --db data/inspirations.sqlite maintenance optimize-db
+```
+
+Run it after bulk imports, retagging/re-embedding/title cleanup, large
+delete/cleanup batches, or unusual direct DB edits. Do not put it on every app
+startup; the current corpus is fairly static and normal Add Media/title/note
+paths refresh affected search rows themselves.
+- `/favicon.ico` returns quiet `204 No Content` to avoid noisy browser-console
+  404s during smoke tests.
+
+Live measurements against `data/inspirations.sqlite` after restarting the
+launchd-managed `0.0.0.0:8001` service:
+
+```text
+/api/assets?limit=241                         ~100 ms
+/api/assets?limit=241&q=exterior              ~61 ms over HTTP, direct store ~12 ms with FTS
+/api/assets?limit=241&q=mission               ~10 ms over HTTP
+/api/explorer/attractor-data?dims=2           ~151 ms cold, ~68 ms in-process cached
+/api/explorer/layout                          ~615 ms cold, ~39 ms in-process cached
+```
+
+Direct store-function timing for `q=exterior` after FTS:
+
+```text
+exact_total=True   ~14 ms
+exact_total=False  ~12 ms
+```
+
 ## Current Branch Scope
 
 The unmerged branch combines:
@@ -241,6 +290,9 @@ The unmerged branch combines:
 - explicit one-by-one fast triage with `Edit title / media`
 - separate visual Make Collection mode
 - automatic Grid pagination with `Load More` fallback
+- append-only lazy Grid rendering for pagination
+- Explorer API payload caching and faster dynamic gzip for local/LAN response
+  time
 - launchd service tooling and local logs
 - startup-only schema assurance for threaded serving
 - tests and documentation for the above behavior
@@ -281,31 +333,30 @@ Browser verification completed against `http://127.0.0.1:8001`:
   reports the no-source-image result after a live source check
 - flagged tiles show one brown `Unflag follow-up` control rather than two flag
   icons
+- Grid lazy loading grew from 120 to 240 to 360 loaded cards using one new
+  `/api/assets?...offset=...` request per append
+- fresh browser session showed zero console errors on Grid
+- Explorer opened as `3D map: 4665 items` with zero console errors/warnings
 
 Latest completed automated verification before this handoff:
 
 ```text
 node --check app/app.js
-node --check app/shared.js
+python3 -m py_compile src/inspirations/server.py src/inspirations/store.py
 git diff --check
-ruff check src tests
-PYTHONPATH=src python3 -m unittest discover -s tests -v
+PYTHONPATH=src python3 -m unittest discover -s tests
 
-Ran 387 tests in 62.290s
+Ran 400 tests in 71.128s
 OK
 ```
 
 Live service check after the run:
 
 ```text
-8001-ok
-Python PID 25635 listening on *:8001
+Python PID 36840 listening on *:8001
+/favicon.ico returns 204
 node PID 850 still listening on *:8003
 ```
-
-Residual note: the first live `/api/catalog/tree` request can take tens of
-seconds against the full local database before the sidebar tree settles. Treat
-that as a performance follow-up, not a correctness failure.
 
 Run the same commands again after any final cleanup.
 

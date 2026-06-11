@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from .db import Db, infer_collection_provenance
+from .db import Db, asset_search_index_ready, asset_search_match_query, infer_collection_provenance, refresh_asset_search_index
 from .feature_vectors import EXPLORER_LEGACY_SPECS, build_legacy_facet_memberships
 from .title_workflow import enrich_assets_with_title_info
 
@@ -693,19 +693,32 @@ def _build_asset_filter(
         clauses.append("coalesce(a.category, 'home_design') in (%s)" % ",".join(["?"] * len(categories)))
         params.extend(categories)
     if q:
-        if not any(j.startswith("left join asset_labels") for j in joins):
-            joins.append("left join asset_labels al on al.asset_id = a.id")
-        _search_fields = (
-            "a.title", "a.description", "a.board", "a.seo_alt_text",
-            "a.post_text", "a.notes", "a.ai_summary", "a.creator_name",
-            "a.source_domain", "a.source_name", "al.label",
-        )
-        terms = q.split()
-        for term in terms:
-            field_ors = " or ".join(f"{f} like ?" for f in _search_fields)
-            clauses.append(f"({field_ors})")
-            tv = f"%{term}%"
-            params += [tv] * len(_search_fields)
+        fts_query = asset_search_match_query(q)
+        if fts_query and asset_search_index_ready(db):
+            clauses.append(
+                """
+                a.id in (
+                  select asset_id
+                  from asset_search_fts
+                  where asset_search_fts match ?
+                )
+                """
+            )
+            params.append(fts_query)
+        else:
+            if not any(j.startswith("left join asset_labels") for j in joins):
+                joins.append("left join asset_labels al on al.asset_id = a.id")
+            _search_fields = (
+                "a.title", "a.description", "a.board", "a.seo_alt_text",
+                "a.post_text", "a.notes", "a.ai_summary", "a.creator_name",
+                "a.source_domain", "a.source_name", "al.label",
+            )
+            terms = q.split()
+            for term in terms:
+                field_ors = " or ".join(f"{f} like ?" for f in _search_fields)
+                clauses.append(f"({field_ors})")
+                tv = f"%{term}%"
+                params += [tv] * len(_search_fields)
     collection_ids = _csv_values(collection_id)
     if collection_ids:
         joins.append("join collection_items ci on ci.asset_id = a.id")
@@ -977,6 +990,7 @@ def list_assets(
     exclude_tracks: str = "",
     viewer_role: str = "",
     viewer_actor_id: str = "",
+    exact_total: bool = True,
     limit: int = 200,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
@@ -995,7 +1009,9 @@ def list_assets(
     # Total count (same filters, no limit/offset). Collection-scoped views use
     # the same logical scan-document collapse as the grid, so the visible count
     # matches the number of cards the curator sees.
-    if _csv_values(collection_id):
+    if not exact_total:
+        total_count = None
+    elif _csv_values(collection_id):
         total_rows = [
             dict(r)
             for r in db.query(
@@ -1847,12 +1863,17 @@ def delete_assets(db: Db, *, asset_ids: list[str]) -> dict[str, Any]:
         if r["thumb_path"]:
             paths.append(r["thumb_path"])
 
+    try:
+        db.exec(f"delete from asset_search_fts where asset_id in ({placeholders})", tuple(unique_ids))
+    except Exception:
+        pass
     db.exec(f"delete from assets where id in ({placeholders})", tuple(unique_ids))
     return {"deleted": len(rows), "paths": paths}
 
 
 def update_asset_notes(db: Db, *, asset_id: str, notes: str) -> None:
     db.exec("update assets set notes=? where id=?", (notes or None, asset_id))
+    refresh_asset_search_index(db, [asset_id])
 
 
 def list_tray(db: Db) -> list[dict[str, Any]]:

@@ -1872,14 +1872,15 @@ async function loadAssets(opts = {}) {
     const newAssets = data.assets || [];
     if (append) {
       state.assets = [...state.assets, ...newAssets];
+      appendGridAssets(newAssets);
     } else {
       state.assets = newAssets;
+      renderGrid();
     }
     state.hasMore = !!(data.has_more);
     state.totalCount = data.total || null;
     state.offset += newAssets.length;
 
-    renderGrid();
     updateStats();
     updateLoadMoreBtn();
     updateFilterIndicator();
@@ -2046,12 +2047,14 @@ function renderSkeletons() {
   const grid = $("#grid");
   if (!grid) return;
   grid.innerHTML = "";
+  const frag = document.createDocumentFragment();
   for (let i = 0; i < 12; i++) {
     const el = document.createElement("div");
     el.className = "skeleton-card";
     el.innerHTML = '<div class="skeleton-thumb"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div>';
-    grid.appendChild(el);
+    frag.appendChild(el);
   }
+  grid.appendChild(frag);
 }
 
 function renderGrid() {
@@ -2071,9 +2074,23 @@ function renderGrid() {
     return;
   }
 
+  const frag = document.createDocumentFragment();
   for (const a of state.assets) {
-    grid.appendChild(buildCard(a));
+    frag.appendChild(buildCard(a));
   }
+  grid.appendChild(frag);
+}
+
+function appendGridAssets(assets) {
+  const grid = $("#grid");
+  if (!grid || !Array.isArray(assets) || !assets.length) return;
+  const emptyState = grid.querySelector(".empty-state");
+  if (emptyState) emptyState.remove();
+  const frag = document.createDocumentFragment();
+  for (const a of assets) {
+    frag.appendChild(buildCard(a));
+  }
+  grid.appendChild(frag);
 }
 
 function buildCard(a) {
