@@ -107,6 +107,7 @@ const PHONE_ASSETS_PAGE_SIZE = 80;
 const AUTO_LOAD_MORE_MARGIN_PX = 3600;
 let _autoLoadMoreRaf = 0;
 let _autoLoadMoreObservers = [];
+const COLLECTION_BUILD_PENDING_TOAST_KEY = "inspirations.collectionBuildPendingToast";
 
 function _detectAssetsPageSize() {
   const vw = Math.max(0, window.innerWidth || 0);
@@ -235,8 +236,11 @@ function semanticQueryFromInput(value) {
   return "";
 }
 
-function _mediaVersionForAsset(asset) {
-  const raw = String(asset?.sha256 || asset?.stored_video_path || asset?.stored_path || asset?.thumb_path || "").trim();
+function _mediaVersionForAsset(asset, kind = "") {
+  const mediaKind = String(kind || "").trim().toLowerCase();
+  const raw = mediaKind === "video"
+    ? String(asset?.stored_video_path || asset?.sha256 || asset?.stored_path || "").trim()
+    : String(asset?.sha256 || asset?.stored_path || asset?.thumb_path || asset?.image_url || "").trim();
   if (!raw) return "";
   let hash = 0;
   for (let i = 0; i < raw.length; i += 1) hash = ((hash << 5) - hash + raw.charCodeAt(i)) | 0;
@@ -246,7 +250,7 @@ function _mediaVersionForAsset(asset) {
 function _mediaUrlForAsset(asset, kind) {
   const assetId = String(asset?.id || "").trim();
   if (!assetId) return "";
-  const version = _mediaVersionForAsset(asset);
+  const version = _mediaVersionForAsset(asset, kind);
   return `${_B}/media/${encodeURIComponent(assetId)}?kind=${encodeURIComponent(kind)}${version ? `&v=${version}` : ""}`;
 }
 
@@ -1868,14 +1872,15 @@ async function loadAssets(opts = {}) {
     const newAssets = data.assets || [];
     if (append) {
       state.assets = [...state.assets, ...newAssets];
+      appendGridAssets(newAssets);
     } else {
       state.assets = newAssets;
+      renderGrid();
     }
     state.hasMore = !!(data.has_more);
     state.totalCount = data.total || null;
     state.offset += newAssets.length;
 
-    renderGrid();
     updateStats();
     updateLoadMoreBtn();
     updateFilterIndicator();
@@ -2042,12 +2047,14 @@ function renderSkeletons() {
   const grid = $("#grid");
   if (!grid) return;
   grid.innerHTML = "";
+  const frag = document.createDocumentFragment();
   for (let i = 0; i < 12; i++) {
     const el = document.createElement("div");
     el.className = "skeleton-card";
     el.innerHTML = '<div class="skeleton-thumb"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div>';
-    grid.appendChild(el);
+    frag.appendChild(el);
   }
+  grid.appendChild(frag);
 }
 
 function renderGrid() {
@@ -2067,9 +2074,23 @@ function renderGrid() {
     return;
   }
 
+  const frag = document.createDocumentFragment();
   for (const a of state.assets) {
-    grid.appendChild(buildCard(a));
+    frag.appendChild(buildCard(a));
   }
+  grid.appendChild(frag);
+}
+
+function appendGridAssets(assets) {
+  const grid = $("#grid");
+  if (!grid || !Array.isArray(assets) || !assets.length) return;
+  const emptyState = grid.querySelector(".empty-state");
+  if (emptyState) emptyState.remove();
+  const frag = document.createDocumentFragment();
+  for (const a of assets) {
+    frag.appendChild(buildCard(a));
+  }
+  grid.appendChild(frag);
 }
 
 function buildCard(a) {
@@ -2166,10 +2187,6 @@ function buildCard(a) {
 
   el.onclick = (e) => {
     if (e.target.closest(".scan-nav-btn")) return;
-    if (state.canvasCollectionBuild) {
-      toggleCanvasSelection(a.id, el);
-      return;
-    }
     openModal(a);
   };
 
@@ -3853,7 +3870,7 @@ function setCollectionFilter(collectionId) {
   }
   state.offset = 0;
   renderCatalogTree();
-  loadAssets();
+  return loadAssets();
 }
 
 function closeCollectionBuildModal() {
@@ -3902,6 +3919,24 @@ function openCollectionBuildModal(mode) {
   if (showNew) $("#collectionBuildName")?.focus();
 }
 
+async function finishCollectionBuildAndShowCollection(collectionId, collectionName, itemCount, actionLabel) {
+  const safeCollectionId = String(collectionId || "").trim();
+  if (!safeCollectionId) throw new Error("Collection id missing from response");
+  const safeName = String(collectionName || "collection").trim() || "collection";
+  const message = `${actionLabel} "${safeName}" with ${itemCount} item${itemCount === 1 ? "" : "s"}. Showing that collection now.`;
+  try {
+    window.sessionStorage?.setItem(COLLECTION_BUILD_PENDING_TOAST_KEY, message);
+  } catch {
+    // Navigation still provides the important feedback even if sessionStorage is unavailable.
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.set("collection_id", safeCollectionId);
+  url.searchParams.delete("item_id");
+  url.searchParams.delete("open");
+  url.searchParams.delete("q");
+  window.location.assign(url.toString());
+}
+
 async function addSelectedToNewCollection() {
   const ids = Array.from(state.canvasSelected);
   const name = String($("#collectionBuildName")?.value || "").trim();
@@ -3913,7 +3948,11 @@ async function addSelectedToNewCollection() {
     return;
   }
   const btn = $("#collectionBuildCreate");
-  if (btn) btn.disabled = true;
+  const originalText = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Creating…";
+  }
   try {
     const data = await api("/api/collections", {
       method: "POST",
@@ -3921,14 +3960,14 @@ async function addSelectedToNewCollection() {
     });
     const collection = data?.collection || {};
     await addAssetsToCollections(ids, [collection.id]);
-    await refreshSidebarTrees();
-    closeCollectionBuildModal();
-    clearCanvasSelection();
-    Shared.showToast(`Created "${name}" with ${ids.length} item${ids.length === 1 ? "" : "s"}.`, { type: "success" });
+    await finishCollectionBuildAndShowCollection(collection.id, name, ids.length, "Created");
   } catch (e) {
     Shared.showToast(`Collection creation failed: ${formatApiError(e)}`, { type: "error" });
   } finally {
-    if (btn) btn.disabled = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = originalText || "Create and add selected";
+    }
   }
 }
 
@@ -3938,17 +3977,21 @@ async function addSelectedToExistingCollection() {
   if (!ids.length || !collectionId) return;
   const collection = (state.collections || []).find((row) => row.id === collectionId) || null;
   const btn = $("#collectionBuildAdd");
-  if (btn) btn.disabled = true;
+  const originalText = btn ? btn.textContent : "";
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Adding…";
+  }
   try {
     await addAssetsToCollections(ids, [collectionId]);
-    await refreshSidebarTrees();
-    closeCollectionBuildModal();
-    clearCanvasSelection();
-    Shared.showToast(`Added ${ids.length} item${ids.length === 1 ? "" : "s"} to "${collection?.name || "collection"}".`, { type: "success" });
+    await finishCollectionBuildAndShowCollection(collectionId, collection?.name || "collection", ids.length, "Added");
   } catch (e) {
     Shared.showToast(`Add failed: ${formatApiError(e)}`, { type: "error" });
   } finally {
-    if (btn) btn.disabled = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = originalText || "Add selected";
+    }
   }
 }
 
@@ -6149,6 +6192,7 @@ async function enterReview(options = {}) {
   state.reviewHidden = 0;
   state.reviewSnapshotTotal = reviewItems.length;
   state.reviewScopeTotal = Number(reviewData?.scopeTotal || reviewItems.length);
+  syncTopbarModeButtons();
 
   const browseView = $("#browseView");
   const reviewView = $("#reviewView");
@@ -6175,6 +6219,7 @@ async function enterReview(options = {}) {
 
 function exitReview() {
   state.view = "browse";
+  syncTopbarModeButtons();
   const browseView = $("#browseView");
   const reviewView = $("#reviewView");
   if (browseView) browseView.hidden = false;
@@ -6844,6 +6889,7 @@ function enterCanvasReview() {
   }
   state.canvasReview = true;
   state.canvasSelected.clear();
+  syncTopbarModeButtons();
 
   const browseView = $("#browseView");
   if (browseView) {
@@ -6872,6 +6918,7 @@ function enterCanvasReview() {
 function exitCanvasReview() {
   state.canvasReview = false;
   state.canvasSelected.clear();
+  syncTopbarModeButtons();
 
   const browseView = $("#browseView");
   if (browseView) {
@@ -6890,6 +6937,21 @@ function exitCanvasReview() {
   updateSidebarModeVisibility();
 }
 
+function toggleTopbarReviewMode() {
+  if (state.view === "review") {
+    const shouldExitCanvasReview = !!state.canvasReview;
+    exitReview();
+    if (shouldExitCanvasReview) exitCanvasReview();
+    syncTopbarModeButtons();
+    return;
+  }
+  if (state.canvasReview) {
+    exitCanvasReview();
+    return;
+  }
+  enterCanvasReview();
+}
+
 function toggleCanvasSelection(id, cardEl) {
   if (state.canvasSelected.has(id)) {
     state.canvasSelected.delete(id);
@@ -6903,12 +6965,20 @@ function toggleCanvasSelection(id, cardEl) {
 }
 
 function selectAllCanvas() {
-  state.assets.forEach((a) => state.canvasSelected.add(a.id));
+  const visibleIds = state.assets.map((a) => String(a?.id || "").trim()).filter(Boolean);
+  visibleIds.forEach((id) => state.canvasSelected.add(id));
   $$(".card").forEach((c) => {
     const id = c.dataset.id;
     if (id && state.canvasSelected.has(id)) c.classList.add("canvas-selected");
   });
   updateCanvasSelectionCount();
+  updateCollectionBuildSelectionCount();
+  if (visibleIds.length) {
+    Shared.showToast(`Selected ${visibleIds.length} visible item${visibleIds.length === 1 ? "" : "s"}.`, {
+      type: "info",
+      duration: 1800,
+    });
+  }
 }
 
 function clearCanvasSelection() {
@@ -6918,10 +6988,31 @@ function clearCanvasSelection() {
   updateCollectionBuildSelectionCount();
 }
 
+function syncCollectionBuildLaunchButton() {
+  const btn = $("#collectionBuildBtn");
+  if (!btn) return;
+  if (!state.canvasCollectionBuild) {
+    btn.textContent = "Make Collection";
+    btn.title = "Select items to create or add to a collection";
+    return;
+  }
+  const count = state.canvasSelected.size;
+  btn.textContent = count > 0 ? `Create Collection (${count})` : "Selecting Items";
+  btn.title = count > 0
+    ? "Create a new collection from the selected tiles"
+    : "Use tile checkboxes to choose items, then create a collection";
+}
+
 function updateCollectionBuildSelectionCount() {
   const count = state.canvasSelected.size;
   const countEl = $("#collectionBuildSelectionCount");
   if (countEl) countEl.textContent = `${count} selected`;
+  const hintEl = $("#collectionBuildHint");
+  if (hintEl) {
+    hintEl.textContent = count
+      ? "Ready: create a new collection or add these to an existing one."
+      : "Use tile checkboxes, then create or add to a collection.";
+  }
   const newBtn = $("#collectionBuildNew");
   if (newBtn) newBtn.disabled = count === 0;
   const existingBtn = $("#collectionBuildExisting");
@@ -6933,6 +7024,7 @@ function updateCollectionBuildSelectionCount() {
     removeBtn.hidden = !showRemove;
     removeBtn.disabled = !(showRemove && count > 0);
   }
+  syncCollectionBuildLaunchButton();
 }
 
 function enterCollectionBuild(options = {}) {
@@ -6945,11 +7037,11 @@ function enterCollectionBuild(options = {}) {
   if (isExplorerViewActive()) setViewMode("grid", { persist: false });
   state.canvasCollectionBuild = true;
   state.canvasSelected.clear();
+  syncTopbarModeButtons();
   if (initialSelectionId) state.canvasSelected.add(initialSelectionId);
   $("#browseView")?.classList.add("canvas-selection-active");
   const bar = $("#collectionBuildBar");
   if (bar) bar.hidden = false;
-  $("#collectionBuildBtn")?.classList.add("active");
   updateCollectionBuildSelectionCount();
   renderGrid();
   Shared.showToast(
@@ -6964,9 +7056,24 @@ function exitCollectionBuild() {
   $("#browseView")?.classList.remove("canvas-selection-active");
   const bar = $("#collectionBuildBar");
   if (bar) bar.hidden = true;
-  $("#collectionBuildBtn")?.classList.remove("active");
+  syncTopbarModeButtons();
   $$(".card.canvas-selected").forEach((card) => card.classList.remove("canvas-selected"));
   updateCollectionBuildSelectionCount();
+}
+
+function handleCollectionBuildLaunchClick() {
+  if (state.canvasCollectionBuild) {
+    if (state.canvasSelected.size > 0) {
+      openCollectionBuildModal("new");
+      return;
+    }
+    Shared.showToast("Use tile checkboxes to choose items, then create or add to a collection.", {
+      type: "info",
+      duration: 3200,
+    });
+    return;
+  }
+  enterCollectionBuild();
 }
 
 async function removeSelectedFromActiveCollection() {
@@ -7143,6 +7250,8 @@ async function canvasBulkTag() {
 }
 
 // Canvas review action bar wiring
+const canvasSelectAllBtn = $("#canvasSelectAll");
+if (canvasSelectAllBtn) canvasSelectAllBtn.addEventListener("click", selectAllCanvas);
 const canvasKeepBtn = $("#canvasKeep");
 if (canvasKeepBtn) canvasKeepBtn.addEventListener("click", canvasBulkKeep);
 const canvasHideLocalBtn = $("#canvasHideLocal");
@@ -7165,13 +7274,15 @@ if (canvasExitReviewBtn) canvasExitReviewBtn.addEventListener("click", exitCanva
 
 // Collection building is a separate creative selection mode.
 const collectionBuildBtn = $("#collectionBuildBtn");
-if (collectionBuildBtn) collectionBuildBtn.addEventListener("click", enterCollectionBuild);
+if (collectionBuildBtn) collectionBuildBtn.addEventListener("click", handleCollectionBuildLaunchClick);
 const collectionBuildNewBtn = $("#collectionBuildNew");
 if (collectionBuildNewBtn) collectionBuildNewBtn.addEventListener("click", () => openCollectionBuildModal("new"));
 const collectionBuildExistingBtn = $("#collectionBuildExisting");
 if (collectionBuildExistingBtn) collectionBuildExistingBtn.addEventListener("click", () => openCollectionBuildModal("existing"));
 const collectionBuildRemoveBtn = $("#collectionBuildRemove");
 if (collectionBuildRemoveBtn) collectionBuildRemoveBtn.addEventListener("click", removeSelectedFromActiveCollection);
+const collectionBuildSelectAllBtn = $("#collectionBuildSelectAll");
+if (collectionBuildSelectAllBtn) collectionBuildSelectAllBtn.addEventListener("click", selectAllCanvas);
 const collectionBuildClearBtn = $("#collectionBuildClear");
 if (collectionBuildClearBtn) collectionBuildClearBtn.addEventListener("click", clearCanvasSelection);
 const collectionBuildDoneBtn = $("#collectionBuildDone");
@@ -7179,7 +7290,7 @@ if (collectionBuildDoneBtn) collectionBuildDoneBtn.addEventListener("click", exi
 
 // Review button — canvas review is the default
 const reviewBtn = $("#reviewBtn");
-if (reviewBtn) reviewBtn.addEventListener("click", enterCanvasReview);
+if (reviewBtn) reviewBtn.addEventListener("click", toggleTopbarReviewMode);
 
 const reviewBackBtn = $("#reviewBack");
 if (reviewBackBtn) reviewBackBtn.addEventListener("click", exitReview);
@@ -7347,6 +7458,7 @@ function showChatSpinner(text) {
   const bar = $("#chatResponse");
   if (!bar) return;
   clearTimeout(addChatResponse._timer);
+  bar.classList.remove("chat-response-error", "chat-response-sticky");
   bar.innerHTML = `<span class="chat-spinner"></span>${escapeHtml(text || "Thinking…")}`;
   bar.hidden = false;
 }
@@ -7355,18 +7467,49 @@ function hideChatSpinner() {
   const bar = $("#chatResponse");
   if (!bar) return;
   clearTimeout(addChatResponse._timer);
+  bar.classList.remove("chat-response-error", "chat-response-sticky");
   bar.hidden = true;
   bar.innerHTML = "";
 }
 
-function addChatResponse(text, duration) {
+function clearChatResponse() {
   const bar = $("#chatResponse");
   if (!bar) return;
+  clearTimeout(addChatResponse._timer);
+  bar.classList.remove("chat-response-error", "chat-response-sticky");
   bar.innerHTML = "";
-  bar.textContent = text;
+  bar.hidden = true;
+}
+
+function addChatResponse(text, durationOrOptions) {
+  const bar = $("#chatResponse");
+  if (!bar) return;
+  const options = typeof durationOrOptions === "object" && durationOrOptions
+    ? durationOrOptions
+    : { duration: durationOrOptions };
+  const type = String(options.type || "info");
+  const sticky = !!options.sticky;
+  bar.innerHTML = "";
+  bar.classList.toggle("chat-response-error", type === "error");
+  bar.classList.toggle("chat-response-sticky", sticky);
+
+  const textEl = document.createElement("span");
+  textEl.className = "chat-response-text";
+  textEl.textContent = text || "";
+  bar.appendChild(textEl);
+  if (sticky) {
+    const clearBtn = document.createElement("button");
+    clearBtn.className = "chat-response-clear";
+    clearBtn.type = "button";
+    clearBtn.textContent = "Clear";
+    clearBtn.addEventListener("click", clearChatResponse);
+    bar.appendChild(clearBtn);
+  }
   bar.hidden = false;
   clearTimeout(addChatResponse._timer);
-  addChatResponse._timer = setTimeout(() => { if (bar) bar.hidden = true; }, duration || 6000);
+  if (!sticky) {
+    addChatResponse._timer = setTimeout(() => { clearChatResponse(); }, options.duration || 6000);
+  }
 }
 
 // Extract meaningful keywords from a chat message for text-search fallback.
@@ -7425,7 +7568,7 @@ async function _runOwnerTriageRollback(daysAgo) {
     );
   } catch (e) {
     hideChatSpinner();
-    addChatResponse(`Rollback failed: ${formatApiError(e)}`, 8000);
+    addChatResponse(`Rollback failed: ${formatApiError(e)}`, { type: "error", sticky: true });
   }
 }
 
@@ -7496,15 +7639,18 @@ async function processChat(text) {
         await loadAssets();
         addChatResponse(
           `Dave is unavailable right now (${errMsg}). Text fallback found no matches, so I left your current view unchanged.`,
-          9000
+          { type: "error", sticky: true }
         );
       } else {
-        addChatResponse(`Dave is unavailable right now (${errMsg}). Filtering by "${keywords}" instead.`, 9000);
+        addChatResponse(
+          `Dave is unavailable right now (${errMsg}). Filtering by "${keywords}" instead.`,
+          { type: "error", sticky: true }
+        );
       }
     } catch (loadErr) {
       addChatResponse(
         `Dave failed (${errMsg}) and fallback search failed (${formatApiError(loadErr)}).`,
-        9000
+        { type: "error", sticky: true }
       );
     }
   }
@@ -7539,7 +7685,7 @@ async function executeChatAction(action, params) {
         updateFilterIndicator();
         syncExplorerFilter();
       } catch (e) {
-        addChatResponse(`Failed to load items: ${formatApiError(e)}`, 8000);
+        addChatResponse(`Failed to load items: ${formatApiError(e)}`, { type: "error", sticky: true });
       }
       break;
     }
@@ -7691,7 +7837,7 @@ async function executeChatAction(action, params) {
           await loadCollections();
           await loadCatalogTree();
         } catch (e) {
-          addChatResponse(`Couldn't create collection: ${formatApiError(e)}`, 8000);
+          addChatResponse(`Couldn't create collection: ${formatApiError(e)}`, { type: "error", sticky: true });
         }
       }
       break;
@@ -7751,7 +7897,7 @@ async function executeChatAction(action, params) {
         if (state.canvasReview) clearCanvasSelection();
         await loadAssets();
       } catch (e) {
-        addChatResponse(`Bulk triage failed: ${formatApiError(e)}`, 8000);
+        addChatResponse(`Bulk triage failed: ${formatApiError(e)}`, { type: "error", sticky: true });
       }
       break;
     }
@@ -7775,7 +7921,7 @@ async function executeChatAction(action, params) {
         if (state.canvasReview) clearCanvasSelection();
         await loadAssets();
       } catch (e) {
-        addChatResponse(`Bulk flag failed: ${formatApiError(e)}`, 8000);
+        addChatResponse(`Bulk flag failed: ${formatApiError(e)}`, { type: "error", sticky: true });
       }
       break;
     }
@@ -7821,7 +7967,7 @@ let _explorerMode = "3d";   // "2d" | "3d"
 let _ExplorerImpl = null;
 let _disable3DForSession = false;
 let _explorer3DLoadPromise = null;
-const EXPLORER_3D_MODULE_URL = `${_B}/app/attractor-explorer-3d.js?v=60`;
+const EXPLORER_3D_MODULE_URL = `${_B}/app/attractor-explorer-3d.js?v=63`;
 // Hard refresh in Safari can cold-load Three.js from CDN; allow enough
 // headroom so we do not incorrectly drop into 2D fallback.
 const EXPLORER_3D_READY_WAIT_MS = 12000;
@@ -8358,6 +8504,15 @@ function setViewMode(mode, options = {}) {
     _writeViewModeToUrl("explorer");
     if (persist) _writeViewModePref("explorer");
     updateStats();
+    if (
+      explorerLoaded &&
+      _ExplorerImpl &&
+      _explorerPayloadIncludesHidden === _shouldExplorerIncludeHiddenData()
+    ) {
+      if (typeof _ExplorerImpl.resume === "function") _ExplorerImpl.resume();
+      syncExplorerFilter();
+      return;
+    }
     loadExplorerView();
   } else {
     state.view = "browse";
@@ -8666,6 +8821,17 @@ function clearAllActiveFilters() {
   renderCatalogTree();
   updateFilterIndicator();
   loadAssets();
+}
+
+function showPendingCollectionBuildToast() {
+  let message = "";
+  try {
+    message = String(window.sessionStorage?.getItem(COLLECTION_BUILD_PENDING_TOAST_KEY) || "").trim();
+    window.sessionStorage?.removeItem(COLLECTION_BUILD_PENDING_TOAST_KEY);
+  } catch {
+    message = "";
+  }
+  if (message) Shared.showToast(message, { type: "success", duration: 4200 });
 }
 
 function updateFilterIndicator() {
@@ -9201,6 +9367,12 @@ function isReviewModeActive() {
   return state.view === "review" || !!state.canvasReview;
 }
 
+function syncTopbarModeButtons() {
+  $("#reviewBtn")?.classList.toggle("active", isReviewModeActive());
+  $("#collectionBuildBtn")?.classList.toggle("active", !!state.canvasCollectionBuild);
+  syncCollectionBuildLaunchButton();
+}
+
 function isModalAdvancedEditingEnabled() {
   return isOwner() && !!state.modalAdvancedEditing;
 }
@@ -9301,6 +9473,7 @@ function applyRoleVisibility() {
   if (reviewBtnEl) reviewBtnEl.hidden = !owner;
   const collectionBuildBtnEl = $("#collectionBuildBtn");
   if (collectionBuildBtnEl) collectionBuildBtnEl.hidden = !owner;
+  syncTopbarModeButtons();
   const addMediaEl = $("#addMedia");
   if (addMediaEl) addMediaEl.hidden = !owner;
   const adminEl = $(".adminLink");
@@ -9349,6 +9522,7 @@ function applyRoleVisibility() {
     applyCollectionScopeFromUrl();
     _applyCollaboratorCollectionsDefaultScope();
     await loadAssets();
+    showPendingCollectionBuildToast();
     await Promise.all([facetsPromise, catalogTreePromise]);
     const viewFromUrl = _readViewModeFromUrl();
     let preferredView = viewFromUrl || _readViewModePref();

@@ -123,8 +123,14 @@ BASE_PATH=/inspirations-app PYTHONPATH=src python3 -m inspirations serve --port 
 ### Admin Maintenance
 - Open **Admin** from the app header
 - On first use, open `http://localhost:8001/app/admin.html` on the Mac and choose an admin password
+- Use **Optimize Database** after bulk imports, retagging/re-embedding/title cleanup, large delete/cleanup batches, or unusual direct DB edits. It rebuilds the SQLite text-search index and runs SQLite planner optimization.
 - Replacement media is applied immediately; use **Refresh Search Evidence** in Admin to retag replacement photos, rebuild semantic embeddings, and refresh Explorer classification evidence in a deliberate batch
 - Generated text cards skip visual retagging and receive text embeddings only
+
+CLI equivalent:
+```sh
+PYTHONPATH=src python3 -m inspirations --db data/inspirations.sqlite maintenance optimize-db
+```
 
 ### Collection PDF Export
 - Use **Manage Collections** to create an empty collection, rename collections, edit descriptions, archive obsolete folders, restore archived folders, or permanently delete archived folders.

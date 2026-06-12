@@ -416,6 +416,60 @@ for ordinary Review items too, so Jim can curate items as he finds them.
 
 ---
 
+## D028 — Optimize local/LAN responsiveness before maximum exactness (2026-06-10)
+
+**Decision:** Used UI paths favor fast local/LAN interaction over exact but
+expensive secondary work. Grid pagination appends newly fetched cards instead
+of rebuilding the loaded canvas. Explorer `attractor-data` and `layout`
+responses use a small in-process cache keyed by endpoint parameters and SQLite
+mtime. Dynamic JSON gzip uses a faster compression level. Free-text
+`/api/assets?q=...` requests skip exact total-count scans while preserving page
+results and `has_more`.
+
+**Why:** The live corpus is large enough that repeated DOM rebuilds, repeated
+Explorer JSON parse/serialization, and exact text-search counts were visible to
+Jim as sluggish browsing. The app runs on a trusted local Mac/LAN, so response
+latency is more important than maximum gzip compression or exact text-filter
+totals.
+
+**Consequence:** `total: null` is normal for text-search asset results. Use
+`has_more` for pagination. Explicit Explorer `refresh=1` still recomputes
+layout and bypasses the in-process cache. Any DB write that changes the SQLite
+file mtime invalidates cached Explorer API payloads.
+
+---
+
+## D029 — Text search uses explicit FTS maintenance, not request-time LIKE scans (2026-06-10)
+
+**Decision:** Asset free-text search uses a SQLite FTS5 table
+(`asset_search_fts`) containing one aggregated search document per asset:
+title, description, board, notes, AI summary, source text, and labels. The FTS
+index is created by `ensure_schema()` and rebuilt/refreshed through explicit
+maintenance or known mutation paths, not by doing ad hoc label joins and
+`%term%` scans for each search request.
+
+**Why:** The previous LIKE search joined `asset_labels` and scanned many text
+fields for every typed query. That made common filters noticeably slower than
+the default grid path. The corpus is fairly static, so an indexed search
+document is a better fit than repeated broad scans.
+
+**Consequence:** Search terms use FTS prefix matching for normal two-or-more
+character tokens. One-character or non-token searches fall back to the old LIKE
+path. Add Media imports, UI title/note edits, media-repair refreshes, AI tag
+runs, and title-audit apply/undo refresh the search index. For unusual direct
+DB maintenance or bulk pipelines, run:
+
+```bash
+PYTHONPATH=src python3 -m inspirations --db data/inspirations.sqlite maintenance optimize-db
+```
+
+The Admin page also exposes **Optimize Database**, which rebuilds the search
+index and runs `PRAGMA optimize`. Do not run this automatically on every app
+startup. Run it after bulk imports, retagging/re-embedding/title cleanup, large
+delete/cleanup batches, or if text search starts feeling stale.
+
+---
+
 ## Archived Decisions (pre-rebuild)
 
 Decisions D010–D013 (cluster explorer, accessibility tier, session-only delete)

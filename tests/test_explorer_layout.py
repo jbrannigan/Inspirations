@@ -219,11 +219,11 @@ class TestComputeLayout(unittest.TestCase):
         self.assertNotIn("sentinel", node_titles, "refresh=True should recompute")
         self.assertEqual(len(result2["nodes"]), 20)
 
-    def test_cache_key_changes_when_embedding_changes(self):
+    def test_cache_key_changes_when_embedding_signature_changes(self):
         ids = ["a1", "a2"]
         self.assertNotEqual(
-            _cache_key(ids, [[1.0, 0.0], [0.0, 1.0]]),
-            _cache_key(ids, [[0.5, 0.5], [0.0, 1.0]]),
+            _cache_key(ids, method="pca", include_hidden=False, signature=(2, "2026-01-01T00:00:00", 20)),
+            _cache_key(ids, method="pca", include_hidden=False, signature=(2, "2026-01-02T00:00:00", 20)),
         )
 
     def test_collection_id_filtering(self):

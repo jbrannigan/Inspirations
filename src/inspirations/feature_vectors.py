@@ -808,13 +808,34 @@ def _confidence_weight(raw_value: object, *, default: float = 0.9) -> float:
     return max(0.25, min(1.0, value))
 
 
+def _feature_cache_file(
+    data_dir: Path,
+    *,
+    asset_ids: list[str],
+    dims: int,
+    include_hidden: bool,
+    track_run_id: str,
+    axis_run_id: str,
+) -> Path:
+    cache_key = hashlib.sha256(
+        (
+            f"{','.join(sorted(asset_ids))}:dims={dims}:include_hidden={int(include_hidden)}:"
+            f"track_run={track_run_id}:axis_run={axis_run_id}:idf=v2"
+        ).encode()
+    ).hexdigest()[:16]
+    return data_dir / f"attractors_{cache_key}.json"
+
+
 def _load_classification_memberships(
     db: Db,
     asset_ids: list[str],
+    *,
+    track_run_id: str = "",
+    axis_run_id: str = "",
 ) -> tuple[str, str, dict[str, list[tuple[str, float]]], dict[str, dict[str, list[tuple[str, float]]]], dict[str, set[str]]]:
     asset_id_set = {str(asset_id or "").strip() for asset_id in asset_ids if str(asset_id or "").strip()}
-    track_run_id = _latest_classification_run_id(db, "track_gate")
-    axis_run_id = _latest_classification_run_id(db, "multi_axis_inference")
+    track_run_id = track_run_id or _latest_classification_run_id(db, "track_gate")
+    axis_run_id = axis_run_id or _latest_classification_run_id(db, "multi_axis_inference")
     track_by_asset: dict[str, list[tuple[str, float]]] = {}
     axis_by_asset: dict[str, dict[str, list[tuple[str, float]]]] = {}
     axis_values_by_axis: dict[str, set[str]] = {axis_name: set() for axis_name, _ in EXPLORER_AXIS_SPECS}
@@ -924,13 +945,39 @@ def build_feature_vectors(
         return {"dimensions": [], "categories": {}, "assets": [], "attractors": {}}
 
     asset_ids = [a["id"] for a in assets]
+    track_run_id = _latest_classification_run_id(db, "track_gate")
+    axis_run_id = _latest_classification_run_id(db, "multi_axis_inference")
+    cache_file: Path | None = None
+    if data_dir:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = _feature_cache_file(
+            data_dir,
+            asset_ids=asset_ids,
+            dims=dims,
+            include_hidden=include_hidden,
+            track_run_id=track_run_id,
+            axis_run_id=axis_run_id,
+        )
+        if cache_file.exists():
+            try:
+                cached = json.loads(cache_file.read_text())
+                if isinstance(cached, dict):
+                    return cached
+            except Exception:
+                pass
+
     (
         track_run_id,
         axis_run_id,
         track_by_asset,
         axis_by_asset,
         axis_values_by_axis,
-    ) = _load_classification_memberships(db, asset_ids)
+    ) = _load_classification_memberships(
+        db,
+        asset_ids,
+        track_run_id=track_run_id,
+        axis_run_id=axis_run_id,
+    )
     explorer_dims, explorer_categories, explorer_dim_labels, classification_lookup, legacy_lookup = (
         _build_explorer_dimensions(axis_values_by_axis)
     )
@@ -1086,15 +1133,7 @@ def build_feature_vectors(
             attractors[cat_key] = options
 
     # 8. Cache result
-    if data_dir:
-        data_dir.mkdir(parents=True, exist_ok=True)
-        cache_key = hashlib.sha256(
-            (
-                f"{','.join(sorted(asset_ids))}:dims={dims}:include_hidden={int(include_hidden)}:"
-                f"track_run={track_run_id}:axis_run={axis_run_id}:idf=v2"
-            ).encode()
-        ).hexdigest()[:16]
-        cache_file = data_dir / f"attractors_{cache_key}.json"
+    if cache_file:
         payload = {
             "dimensions": explorer_dims,
             "categories": {

@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from .db import Db, infer_collection_provenance
+from .db import Db, asset_search_index_ready, asset_search_match_query, infer_collection_provenance, refresh_asset_search_index
 from .feature_vectors import EXPLORER_LEGACY_SPECS, build_legacy_facet_memberships
 from .title_workflow import enrich_assets_with_title_info
 
@@ -693,19 +693,32 @@ def _build_asset_filter(
         clauses.append("coalesce(a.category, 'home_design') in (%s)" % ",".join(["?"] * len(categories)))
         params.extend(categories)
     if q:
-        if not any(j.startswith("left join asset_labels") for j in joins):
-            joins.append("left join asset_labels al on al.asset_id = a.id")
-        _search_fields = (
-            "a.title", "a.description", "a.board", "a.seo_alt_text",
-            "a.post_text", "a.notes", "a.ai_summary", "a.creator_name",
-            "a.source_domain", "a.source_name", "al.label",
-        )
-        terms = q.split()
-        for term in terms:
-            field_ors = " or ".join(f"{f} like ?" for f in _search_fields)
-            clauses.append(f"({field_ors})")
-            tv = f"%{term}%"
-            params += [tv] * len(_search_fields)
+        fts_query = asset_search_match_query(q)
+        if fts_query and asset_search_index_ready(db):
+            clauses.append(
+                """
+                a.id in (
+                  select asset_id
+                  from asset_search_fts
+                  where asset_search_fts match ?
+                )
+                """
+            )
+            params.append(fts_query)
+        else:
+            if not any(j.startswith("left join asset_labels") for j in joins):
+                joins.append("left join asset_labels al on al.asset_id = a.id")
+            _search_fields = (
+                "a.title", "a.description", "a.board", "a.seo_alt_text",
+                "a.post_text", "a.notes", "a.ai_summary", "a.creator_name",
+                "a.source_domain", "a.source_name", "al.label",
+            )
+            terms = q.split()
+            for term in terms:
+                field_ors = " or ".join(f"{f} like ?" for f in _search_fields)
+                clauses.append(f"({field_ors})")
+                tv = f"%{term}%"
+                params += [tv] * len(_search_fields)
     collection_ids = _csv_values(collection_id)
     if collection_ids:
         joins.append("join collection_items ci on ci.asset_id = a.id")
@@ -977,6 +990,7 @@ def list_assets(
     exclude_tracks: str = "",
     viewer_role: str = "",
     viewer_actor_id: str = "",
+    exact_total: bool = True,
     limit: int = 200,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
@@ -992,9 +1006,29 @@ def list_assets(
         exclude_tracks=exclude_tracks, viewer_role=viewer_role, viewer_actor_id=viewer_actor_id,
     )
 
-    # Total count (same filters, no limit/offset)
-    count_sql = f"select count(distinct a.id) from assets a {join_sql} {where}"
-    total_count = db.query_value(count_sql, tuple(params)) or 0
+    # Total count (same filters, no limit/offset). Collection-scoped views use
+    # the same logical scan-document collapse as the grid, so the visible count
+    # matches the number of cards the curator sees.
+    if not exact_total:
+        total_count = None
+    elif _csv_values(collection_id):
+        total_rows = [
+            dict(r)
+            for r in db.query(
+                f"""
+                select distinct a.id, a.source, a.source_ref, a.title
+                from assets a
+                {join_sql}
+                {where}
+                order by a.id asc
+                """,
+                tuple(params),
+            )
+        ]
+        total_count = len(_collapse_scan_rows(total_rows))
+    else:
+        count_sql = f"select count(distinct a.id) from assets a {join_sql} {where}"
+        total_count = db.query_value(count_sql, tuple(params)) or 0
 
     sql = f"""
     select distinct a.id, a.source, a.source_ref, a.title, a.description, a.board, a.notes,
@@ -1003,7 +1037,7 @@ def list_assets(
              (select ai.summary from asset_ai ai where ai.asset_id=a.id order by ai.created_at desc limit 1),
              a.ai_summary
            ) as ai_summary,
-           a.created_at, a.imported_at, a.image_url, a.stored_path, a.stored_video_path, a.thumb_path,
+           a.created_at, a.imported_at, a.image_url, a.stored_path, a.stored_video_path, a.thumb_path, a.sha256,
            a.triage_status, a.needs_annotation, a.source_url, a.seo_alt_text,
            a.post_text, a.hashtags, a.engagement_json, a.dominant_color,
            a.image_width, a.image_height, a.closeup_desc,
@@ -1427,7 +1461,7 @@ def list_collections(
     hidden_collection_id = str(
         db.query_value("select id from collections where lower(name)='hidden' limit 1") or ""
     )
-    params: list[Any] = [hidden_collection_id]
+    params: list[Any] = []
     where: list[str] = []
     role = str(viewer_role or "").strip().lower()
     actor_id = str(viewer_actor_id or "").strip()
@@ -1459,23 +1493,8 @@ def list_collections(
             c.shared_actor_id,
             coalesce(c.hidden, 0) as hidden,
             c.hidden_at,
-            (
-                select count(*)
-                from collection_items ci
-                where ci.collection_id = c.id
-            ) as count_total,
-            (
-                select count(*)
-                from collection_items ci
-                join assets a on a.id = ci.asset_id
-                where ci.collection_id = c.id
-                  and (a.triage_status is null or a.triage_status != 'hidden')
-                  and a.id not in (
-                    select h.asset_id
-                    from collection_items h
-                    where h.collection_id = ?
-                  )
-            ) as count_visible
+            0 as count_total,
+            0 as count_visible
         from collections c
     """
     if where:
@@ -1483,8 +1502,54 @@ def list_collections(
     sql += " order by c.name collate nocase asc, c.updated_at desc"
     rows = db.query(sql, tuple(params))
     collection_ids = [str(r["id"] or "").strip() for r in rows if str(r["id"] or "").strip()]
+    logical_counts_by_collection: dict[str, dict[str, int]] = {}
     shares_by_collection: dict[str, list[tuple[str, str]]] = {}
     if collection_ids:
+        placeholders = ",".join(["?"] * len(collection_ids))
+        count_rows = db.query(
+            f"""
+            select
+                ci.collection_id,
+                a.id,
+                a.source,
+                a.source_ref,
+                a.title,
+                a.triage_status,
+                case
+                  when ? != ''
+                   and exists (
+                     select 1
+                     from collection_items h
+                     where h.collection_id = ?
+                       and h.asset_id = a.id
+                   )
+                  then 1 else 0
+                end as in_hidden_collection
+            from collection_items ci
+            join assets a on a.id = ci.asset_id
+            where ci.collection_id in ({placeholders})
+            order by ci.collection_id, ci.position, a.id
+            """,
+            (hidden_collection_id, hidden_collection_id, *collection_ids),
+        )
+        rows_by_collection: dict[str, list[dict[str, Any]]] = {}
+        visible_rows_by_collection: dict[str, list[dict[str, Any]]] = {}
+        for row in count_rows:
+            item = dict(row)
+            cid = str(item.get("collection_id") or "").strip()
+            if not cid:
+                continue
+            rows_by_collection.setdefault(cid, []).append(item)
+            if (
+                str(item.get("triage_status") or "") != "hidden"
+                and int(item.get("in_hidden_collection") or 0) != 1
+            ):
+                visible_rows_by_collection.setdefault(cid, []).append(item)
+        for cid in collection_ids:
+            logical_counts_by_collection[cid] = {
+                "count_total": len(_collapse_scan_rows(rows_by_collection.get(cid, []))),
+                "count_visible": len(_collapse_scan_rows(visible_rows_by_collection.get(cid, []))),
+            }
         share_rows = db.query(
             f"""
             select cs.collection_id, cs.actor_id, a.name
@@ -1513,8 +1578,9 @@ def list_collections(
                 d["shared_actor_id"] = d["shared_actor_ids"][0] if d["shared_actor_ids"] else ""
             if not d.get("shared_actor_name"):
                 d["shared_actor_name"] = d["shared_actor_names"][0] if d["shared_actor_names"] else ""
-        d["count_total"] = int(d.get("count_total") or 0)
-        d["count_visible"] = int(d.get("count_visible") or 0)
+        logical_counts = logical_counts_by_collection.get(str(d.get("id") or ""), {})
+        d["count_total"] = int(logical_counts.get("count_total") or 0)
+        d["count_visible"] = int(logical_counts.get("count_visible") or 0)
         d["count"] = d["count_visible"]
         d["hidden"] = int(d.get("hidden") or 0)
         out.append(d)
@@ -1797,12 +1863,17 @@ def delete_assets(db: Db, *, asset_ids: list[str]) -> dict[str, Any]:
         if r["thumb_path"]:
             paths.append(r["thumb_path"])
 
+    try:
+        db.exec(f"delete from asset_search_fts where asset_id in ({placeholders})", tuple(unique_ids))
+    except Exception:
+        pass
     db.exec(f"delete from assets where id in ({placeholders})", tuple(unique_ids))
     return {"deleted": len(rows), "paths": paths}
 
 
 def update_asset_notes(db: Db, *, asset_id: str, notes: str) -> None:
     db.exec("update assets set notes=? where id=?", (notes or None, asset_id))
+    refresh_asset_search_index(db, [asset_id])
 
 
 def list_tray(db: Db) -> list[dict[str, Any]]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,6 +59,172 @@ def _ensure_columns(db: Db, table: str, columns: dict[str, str]) -> None:
         if name in existing:
             continue
         db.exec(f"alter table {table} add column {name} {decl};")
+
+
+_FTS_QUERY_TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
+
+
+def _fts_available(db: Db) -> bool:
+    try:
+        db.query("select 1 from pragma_module_list where name='fts5' limit 1")
+        return True
+    except sqlite3.OperationalError:
+        return False
+
+
+def asset_search_match_query(text: str) -> str:
+    """Return a safe FTS5 prefix query that preserves the old AND-term behavior."""
+    tokens = [t.lower() for t in _FTS_QUERY_TOKEN_RE.findall(str(text or "")) if len(t) >= 2]
+    return " ".join(f"{token}*" for token in tokens)
+
+
+def asset_search_index_ready(db: Db) -> bool:
+    try:
+        return bool(db.query_value("select count(*) from asset_search_fts") or 0)
+    except sqlite3.OperationalError:
+        return False
+
+
+def _create_asset_search_index(db: Db) -> bool:
+    if not _fts_available(db):
+        return False
+    try:
+        db.exec(
+            """
+            create virtual table if not exists asset_search_fts using fts5(
+              asset_id unindexed,
+              search_text,
+              tokenize='unicode61'
+            );
+            """
+        )
+        return True
+    except sqlite3.OperationalError:
+        return False
+
+
+def _asset_search_rows(db: Db, asset_ids: list[str] | None = None) -> list[sqlite3.Row]:
+    filter_sql = ""
+    params: tuple[Any, ...] = ()
+    if asset_ids is not None:
+        ids = [str(v or "").strip() for v in asset_ids if str(v or "").strip()]
+        if not ids:
+            return []
+        placeholders = ",".join(["?"] * len(ids))
+        filter_sql = f"where a.id in ({placeholders})"
+        params = tuple(ids)
+    return db.query(
+        f"""
+        select
+          a.id as asset_id,
+          trim(
+            coalesce(a.title, '') || ' ' ||
+            coalesce(a.description, '') || ' ' ||
+            coalesce(a.board, '') || ' ' ||
+            coalesce(a.notes, '') || ' ' ||
+            coalesce(a.ai_summary, '') || ' ' ||
+            coalesce(a.creator_name, '') || ' ' ||
+            coalesce(a.source_domain, '') || ' ' ||
+            coalesce(a.source_name, '') || ' ' ||
+            coalesce(a.source_url, '') || ' ' ||
+            coalesce(a.seo_alt_text, '') || ' ' ||
+            coalesce(a.closeup_desc, '') || ' ' ||
+            coalesce(a.hashtags, '') || ' ' ||
+            coalesce(a.post_text, '') || ' ' ||
+            coalesce(group_concat(al.label, ' '), '')
+          ) as search_text
+        from assets a
+        left join asset_labels al on al.asset_id = a.id
+        {filter_sql}
+        group by a.id
+        """,
+        params,
+    )
+
+
+def rebuild_asset_search_index(db: Db) -> dict[str, Any]:
+    started = time.perf_counter()
+    if not _create_asset_search_index(db):
+        return {"ok": False, "available": False, "indexed_assets": 0, "duration_ms": 0}
+    rows = _asset_search_rows(db)
+    db.exec("delete from asset_search_fts")
+    if rows:
+        db.executemany(
+            "insert into asset_search_fts (asset_id, search_text) values (?, ?)",
+            [(str(r["asset_id"]), str(r["search_text"] or "")) for r in rows],
+        )
+    return {
+        "ok": True,
+        "available": True,
+        "indexed_assets": len(rows),
+        "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+    }
+
+
+def refresh_asset_search_index(db: Db, asset_ids: list[str] | None = None) -> dict[str, Any]:
+    if asset_ids is None:
+        return rebuild_asset_search_index(db)
+    started = time.perf_counter()
+    if not _create_asset_search_index(db):
+        return {"ok": False, "available": False, "refreshed_assets": 0, "duration_ms": 0}
+    ids = [str(v or "").strip() for v in asset_ids if str(v or "").strip()]
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        return {"ok": True, "available": True, "refreshed_assets": 0, "duration_ms": 0}
+    for i in range(0, len(ids), 400):
+        chunk = ids[i : i + 400]
+        placeholders = ",".join(["?"] * len(chunk))
+        db.exec(f"delete from asset_search_fts where asset_id in ({placeholders})", tuple(chunk))
+        rows = _asset_search_rows(db, chunk)
+        if rows:
+            db.executemany(
+                "insert into asset_search_fts (asset_id, search_text) values (?, ?)",
+                [(str(r["asset_id"]), str(r["search_text"] or "")) for r in rows],
+            )
+    return {
+        "ok": True,
+        "available": True,
+        "refreshed_assets": len(ids),
+        "duration_ms": round((time.perf_counter() - started) * 1000, 1),
+    }
+
+
+def asset_search_index_stats(db: Db) -> dict[str, Any]:
+    asset_count = int(db.query_value("select count(*) from assets") or 0)
+    try:
+        indexed_count = int(db.query_value("select count(*) from asset_search_fts") or 0)
+        available = True
+    except sqlite3.OperationalError:
+        indexed_count = 0
+        available = False
+    return {
+        "available": available,
+        "asset_count": asset_count,
+        "indexed_assets": indexed_count,
+        "stale_or_missing": max(asset_count - indexed_count, 0),
+    }
+
+
+def optimize_database(db: Db, *, rebuild_search: bool = True) -> dict[str, Any]:
+    started = time.perf_counter()
+    report: dict[str, Any] = {
+        "ok": True,
+        "rebuild_search": bool(rebuild_search),
+        "search_index_before": asset_search_index_stats(db),
+    }
+    if rebuild_search:
+        report["search_index_rebuild"] = rebuild_asset_search_index(db)
+    try:
+        if asset_search_index_ready(db):
+            db.exec("insert into asset_search_fts(asset_search_fts) values('optimize')")
+        optimize_rows = [tuple(r) for r in db.query("pragma optimize")]
+        report["pragma_optimize"] = {"ok": True, "rows": optimize_rows}
+    except sqlite3.Error as e:
+        report["ok"] = False
+        report["pragma_optimize"] = {"ok": False, "error": str(e)}
+    report["search_index_after"] = asset_search_index_stats(db)
+    report["duration_ms"] = round((time.perf_counter() - started) * 1000, 1)
+    return report
 
 
 _IMAGE_REF_RE = re.compile(r"\.(jpg|jpeg|png|webp|gif|bmp|svg)(?:\?.*)?$", re.IGNORECASE)
@@ -1050,3 +1217,7 @@ def ensure_schema(db: Db) -> None:
     _backfill_assets_metadata(db)
     _backfill_title_field_provenance(db)
     _backfill_collection_metadata(db)
+    if _create_asset_search_index(db):
+        stats = asset_search_index_stats(db)
+        if stats["asset_count"] and not stats["indexed_assets"]:
+            rebuild_asset_search_index(db)

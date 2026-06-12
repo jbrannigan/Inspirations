@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from .db import Db
+from .db import Db, refresh_asset_search_index
 
 _FB_SAVED_LINK_TITLE_RE = re.compile(r"^\s*[^.]+ saved a link from (.+?)'s post\.?\s*$", re.IGNORECASE)
 _JUNK_SHORT_DOMAIN_RE = re.compile(r"^(https?://|www\.)|\.(com|org|net|co)\b", re.IGNORECASE)
@@ -971,6 +971,7 @@ def apply_title_audit_batch(
         applied_assets.append(aid)
 
     if not dry_run and applied > 0:
+        refresh_asset_search_index(db, applied_assets)
         db.exec(
             "update title_audit_batches set status = 'applied', applied_at = ?, undone_at = null where id = ?",
             (now, batch),
@@ -1080,6 +1081,7 @@ def undo_title_audit_batch(
         undone_assets.append(aid)
 
     if not dry_run and undone > 0:
+        refresh_asset_search_index(db, undone_assets)
         active_remaining = _active_apply_count(db, batch)
         if active_remaining == 0:
             db.exec(

@@ -395,6 +395,24 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body.get("refreshed"), 1)
 
+    def test_admin_database_optimize_requires_login_and_reports_index(self):
+        status, body = self._request("/api/admin/database/optimize", method="POST")
+        self.assertEqual(status, 403)
+        self.assertEqual(body.get("error"), "missing admin token")
+
+        with mock.patch.dict(os.environ, {"INSPIRATIONS_ADMIN_PASSWORD": "secret"}, clear=False):
+            status, login = self._request("/api/admin/login", method="POST", payload={"password": "secret"})
+            self.assertEqual(status, 200)
+            status, body = self._request(
+                "/api/admin/database/optimize",
+                method="POST",
+                payload={"rebuild_search": True},
+                headers={"X-Admin-Token": str(login["token"])},
+            )
+        self.assertEqual(status, 200)
+        self.assertTrue(body.get("ok"))
+        self.assertGreaterEqual(body.get("search_index_after", {}).get("indexed_assets", 0), 2)
+
     def test_admin_media_repair_refresh_runs_photo_tags_but_skips_text_card_tags(self):
         with Db(self.db_path) as db:
             ensure_schema(db)
@@ -939,6 +957,19 @@ class TestServerApi(unittest.TestCase):
         ids_owner = {n["id"] for n in body.get("nodes", [])}
         self.assertEqual(ids_owner, {"a1", "a2"})
 
+    def test_explorer_layout_endpoint_uses_in_process_cache(self):
+        payload = {"nodes": [{"id": "a1", "x": 0, "y": 0, "z": 0, "cluster_id": 0}], "clusters": []}
+        with mock.patch("inspirations.server.compute_layout", return_value=payload) as mocked:
+            status, body = self._request("/api/explorer/layout?method=pca")
+            self.assertEqual(status, 200)
+            self.assertEqual(body.get("nodes", [])[0].get("id"), "a1")
+
+            status, body = self._request("/api/explorer/layout?method=pca")
+            self.assertEqual(status, 200)
+            self.assertEqual(body.get("nodes", [])[0].get("id"), "a1")
+
+        mocked.assert_called_once()
+
     def test_asset_detail_endpoint_returns_exact_asset(self):
         status, body = self._request("/api/assets/a1")
         self.assertEqual(status, 200)
@@ -1270,6 +1301,36 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(int(c1.get("count") or 0), 0)
         self.assertEqual(int(c1.get("count_visible") or 0), 0)
         self.assertEqual(int(c1.get("count_total") or 0), 2)
+
+    def test_collections_count_collapses_scan_pages_to_logical_items(self):
+        sha = "b" * 64
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            for idx in range(1, 4):
+                db.exec(
+                    """
+                    insert into assets (id, source, source_ref, title, imported_at)
+                    values (?, ?, ?, ?, datetime('now'))
+                    """,
+                    (f"s-count-{idx}", "scan", f"scan://{sha}#p{idx}", f"Counter scan - doc 7 p{idx}"),
+                )
+                db.exec(
+                    "insert into collection_items (collection_id, asset_id, position) values (?, ?, ?)",
+                    ("c1", f"s-count-{idx}", 10 + idx),
+                )
+
+        status, body = self._request("/api/collections")
+        self.assertEqual(status, 200)
+        c1 = next((c for c in body.get("collections", []) if c.get("id") == "c1"), None)
+        self.assertIsNotNone(c1)
+        self.assertEqual(int(c1.get("count") or 0), 3)
+        self.assertEqual(int(c1.get("count_visible") or 0), 3)
+        self.assertEqual(int(c1.get("count_total") or 0), 3)
+
+        status, body = self._request("/api/assets?collection_id=c1&limit=20")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(body.get("assets", [])), 3)
+        self.assertEqual(int(body.get("total") or 0), 3)
 
     def test_collection_pdf_export_endpoint_returns_pdf_attachment(self):
         pdf_path = self.tmp_path / "exported.pdf"
@@ -3237,6 +3298,45 @@ class TestServerApi(unittest.TestCase):
             self.assertEqual(resp.headers.get("Content-Type"), "video/mp4")
             self.assertEqual(resp.read(), video_bytes)
 
+    def test_asset_list_includes_sha256_for_reel_thumb_cache_bust(self):
+        video = self.store_dir / "reels" / "facebook" / "reel.mp4"
+        still = self.store_dir / "originals" / "facebook" / "replacement.png"
+        thumb = self.store_dir / "thumbs" / "facebook" / "reel.jpg"
+        video.parent.mkdir(parents=True, exist_ok=True)
+        still.parent.mkdir(parents=True, exist_ok=True)
+        thumb.parent.mkdir(parents=True, exist_ok=True)
+        video.write_bytes(b"video")
+        still.write_bytes(b"replacement-still")
+        thumb.write_bytes(b"replacement-thumb")
+        with Db(self.db_path) as db:
+            ensure_schema(db)
+            db.exec(
+                """
+                insert into assets
+                  (id, source, source_ref, title, imported_at, media_status, content_kind,
+                   stored_path, stored_video_path, thumb_path, sha256)
+                values (?, ?, ?, ?, datetime('now'), ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "reel-cache",
+                    "facebook",
+                    "https://www.facebook.com/reel/1/",
+                    "Replacement still",
+                    "image",
+                    "reel",
+                    str(still),
+                    str(video),
+                    str(thumb),
+                    "replacement-sha",
+                ),
+            )
+
+        status, body = self._request("/api/assets?ids=reel-cache")
+        self.assertEqual(status, 200)
+        asset = (body.get("assets") or [{}])[0]
+        self.assertEqual(asset.get("sha256"), "replacement-sha")
+        self.assertEqual(asset.get("stored_video_path"), str(video))
+
     def test_scan_doc_pdf_prefers_doc_scoped_pdf_when_doc_pages_exist(self):
         try:
             from PIL import Image  # type: ignore
@@ -3509,12 +3609,61 @@ class TestServerApi(unittest.TestCase):
         self.assertIn(b"Select for collection", app_js)
         self.assertIn(b"enterCollectionBuild({ initialSelectionId: a.id })", app_js)
         self.assertIn(b"Collection selection started. Choose more cards", app_js)
+        self.assertIn(b"function handleCollectionBuildLaunchClick", app_js)
+        self.assertIn(b"function finishCollectionBuildAndShowCollection", app_js)
+        self.assertIn(b"COLLECTION_BUILD_PENDING_TOAST_KEY", app_js)
+        self.assertIn(b"showPendingCollectionBuildToast", app_js)
+        self.assertIn(b'openCollectionBuildModal("new")', app_js)
+        self.assertIn(b"Showing that collection now.", app_js)
+        self.assertIn(b'url.searchParams.set("collection_id", safeCollectionId);', app_js)
+        self.assertIn(b"window.location.assign(url.toString());", app_js)
+        self.assertIn(b"Creating", app_js)
+        self.assertIn(b"Adding", app_js)
+        self.assertIn(b"Create Collection (", app_js)
+        self.assertNotIn(b"if (state.canvasCollectionBuild) {\n      toggleCanvasSelection(a.id, el);\n      return;\n    }", app_js)
+
+        status, html, _ = self._raw_request("/")
+        self.assertEqual(status, 200)
+        self.assertIn(b"Collection selection mode", html)
+        self.assertIn(b"id=\"collectionBuildHint\"", html)
+        self.assertIn(b"Create new collection", html)
+        self.assertIn(b"Exit selection", html)
 
         req = urllib.request.Request(f"{self.base_url}/app/styles.css", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
             styles = resp.read()
         self.assertIn(b".card:hover .card-checkbox", styles)
         self.assertIn(b"opacity: 0.42", styles)
+
+    def test_frontend_topbar_actions_are_available_until_mode_active(self):
+        status, html, _ = self._raw_request("/")
+        self.assertEqual(status, 200)
+        self.assertIn(b'id="collectionBuildBtn" class="collection-build-launch-btn"', html)
+        self.assertIn(b'id="reviewBtn" class="review-launch-btn"', html)
+        self.assertIn(b'id="addMedia" class="header-btn"', html)
+        self.assertIn(b'class="header-btn adminLink"', html)
+        self.assertIn(b"/app/styles.css?v=99", html)
+        self.assertIn(b"/app/app.js?v=187", html)
+
+        req = urllib.request.Request(f"{self.base_url}/app/styles.css", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            styles = resp.read()
+        self.assertIn(b".header-actions .header-btn", styles)
+        self.assertIn(b".header-actions .review-launch-btn", styles)
+        self.assertIn(b".header-actions .review-launch-btn.active", styles)
+        self.assertIn(b".header-actions .collection-build-launch-btn.active", styles)
+        self.assertIn(b".header-actions .header-btn:disabled", styles)
+
+        req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            app_js = resp.read()
+        self.assertIn(b"function syncTopbarModeButtons", app_js)
+        self.assertIn(b"function toggleTopbarReviewMode", app_js)
+        self.assertIn(b'$("#reviewBtn")?.classList.toggle("active", isReviewModeActive());', app_js)
+        self.assertIn(b'$("#collectionBuildBtn")?.classList.toggle("active", !!state.canvasCollectionBuild);', app_js)
+        self.assertIn(b'reviewBtn.addEventListener("click", toggleTopbarReviewMode)', app_js)
+        self.assertIn(b"if (state.canvasReview) {", app_js)
+        self.assertIn(b"exitCanvasReview();", app_js)
 
     def test_detail_modal_exposes_consistent_curation_controls(self):
         status, html, _ = self._raw_request("/")
@@ -3609,6 +3758,16 @@ class TestServerApi(unittest.TestCase):
         self.assertIn(b"if (state.pendingAssetsReload) {", app_js)
         self.assertNotIn(b"state.pendingAssetsReload && !append", app_js)
 
+    def test_frontend_appends_lazy_loaded_cards_without_full_grid_rerender(self):
+        req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            app_js = resp.read()
+        self.assertIn(b"function appendGridAssets", app_js)
+        self.assertIn(b"appendGridAssets(newAssets)", app_js)
+        append_branch = app_js[app_js.index(b"if (append) {"):app_js.index(b"} else {", app_js.index(b"if (append) {"))]
+        self.assertNotIn(b"renderGrid();", append_branch)
+        self.assertIn(b"const frag = document.createDocumentFragment();", app_js)
+
     def test_frontend_reports_media_search_progress_and_uses_one_card_flag_control(self):
         req = urllib.request.Request(f"{self.base_url}/app/app.js", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -3631,6 +3790,13 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(body, {})
         self.assertEqual(headers.get("Cache-Control"), "public, max-age=300")
         self.assertEqual(headers.get("Content-Type"), "application/javascript")
+
+    def test_favicon_request_is_quiet_no_content(self):
+        req = urllib.request.Request(f"{self.base_url}/favicon.ico", method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            self.assertEqual(resp.status, 204)
+            self.assertEqual(resp.headers.get("Cache-Control"), "public, max-age=86400")
+            self.assertEqual(resp.read(), b"")
 
     def test_store_files_route_serves_media(self):
         req = urllib.request.Request(f"{self.base_url}/store/originals/pinterest/a1.jpg", method="GET")

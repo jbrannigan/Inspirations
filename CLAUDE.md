@@ -37,6 +37,10 @@ The scrape-first rebuild is complete. The current live database contains:
 - **One-by-one review editing** — the focused review screen stays optimized for triage, with an explicit `Edit title / media` action that opens Review-scoped advanced detail for title repair, media repair, annotations, and notes.
 - **Visual collection building** — `Make Collection` is a separate browse-canvas selection mode, distinct from Review/QC. Curators can select visible cards, create a collection from them, add them to an existing collection, or remove them when exactly one collection is in scope.
 - **Pagination lifecycle + auto-loading** — the grid observes the Load More sentinel and starts a high-priority next-page request several screenfuls before the curator reaches the bottom; `Load More` remains a fallback. Set the button and top item count to loading state as soon as an asset request begins, keep the final refresh calls after `state.loadingAssets = false`, and always honor a queued full reload after either an append or non-append request finishes.
+- **Grid append performance** — lazy-loaded pages append only the newly fetched cards. Do not call full `renderGrid()` from the append branch; reserve full rerenders for scope/filter/state changes that invalidate existing cards.
+- **Explorer response performance** — `/api/explorer/attractor-data` and `/api/explorer/layout` use an in-process cache keyed by endpoint params and SQLite mtime. Explicit layout `refresh=1` bypasses it. Dynamic JSON gzip favors local/LAN response time over maximum compression.
+- **SQLite FTS text search** — free-text asset search uses `asset_search_fts`, a SQLite FTS5 index over title, description, board, notes, AI summary, source text, and labels. Known mutation paths refresh affected rows; use Admin **Optimize Database** or `PYTHONPATH=src python3 -m inspirations --db data/inspirations.sqlite maintenance optimize-db` after unusual bulk DB work.
+- **Text search totals** — free-text `/api/assets?q=...` skips exact total-count scans for speed. `has_more` remains authoritative for pagination; `total: null` is expected in this path.
 - **Logged launchd service** — `tools/inspirations_service.sh install` installs user LaunchAgent `com.jimbrannigan.inspirations` with `KeepAlive`, bound to `0.0.0.0:8001`, and writes stdout/stderr under `data/logs/`.
 - **Request-time schema writes removed** — `run_server()` calls `ensure_schema()` once before starting the threaded HTTP server. Normal API, catalog, media, and scan-PDF requests must not run migrations or metadata backfills; doing so caused SQLite lock storms under concurrent thumbnail traffic.
 - **Live collaborator sharing retired** — magic-link actor UX, `/api/me`, `/api/actors`, `/api/context/resolve`, and `/api/questions/dashboard` are legacy/disabled in active UI. Keep schema columns for compatibility, but do not present collaborator assignment or app-context share links.
@@ -89,7 +93,17 @@ explorer, sidebar, or browse-tree code.
 ```bash
 PYTHONPATH=src python3 -m inspirations <subcommand>
 ```
-Subcommands: `init`, `list`, `import pinterest-scrape`, `import facebook-scrape`, `rebuild-db`, `thumbs`, `ai tag`, `ai errors`, `ai embed`, `ai similar`, `export html`, `export portal` (legacy/debug), `export collection-pdf`, `serve`
+Subcommands: `init`, `list`, `maintenance optimize-db`, `import pinterest-scrape`, `import facebook-scrape`, `rebuild-db`, `thumbs`, `ai tag`, `ai errors`, `ai embed`, `ai similar`, `export html`, `export portal` (legacy/debug), `export collection-pdf`, `serve`
+
+### Database maintenance
+```bash
+PYTHONPATH=src python3 -m inspirations --db data/inspirations.sqlite maintenance optimize-db
+```
+This rebuilds the SQLite FTS text-search index and runs `PRAGMA optimize`.
+Run it after bulk imports, retagging/re-embedding/title cleanup, large
+delete/cleanup batches, or unusual direct DB edits. Do not run it on every app
+startup; the current corpus is fairly static, and normal Add Media/title/note
+paths refresh affected search rows themselves.
 
 ### Export a designer PDF for one collection
 ```bash

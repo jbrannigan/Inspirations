@@ -100,6 +100,7 @@
   // 0 means "no cap" (allow overlays for all currently visible nodes).
   let _maxTextureOverlays = 0;
   let _texPrefetchCount = 180;
+  let _textureRampTimers = [];
   const OVERLAY_SYNC_MIN_MS = 90;
   const SETTINGS_KEY = "inspirations.attractor3d.settings.v3";
   const MAX_PRESET_NAME_LEN = 32;
@@ -356,15 +357,44 @@
 
   function _textureBudgetForNodeCount(nodeCount) {
     if (nodeCount >= 5000) {
-      return { prefetch: 90, overlays: 0, concurrent: 10 };
+      return { prefetch: 90, overlays: 90, concurrent: 10 };
     }
     if (nodeCount >= 3000) {
-      return { prefetch: 120, overlays: 0, concurrent: 12 };
+      return { prefetch: 120, overlays: 120, concurrent: 12 };
     }
     if (nodeCount >= 1500) {
-      return { prefetch: 160, overlays: 0, concurrent: 14 };
+      return { prefetch: 160, overlays: 160, concurrent: 14 };
     }
-    return { prefetch: 220, overlays: 0, concurrent: 16 };
+    return { prefetch: 220, overlays: 220, concurrent: 16 };
+  }
+
+  function _cancelTextureRamp() {
+    for (const timer of _textureRampTimers) window.clearTimeout(timer);
+    _textureRampTimers = [];
+  }
+
+  function _expandTextureOverlays(limit) {
+    _maxTextureOverlays = Math.max(0, Math.round(Number(limit) || 0));
+    _needsOverlaySync = true;
+    _syncTextureOverlays(true);
+  }
+
+  function _scheduleTextureRamp(initialOverlayLimit, nodeCount) {
+    _cancelTextureRamp();
+    if (!initialOverlayLimit || initialOverlayLimit <= 0 || nodeCount <= initialOverlayLimit) return;
+
+    const stages = [
+      { delay: 1800, limit: Math.min(nodeCount, initialOverlayLimit * 2) },
+      { delay: 3600, limit: Math.min(nodeCount, initialOverlayLimit * 4) },
+      // Final stage restores the pre-cap behavior: every visible node may
+      // receive a thumbnail, but only after the first usable 3D paint.
+      { delay: 6500, limit: 0 },
+    ];
+    for (const stage of stages) {
+      _textureRampTimers.push(window.setTimeout(() => {
+        _expandTextureOverlays(stage.limit);
+      }, stage.delay));
+    }
   }
 
   function _cancelDeferredSettle() {
@@ -886,6 +916,7 @@
     _texPrefetchCount = texBudget.prefetch;
     _maxTextureOverlays = texBudget.overlays;
     _maxConcurrentTex = texBudget.concurrent;
+    _scheduleTextureRamp(_maxTextureOverlays, _nodes.length);
 
     _normalizeRestLayoutToScene();
     _allNodes = _nodes.slice();
@@ -996,6 +1027,7 @@
   }
 
   function _clearScene() {
+    _cancelTextureRamp();
     _clearOverlayMeshes();
     _disposeInstanceMesh();
 
@@ -2577,9 +2609,12 @@
   }
 
   function setSearch(term) {
-    _searchTerm = (term || "").toLowerCase().trim();
+    const rawTerm = term || "";
+    const nextTerm = rawTerm.toLowerCase().trim();
     const input = _controlsEl?.querySelector(".attractor-search");
-    if (input && input.value !== (term || "")) input.value = term || "";
+    if (input && input.value !== rawTerm) input.value = rawTerm;
+    if (_searchTerm === nextTerm) return;
+    _searchTerm = nextTerm;
     _rebuildForFocusedMode();
   }
 

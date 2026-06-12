@@ -51,6 +51,32 @@ _LOCAL_SEARCH_STOP_WORDS = {
     "corpus", "database",
 }
 
+_NON_ENGLISH_TITLE_PHRASES = (
+    "not in english",
+    "not english",
+    "non english",
+    "non-english",
+    "foreign language",
+    "different language",
+    "aren't in english",
+    "are not in english",
+    "isn't in english",
+    "is not in english",
+)
+
+_FOREIGN_TITLE_WORDS = frozenset({
+    # Common stop/function words across languages that show up in saved titles.
+    "al", "auf", "aux", "con", "da", "das", "de", "del", "der", "des", "di",
+    "die", "du", "el", "en", "et", "het", "la", "las", "le", "les",
+    "los", "na", "och", "på", "para", "por", "que", "una", "und", "une",
+    # Corpus-observed design/source words.
+    "azulejos", "baños", "beleza", "bien", "casa", "casino", "chọn", "cúbica",
+    "déco", "décor", "decoração", "draaibeslag", "für", "hã", "häfele",
+    "herrliche", "idée", "imoveis", "köket", "locação", "manger", "metrô",
+    "mới", "nhau", "pequenos", "reloking", "salle", "siteleri", "spalierobst",
+    "spokój", "tapetteja", "tyyliä", "việt", "widokiem",
+})
+
 
 # ---------------------------------------------------------------------------
 # Prompt builders
@@ -427,6 +453,97 @@ def _local_chat_fallback(user_message: str, *, error: str = "") -> dict[str, Any
     }
 
 
+def _is_non_english_title_request(text: str) -> bool:
+    normalized = " ".join((text or "").strip().lower().replace("_", " ").split())
+    if not normalized:
+        return False
+    if "title" not in normalized and "titles" not in normalized:
+        return False
+    return any(phrase in normalized for phrase in _NON_ENGLISH_TITLE_PHRASES)
+
+
+def _title_looks_non_english(title: str) -> bool:
+    text = " ".join((title or "").strip().split())
+    if not text:
+        return False
+    letters = re.findall(r"[^\W\d_]", text, flags=re.UNICODE)
+    if not letters:
+        return False
+    non_latin_letters = [
+        ch for ch in letters
+        if not (
+            "A" <= ch <= "Z"
+            or "a" <= ch <= "z"
+            or "\u00c0" <= ch <= "\u024f"
+        )
+    ]
+    if non_latin_letters:
+        return True
+    non_ascii_letters = [ch for ch in letters if ord(ch) > 127]
+    words = re.findall(r"[^\W\d_]+", text.lower(), flags=re.UNICODE)
+    foreign_hits = sum(1 for word in words if word in _FOREIGN_TITLE_WORDS)
+    english_design_words = {
+        "and", "bath", "bathroom", "bedroom", "border", "cheese", "country",
+        "decor", "design", "designer", "embroidery", "every", "for", "garden",
+        "gallery", "home", "house", "ideas", "improvements", "interior",
+        "kitchen", "needs", "outdoor", "patio", "porch", "room", "rustic",
+        "showroom", "starting", "style", "the", "tools", "updated", "vintage",
+    }
+    english_hits = sum(1 for word in words if word in english_design_words)
+    non_ascii_ratio = len(non_ascii_letters) / max(1, len(letters))
+    if foreign_hits >= 2:
+        return True
+    if foreign_hits >= 1 and non_ascii_letters and english_hits <= 2:
+        return True
+    if non_ascii_ratio >= 0.12 and english_hits <= 2:
+        return True
+    # Catch long titles composed mostly of unknown/accented language words.
+    if len(words) >= 3 and foreign_hits >= 1 and english_hits == 0:
+        return True
+    return False
+
+
+def _find_non_english_title_items(db: Db, *, limit: int = 50) -> tuple[list[str], int]:
+    rows = db.query(
+        """
+        select a.id, a.title
+        from assets a
+        where a.title is not null
+          and trim(a.title) != ''
+          and (a.triage_status is null or a.triage_status != 'hidden')
+          and not exists (
+            select 1
+            from collections c
+            join collection_items ci on ci.collection_id = c.id
+            where ci.asset_id = a.id
+              and lower(c.name) = 'hidden'
+          )
+        order by a.imported_at desc, a.id asc
+        """
+    )
+    matches = [str(row["id"]) for row in rows if _title_looks_non_english(str(row["title"] or ""))]
+    return matches[: max(1, int(limit))], len(matches)
+
+
+def _local_metadata_query(db: Db, user_message: str) -> dict[str, Any] | None:
+    if not _is_non_english_title_request(user_message):
+        return None
+    ids, total = _find_non_english_title_items(db)
+    if not ids:
+        return {
+            "action": "message",
+            "params": {},
+            "message": "I did not find obvious non-English titles in the currently usable corpus.",
+        }
+    clipped = total > len(ids)
+    more = f" Showing the first {len(ids)}." if clipped else ""
+    return {
+        "action": "show_items",
+        "params": {"ids": ids},
+        "message": f"Found {total} title{'' if total == 1 else 's'} that look non-English.{more}",
+    }
+
+
 def _extract_response_text(resp: dict[str, Any]) -> str:
     """Extract text content from a Claude API response."""
     for block in resp.get("content", []):
@@ -486,6 +603,10 @@ def process_chat_message(
         raise ValueError("Message cannot be empty")
 
     user_msg = user_message.strip()
+    metadata_result = _local_metadata_query(db, user_msg)
+    if metadata_result:
+        return metadata_result
+
     if not api_key:
         return _local_chat_fallback(user_msg, error="missing Anthropic API key")
 

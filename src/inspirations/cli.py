@@ -8,7 +8,7 @@ import shutil
 import sys
 from datetime import datetime
 
-from .db import Db, ensure_schema
+from .db import Db, ensure_schema, optimize_database, rebuild_asset_search_index
 from .importers.scans import (
     audit_scan_separator_pages,
     import_scans_inbox,
@@ -111,6 +111,7 @@ def cmd_import_pinterest_scrape(args: argparse.Namespace) -> int:
             download_missing=not args.no_download,
             limit=args.limit,
         )
+        report["search_index"] = rebuild_asset_search_index(db)
     print(json.dumps(report, indent=2))
     return 0
 
@@ -128,6 +129,7 @@ def cmd_import_facebook_scrape(args: argparse.Namespace) -> int:
             store_dir=store_dir,
             limit=args.limit,
         )
+        report["search_index"] = rebuild_asset_search_index(db)
     print(json.dumps(report, indent=2))
     return 0
 
@@ -146,6 +148,7 @@ def cmd_import_houzz(args: argparse.Namespace) -> int:
             download_images=not args.no_download,
             limit=args.limit,
         )
+        report["search_index"] = rebuild_asset_search_index(db)
     print(json.dumps(report, indent=2))
     return 0
 
@@ -286,6 +289,10 @@ def cmd_rebuild_db(args: argparse.Namespace) -> int:
             print(f"[rebuild-db] Removed {total_removed} duplicate Facebook assets", file=sys.stderr)
     summary["facebook_deduped"] = total_removed
 
+    with Db(db_path) as db:
+        ensure_schema(db)
+        summary["database_maintenance"] = optimize_database(db, rebuild_search=True)
+
     print(json.dumps(summary, indent=2))
     return 0
 
@@ -306,6 +313,7 @@ def cmd_import_scans(args: argparse.Namespace) -> int:
             max_pages=args.max_pages,
             renderer=args.renderer,
         )
+        report["search_index"] = rebuild_asset_search_index(db)
     print(json.dumps(report, indent=2))
     return 0
 
@@ -421,6 +429,16 @@ def cmd_ai_tag(args: argparse.Namespace) -> int:
             store_dir=_p(args.store),
             preflight=args.preflight,
         )
+        report["search_index"] = rebuild_asset_search_index(db)
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def cmd_maintenance_optimize_db(args: argparse.Namespace) -> int:
+    db_path = _p(args.db)
+    with Db(db_path) as db:
+        ensure_schema(db)
+        report = optimize_database(db, rebuild_search=bool(args.rebuild_search))
     print(json.dumps(report, indent=2))
     return 0
 
@@ -878,6 +896,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_p = sub.add_parser("list", help="Show counts")
     list_p.set_defaults(func=cmd_list)
+
+    maintenance = sub.add_parser("maintenance", help="Database maintenance utilities")
+    maintenance.set_defaults(func=lambda _: maintenance.print_help() or 2)
+    maintenance_sub = maintenance.add_subparsers(dest="maintenance_cmd")
+    opt_db = maintenance_sub.add_parser("optimize-db", help="Rebuild search index and run SQLite PRAGMA optimize")
+    opt_db.add_argument(
+        "--rebuild-search",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Rebuild the asset text-search index first (default true)",
+    )
+    opt_db.set_defaults(func=cmd_maintenance_optimize_db)
 
     imp = sub.add_parser("import", help="Import from exports")
     imp_sub = imp.add_subparsers(dest="import_cmd")

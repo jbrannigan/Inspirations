@@ -40,18 +40,28 @@ def _assets_has_column(db: Db, column_name: str) -> bool:
     return any(str(r["name"]) == column_name for r in rows)
 
 
-def _cache_key(asset_ids: list[str], vectors: list[list[float]] | None = None) -> str:
-    pairs = list(zip(asset_ids, vectors or [[] for _asset_id in asset_ids]))
-    joined = json.dumps(sorted(pairs, key=lambda pair: pair[0]), separators=(",", ":"))
-    return hashlib.sha256(joined.encode()).hexdigest()[:16]
+def _cache_key(
+    asset_ids: list[str],
+    *,
+    method: str,
+    include_hidden: bool,
+    signature: tuple[int, str, int],
+) -> str:
+    count, latest_created_at, byte_count = signature
+    joined = "|".join(sorted(asset_ids))
+    raw = (
+        f"v2:method={method}:include_hidden={int(include_hidden)}:"
+        f"count={count}:latest={latest_created_at}:bytes={byte_count}:ids={joined}"
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
-def _load_embeddings(
+def _embedding_filter_sql(
     db: Db,
     collection_id: str | None,
     *,
     include_hidden: bool = False,
-) -> tuple[list[str], list[list[float]]]:
+) -> tuple[str, str, tuple[str, ...]]:
     joins: list[str] = ["join assets a on a.id = ae.asset_id"]
     clauses: list[str] = []
     params: list[str] = []
@@ -81,9 +91,58 @@ def _load_embeddings(
 
     where_sql = f"where {' and '.join(clauses)}" if clauses else ""
     join_sql = " ".join(joins)
+    return join_sql, where_sql, tuple(params)
+
+
+def _load_embedding_ids(
+    db: Db,
+    collection_id: str | None,
+    *,
+    include_hidden: bool = False,
+) -> list[str]:
+    join_sql, where_sql, params = _embedding_filter_sql(db, collection_id, include_hidden=include_hidden)
+    rows = db.query(
+        f"select ae.asset_id from asset_embeddings ae {join_sql} {where_sql} order by ae.asset_id",
+        params,
+    )
+    return [str(row["asset_id"] or "") for row in rows if str(row["asset_id"] or "")]
+
+
+def _embedding_signature(
+    db: Db,
+    collection_id: str | None,
+    *,
+    include_hidden: bool = False,
+) -> tuple[int, str, int]:
+    join_sql, where_sql, params = _embedding_filter_sql(db, collection_id, include_hidden=include_hidden)
+    row = db.query(
+        f"""
+        select count(*) as count,
+               coalesce(max(ae.created_at), '') as latest_created_at,
+               coalesce(sum(length(ae.vector_json)), 0) as byte_count
+        from asset_embeddings ae
+        {join_sql}
+        {where_sql}
+        """,
+        params,
+    )[0]
+    return (
+        int(row["count"] or 0),
+        str(row["latest_created_at"] or ""),
+        int(row["byte_count"] or 0),
+    )
+
+
+def _load_embeddings(
+    db: Db,
+    collection_id: str | None,
+    *,
+    include_hidden: bool = False,
+) -> tuple[list[str], list[list[float]]]:
+    join_sql, where_sql, params = _embedding_filter_sql(db, collection_id, include_hidden=include_hidden)
     rows = db.query(
         f"select ae.asset_id, ae.vector_json from asset_embeddings ae {join_sql} {where_sql} order by ae.asset_id",
-        tuple(params),
+        params,
     )
 
     ids: list[str] = []
@@ -306,23 +365,28 @@ def compute_layout(
     # Keep global layout coordinates stable by projecting against the full corpus
     # for "all items", then filter hidden IDs from the response when needed.
     layout_include_hidden = include_hidden or collection_id is None
-    ids, vectors = _load_embeddings(db, collection_id, include_hidden=layout_include_hidden)
+    ids = _load_embedding_ids(db, collection_id, include_hidden=layout_include_hidden)
     if not ids:
         return {"nodes": [], "clusters": []}
 
     visible_ids: set[str] | None = None
     if collection_id is None and not include_hidden:
-        visible_ids = set(_load_embeddings(db, None, include_hidden=False)[0])
+        visible_ids = set(_load_embedding_ids(db, None, include_hidden=False))
         if not visible_ids:
             return {"nodes": [], "clusters": []}
 
-    cache_file = data_dir / f"{_cache_key(ids, vectors)}.json"
+    cache_signature = _embedding_signature(db, collection_id, include_hidden=layout_include_hidden)
+    cache_file = data_dir / f"{_cache_key(ids, method=method, include_hidden=layout_include_hidden, signature=cache_signature)}.json"
     if not refresh and cache_file.exists():
         try:
             cached = json.loads(cache_file.read_text())
             return _filter_layout_result(cached, visible_ids) if visible_ids is not None else cached
         except Exception:
             pass
+
+    ids, vectors = _load_embeddings(db, collection_id, include_hidden=layout_include_hidden)
+    if not ids:
+        return {"nodes": [], "clusters": []}
 
     # Project to 3D
     coords: list[list[float]] | None = None
