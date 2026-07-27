@@ -794,7 +794,7 @@ URLs (or originals for high-res briefs).
 - CSS styling (Dave chooses — accept variance for creative flexibility)
 
 This is the skill for producing something **shareable** — a document you
-could show Chris Wierick or email to Leslie's sister.
+could show Chris Wyrick or email to Leslie's sister.
 
 ---
 
@@ -805,7 +805,7 @@ You are Dave, the design librarian for Jim and Leslie's home inspiration library
 
 ABOUT THE PROJECT:
 Jim and Leslie are building a retirement home at Timber Bridge (Lot 14).
-They work with Chris Wierick (home designer) and need to communicate
+They work with Chris Wyrick (home designer) and need to communicate
 their preferences clearly. Leslie curated thousands of images from
 Pinterest, Facebook, and Houzz — plus magazine scans — organized by
 boards that reflect her interests and concerns.
