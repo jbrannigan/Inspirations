@@ -7,7 +7,6 @@ from pathlib import Path
 
 from .db import Db
 
-
 CLUSTER_PALETTE = [
     "#b8860b",
     "#8b6914",
@@ -197,8 +196,8 @@ def _load_cluster_labels(
 
 def _project_umap(vectors: list[list[float]]) -> list[list[float]] | None:
     try:
-        import umap  # type: ignore
         import numpy as np  # type: ignore
+        import umap  # type: ignore
     except Exception:
         return None
     X = np.array(vectors, dtype=float)
@@ -213,8 +212,8 @@ def _project_pca(vectors: list[list[float]]) -> list[list[float]] | None:
         return []
     d = len(vectors[0]) if vectors[0] else 0
     try:
-        from sklearn.decomposition import PCA  # type: ignore
         import numpy as np  # type: ignore
+        from sklearn.decomposition import PCA  # type: ignore
     except Exception:
         # Pure-Python fallback when sklearn/numpy are unavailable:
         # center vectors and project on the top-variance dimensions.
@@ -273,9 +272,9 @@ def _cluster_coords(coords: list[list[float]]) -> list[int]:
     if n < 4:
         return [0] * n
     try:
+        import numpy as np  # type: ignore
         from sklearn.cluster import KMeans  # type: ignore
         from sklearn.metrics import silhouette_score  # type: ignore
-        import numpy as np  # type: ignore
     except Exception:
         return [0] * n
 

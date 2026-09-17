@@ -4,7 +4,6 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-
 AMBIGUOUS_LOW_SIGNAL_URL = "ambiguous_low_signal_url"
 AMBIGUOUS_MEDIA_MISMATCH = "ambiguous_media_mismatch"
 AMBIGUOUS_MEDIA_LINK_MISMATCH = "ambiguous_media_link_mismatch"

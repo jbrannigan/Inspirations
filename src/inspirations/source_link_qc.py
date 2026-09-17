@@ -15,7 +15,6 @@ from .classification_v2 import (
 )
 from .db import Db
 
-
 VERDICT_SUPPORTING = "supporting"
 VERDICT_CONFLICTING = "conflicting"
 VERDICT_INSUFFICIENT = "insufficient"

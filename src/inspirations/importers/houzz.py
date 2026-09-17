@@ -15,7 +15,6 @@ from typing import Any
 from ..db import Db
 from ..storage import download_url_to_store
 
-
 # Houzz category IDs to human-readable room names
 HOUZZ_CATEGORIES: dict[int, str] = {
     1001: "Exterior",

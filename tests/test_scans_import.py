@@ -8,17 +8,16 @@ from unittest import mock
 
 from inspirations.db import Db, ensure_schema
 from inspirations.importers.scans import (
-    audit_scan_separator_pages,
-    repair_scan_document_grouping,
     _choose_regroup_base_title,
     _delimiter_candidates_from_metrics,
-    purge_scan_separator_pages,
     _split_asset_pages_for_regrouping,
     _split_pages_into_documents,
+    audit_scan_separator_pages,
     import_scans_inbox,
     import_videos_inbox,
+    purge_scan_separator_pages,
+    repair_scan_document_grouping,
 )
-
 
 TINY_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="

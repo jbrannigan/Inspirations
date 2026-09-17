@@ -2,23 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
-
 import shutil
 import sys
 from datetime import datetime
+from pathlib import Path
 
-from .db import Db, ensure_schema, optimize_database, rebuild_asset_search_index
-from .importers.scans import (
-    audit_scan_separator_pages,
-    import_scans_inbox,
-    purge_scan_separator_pages,
-    repair_scan_document_grouping,
-)
-from .importers.pinterest_scrape import import_pinterest_scrape
-from .importers.facebook_scrape import import_facebook_scrape
-from .importers.houzz import import_houzz_ideabook
-from .thumbnails import generate_thumbnails
 from .ai import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
     apply_reel_recommendations,
@@ -34,15 +22,37 @@ from .catalog import generate_catalog
 from .classification_v2 import run_multi_axis_inference_v2, run_track_gate_v2
 from .curation import (
     DEFAULT_GEMINI_MODEL as DEFAULT_CURATION_GEMINI_MODEL,
+)
+from .curation import (
     DEFAULT_GEMINI_RECITATION_FALLBACK_MODEL as DEFAULT_CURATION_GEMINI_RECITATION_FALLBACK_MODEL,
+)
+from .curation import (
     render_curation_html,
     run_curation_pipeline,
 )
-from .export import export_collection_pdf, export_html_gallery, export_static_share_portal
+from .db import Db, ensure_schema, optimize_database, rebuild_asset_search_index
+from .export import (
+    export_collection_pdf,
+    export_html_gallery,
+    export_static_share_portal,
+)
+from .importers.facebook_scrape import import_facebook_scrape
+from .importers.houzz import import_houzz_ideabook
+from .importers.pinterest_scrape import import_pinterest_scrape
+from .importers.scans import (
+    audit_scan_separator_pages,
+    import_scans_inbox,
+    purge_scan_separator_pages,
+    repair_scan_document_grouping,
+)
 from .server import run_server
-from .source_link_enrichment import default_auth_browser_profile_dir, run_source_link_enrichment
+from .source_link_enrichment import (
+    default_auth_browser_profile_dir,
+    run_source_link_enrichment,
+)
 from .source_link_qc import run_source_link_qc
 from .storage import backfill_previews_from_source_ref
+from .thumbnails import generate_thumbnails
 from .title_audit import (
     apply_title_audit_batch,
     edit_title_audit_candidate,
