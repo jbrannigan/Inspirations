@@ -1142,6 +1142,26 @@ def _render_markdown_pdf(*, markdown_path: Path, out_path: Path) -> None:
         raise PdfRenderError(detail or f"pandoc exited with status {completed.returncode}")
 
 
+def _default_collection_pdf_path(collection_name: str) -> Path:
+    path = Path("data") / "exports" / f"{_slugify_filename(collection_name)}.pdf"
+    return path.expanduser().resolve()
+
+
+def resolve_collection_pdf(db: Db, *, collection_id: str) -> tuple[str, Path]:
+    """Return (collection_name, default PDF path) without exporting anything."""
+    collection_id = str(collection_id or "").strip()
+    if not collection_id:
+        raise ValueError("collection_id required")
+    rows = db.query(
+        "select name from collections where id = ? limit 1",
+        (collection_id,),
+    )
+    if not rows:
+        raise FileNotFoundError("collection not found")
+    collection_name = str(rows[0]["name"] or "Collection").strip() or "Collection"
+    return collection_name, _default_collection_pdf_path(collection_name)
+
+
 def export_collection_pdf(
     db: Db,
     *,
@@ -1156,7 +1176,7 @@ def export_collection_pdf(
     collection, rows = _collection_pdf_rows(db, collection_id=collection_id)
     collection_name = str(collection.get("name") or "Collection").strip() or "Collection"
     if out_path is None:
-        out_path = Path("data") / "exports" / f"{_slugify_filename(collection_name)}.pdf"
+        out_path = _default_collection_pdf_path(collection_name)
     out_path = out_path.expanduser().resolve()
     if out_path.suffix.lower() != ".pdf":
         out_path = out_path.with_suffix(".pdf")

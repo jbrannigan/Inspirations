@@ -3777,16 +3777,6 @@ async function saveCollectionDetails() {
   }
 }
 
-function _filenameFromDisposition(value, fallback) {
-  const text = String(value || "");
-  const star = text.match(/filename\*=UTF-8''([^;]+)/i);
-  if (star) {
-    try { return decodeURIComponent(star[1]); } catch {}
-  }
-  const plain = text.match(/filename="?([^";]+)"?/i);
-  return plain ? plain[1] : fallback;
-}
-
 function _collectionPdfFilename(collection) {
   const name = String(collection?.name || "collection").trim().toLowerCase();
   const slug = name.replace(/[^a-z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^[-._]+|[-._]+$/g, "") || "collection";
@@ -3836,16 +3826,14 @@ async function exportCurrentCollectionPdf() {
       const text = await res.text();
       throw new Error(formatApiError(text || res.statusText));
     }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
+    const report = await res.json();
     const link = document.createElement("a");
-    link.href = url;
-    link.download = _filenameFromDisposition(res.headers.get("Content-Disposition"), _collectionPdfFilename(collection));
+    link.href = _bp(String(report.download_url || `/api/collections/${encodeURIComponent(collectionId)}/export/pdf/file`));
+    link.download = String(report.filename || _collectionPdfFilename(collection));
     document.body.appendChild(link);
     link.click();
     link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 2000);
-    Shared.showToast("Collection PDF exported.", { type: "success", duration: 3000 });
+    Shared.showToast("PDF ready — downloading now.", { type: "success", duration: 3000 });
   } catch (e) {
     Shared.showToast(`PDF export failed: ${formatApiError(e)}`, { type: "error", duration: 8000 });
   } finally {

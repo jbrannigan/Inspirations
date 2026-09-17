@@ -1332,7 +1332,7 @@ class TestServerApi(unittest.TestCase):
         self.assertEqual(len(body.get("assets", [])), 3)
         self.assertEqual(int(body.get("total") or 0), 3)
 
-    def test_collection_pdf_export_endpoint_returns_pdf_attachment(self):
+    def test_collection_pdf_export_endpoint_returns_download_url(self):
         pdf_path = self.tmp_path / "exported.pdf"
         pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
 
@@ -1344,15 +1344,52 @@ class TestServerApi(unittest.TestCase):
                 "path": str(pdf_path),
                 "markdown_path": str(pdf_path.with_suffix(".md")),
                 "collection_id": collection_id,
+                "collection_name": "Exported",
+                "exported_assets": 3,
             }
 
         with mock.patch("inspirations.server.export_collection_pdf", side_effect=fake_export):
-            status, data, headers = self._raw_request("/api/collections/c1/export/pdf", method="POST", payload={})
+            status, body = self._request("/api/collections/c1/export/pdf", method="POST", payload={})
+
+        self.assertEqual(status, 200)
+        self.assertTrue(body.get("ok"))
+        self.assertEqual(body.get("filename"), "exported.pdf")
+        self.assertEqual(body.get("download_url"), "/api/collections/c1/export/pdf/file")
+        self.assertEqual(body.get("collection_name"), "Exported")
+        self.assertEqual(body.get("exported_assets"), 3)
+
+    def test_collection_pdf_file_endpoint_streams_existing_pdf(self):
+        pdf_path = self.tmp_path / "exported.pdf"
+        pdf_path.write_bytes(b"%PDF-1.4\n%%EOF\n")
+
+        def fake_resolve(db, *, collection_id):
+            self.assertEqual(collection_id, "c1")
+            return "Exported", pdf_path
+
+        with mock.patch("inspirations.server.resolve_collection_pdf", side_effect=fake_resolve):
+            status, data, headers = self._raw_request("/api/collections/c1/export/pdf/file")
 
         self.assertEqual(status, 200)
         self.assertEqual(data, b"%PDF-1.4\n%%EOF\n")
         self.assertEqual(headers.get("Content-Type"), "application/pdf")
         self.assertIn('filename="exported.pdf"', headers.get("Content-Disposition", ""))
+
+    def test_collection_pdf_file_endpoint_404s_before_export_and_for_unknown_collection(self):
+        missing_path = self.tmp_path / "never-exported.pdf"
+
+        def fake_resolve(db, *, collection_id):
+            if collection_id == "c1":
+                return "Never Exported", missing_path
+            raise FileNotFoundError("collection not found")
+
+        with mock.patch("inspirations.server.resolve_collection_pdf", side_effect=fake_resolve):
+            status, body = self._request("/api/collections/c1/export/pdf/file")
+            self.assertEqual(status, 404)
+            self.assertIn("export it first", str(body.get("error") or ""))
+
+            status, body = self._request("/api/collections/nope/export/pdf/file")
+            self.assertEqual(status, 404)
+            self.assertEqual(body.get("error"), "collection not found")
 
     def test_collections_endpoint_exposes_provenance_for_cb_collection(self):
         with Db(self.db_path) as db:
@@ -3643,7 +3680,7 @@ class TestServerApi(unittest.TestCase):
         self.assertIn(b'id="addMedia" class="header-btn"', html)
         self.assertIn(b'class="header-btn adminLink"', html)
         self.assertIn(b"/app/styles.css?v=99", html)
-        self.assertIn(b"/app/app.js?v=187", html)
+        self.assertIn(b"/app/app.js?v=188", html)
 
         req = urllib.request.Request(f"{self.base_url}/app/styles.css", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
