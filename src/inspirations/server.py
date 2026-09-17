@@ -77,7 +77,7 @@ from .store import (
 from .title_workflow import TitleConflictError, TitleNotFoundError, apply_working_title, enrich_assets_with_title_info
 from .explorer_layout import compute_layout
 from .feature_vectors import EXPLORER_LEGACY_SPECS, build_feature_vectors, build_legacy_facet_memberships
-from .export import PdfRenderError, PdfToolUnavailableError, export_collection_pdf
+from .export import PdfRenderError, PdfToolUnavailableError, export_collection_pdf, resolve_collection_pdf
 from .source_link_enrichment import (
     capture_source_link_candidate_for_asset,
     default_auth_browser_profile_dir,
@@ -823,6 +823,18 @@ class ApiHandler(BaseHTTPRequestHandler):
             items = self._with_db(list_collection_items, collection_id=m.group(1))
             return _send(self, 200, {"items": items})
 
+        m = re.match(r"^/api/collections/([^/]+)/export/pdf/file$", parsed.path)
+        if m:
+            try:
+                _name, pdf_path = self._with_db(resolve_collection_pdf, collection_id=m.group(1))
+            except FileNotFoundError:
+                return _send(self, 404, {"error": "collection not found"})
+            except ValueError as e:
+                return _send(self, 400, {"error": str(e)})
+            if not pdf_path.exists():
+                return _send(self, 404, {"error": "No PDF yet for this collection — export it first."})
+            return _send_pdf(self, pdf_path, filename=pdf_path.name)
+
         m = re.match(r"^/api/annotations$", parsed.path)
         if m:
             q = parse_qs(parsed.query)
@@ -861,10 +873,11 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         m = re.match(r"^/api/collections/([^/]+)/export/pdf$", parsed.path)
         if m:
+            collection_id = m.group(1)
             try:
                 report = self._with_db(
                     export_collection_pdf,
-                    collection_id=m.group(1),
+                    collection_id=collection_id,
                     out_path=None,
                 )
             except FileNotFoundError:
@@ -878,7 +891,14 @@ class ApiHandler(BaseHTTPRequestHandler):
             pdf_path = Path(str(report.get("path") or ""))
             if not pdf_path.exists():
                 return _send(self, 500, {"error": "PDF export did not produce a file"})
-            return _send_pdf(self, pdf_path, filename=pdf_path.name)
+            return _send(self, 200, {
+                "ok": True,
+                "filename": pdf_path.name,
+                "download_url": f"/api/collections/{collection_id}/export/pdf/file",
+                "collection_id": report.get("collection_id"),
+                "collection_name": report.get("collection_name"),
+                "exported_assets": report.get("exported_assets"),
+            })
 
         if parsed.path == "/api/collections":
             actor = _resolve_actor(self)
