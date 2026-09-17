@@ -13,6 +13,11 @@ license = { text = "Proprietary" }
 [project.scripts]
 inspirations = "inspirations.cli:main"
 
+[tool.ruff.lint]
+# Ruff 0.16 widened its default rule set; pin the long-standing defaults so an
+# unpinned ruff upgrade (CI installs latest) can't change what lint enforces.
+select = ["E4", "E7", "E9", "F"]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
