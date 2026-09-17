@@ -8,8 +8,7 @@ import unittest
 from pathlib import Path
 
 from inspirations.db import Db, ensure_schema
-from inspirations.importers.facebook_scrape import import_facebook_scrape, _parse_date
-
+from inspirations.importers.facebook_scrape import _parse_date, import_facebook_scrape
 
 # Minimal 1x1 JPEG bytes (valid JPEG)
 _TINY_JPEG = (

@@ -1,6 +1,6 @@
 import shutil
-import subprocess
 import struct
+import subprocess
 import tempfile
 import unittest
 import zlib
@@ -8,7 +8,12 @@ from pathlib import Path
 from unittest import mock
 
 from inspirations.db import Db, ensure_schema
-from inspirations.export import PdfRenderError, PdfToolUnavailableError, export_collection_pdf
+from inspirations.export import (
+    PdfRenderError,
+    PdfToolUnavailableError,
+    export_collection_pdf,
+)
+
 
 def _png_chunk(kind: bytes, data: bytes) -> bytes:
     return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)

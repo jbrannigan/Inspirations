@@ -6,7 +6,6 @@ import sys
 import time
 from pathlib import Path
 
-
 WATCH_DIRS = ["app", "src"]
 WATCH_EXTS = {".py", ".js", ".css", ".html"}
 

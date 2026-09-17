@@ -5,7 +5,10 @@ from pathlib import Path
 from unittest import mock
 
 from inspirations.db import Db, ensure_schema
-from inspirations.storage import backfill_previews_from_source_ref, download_url_to_store
+from inspirations.storage import (
+    backfill_previews_from_source_ref,
+    download_url_to_store,
+)
 
 
 class _FakeBinaryResponse:

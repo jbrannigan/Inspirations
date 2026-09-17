@@ -7,7 +7,6 @@ from inspirations.db import Db, ensure_schema
 from inspirations.export import export_html_gallery
 from inspirations.store import add_items_to_collection, create_collection
 
-
 TINY_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
 )

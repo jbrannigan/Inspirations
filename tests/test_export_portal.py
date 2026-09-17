@@ -6,9 +6,11 @@ import unittest
 from pathlib import Path
 
 from inspirations.db import Db, ensure_schema
-from inspirations.export import PORTAL_EMBED_PREVIEW_MAX_ITEMS, export_static_share_portal
+from inspirations.export import (
+    PORTAL_EMBED_PREVIEW_MAX_ITEMS,
+    export_static_share_portal,
+)
 from inspirations.store import add_items_to_collection, create_collection
-
 
 TINY_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="

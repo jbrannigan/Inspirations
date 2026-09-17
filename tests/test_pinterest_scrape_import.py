@@ -9,7 +9,6 @@ from pathlib import Path
 from inspirations.db import Db, ensure_schema
 from inspirations.importers.pinterest_scrape import import_pinterest_scrape
 
-
 SAMPLE_PINS = [
     {
         "pin_id": "100000000000001",
