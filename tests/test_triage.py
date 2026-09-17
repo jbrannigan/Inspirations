@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import tempfile
+import unittest
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-import unittest
 
 from inspirations.db import Db, ensure_schema
 from inspirations.store import (

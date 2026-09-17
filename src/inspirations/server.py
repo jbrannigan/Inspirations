@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import json
 import copy
 import gzip
 import ipaddress
+import json
 import mimetypes
 import os
 import re
@@ -33,51 +33,23 @@ from .catalog import generate_catalog
 from .chat import process_chat_message
 from .classification_v2 import run_multi_axis_inference_v2, run_track_gate_v2
 from .db import Db, ensure_schema, optimize_database, refresh_asset_search_index
-from .importers.scans import import_photos_inbox, import_scans_inbox, import_videos_inbox
-from .store import (
-    add_items_to_collection,
-    bulk_set_flag,
-    bulk_set_triage_status,
-    collection_provenance_badge,
-    collection_provenance_label,
-    create_actor,
-    create_annotation,
-    create_collection,
-    decorate_collection_record,
-    delete_annotation,
-    delete_assets,
-    get_actor_by_token,
-    hidden_tree,
-    list_actors,
-    list_annotations,
-    list_asset_ids,
-    list_asset_labels,
-    list_assets,
-    list_collection_items,
-    list_collections,
-    delete_collection,
-    delete_hidden_collections,
-    list_facets,
-    list_tray,
-    add_to_tray,
-    remove_from_tray,
-    clear_tray,
-    create_collection_from_tray,
-    remove_item_from_collection,
-    remove_items_from_collection,
-    rollback_triage_since,
-    set_collections_hidden,
-    set_collection_order,
-    set_triage_status,
-    triage_stats,
-    update_collection,
-    update_annotation,
-    update_asset_notes,
-)
-from .title_workflow import TitleConflictError, TitleNotFoundError, apply_working_title, enrich_assets_with_title_info
 from .explorer_layout import compute_layout
-from .feature_vectors import EXPLORER_LEGACY_SPECS, build_feature_vectors, build_legacy_facet_memberships
-from .export import PdfRenderError, PdfToolUnavailableError, export_collection_pdf, resolve_collection_pdf
+from .export import (
+    PdfRenderError,
+    PdfToolUnavailableError,
+    export_collection_pdf,
+    resolve_collection_pdf,
+)
+from .feature_vectors import (
+    EXPLORER_LEGACY_SPECS,
+    build_feature_vectors,
+    build_legacy_facet_memberships,
+)
+from .importers.scans import (
+    import_photos_inbox,
+    import_scans_inbox,
+    import_videos_inbox,
+)
 from .source_link_enrichment import (
     capture_source_link_candidate_for_asset,
     default_auth_browser_profile_dir,
@@ -88,8 +60,53 @@ from .source_link_enrichment import (
     promote_latest_hero_image_for_asset,
     promote_media_repair_candidate_for_asset,
 )
+from .store import (
+    add_items_to_collection,
+    add_to_tray,
+    bulk_set_flag,
+    bulk_set_triage_status,
+    clear_tray,
+    collection_provenance_badge,
+    collection_provenance_label,
+    create_actor,
+    create_annotation,
+    create_collection,
+    create_collection_from_tray,
+    decorate_collection_record,
+    delete_annotation,
+    delete_assets,
+    delete_collection,
+    delete_hidden_collections,
+    get_actor_by_token,
+    hidden_tree,
+    list_actors,
+    list_annotations,
+    list_asset_ids,
+    list_asset_labels,
+    list_assets,
+    list_collection_items,
+    list_collections,
+    list_facets,
+    list_tray,
+    remove_from_tray,
+    remove_item_from_collection,
+    remove_items_from_collection,
+    rollback_triage_since,
+    set_collection_order,
+    set_collections_hidden,
+    set_triage_status,
+    triage_stats,
+    update_annotation,
+    update_asset_notes,
+    update_collection,
+)
 from .thumbnails import generate_thumbnails
-
+from .title_workflow import (
+    TitleConflictError,
+    TitleNotFoundError,
+    apply_working_title,
+    enrich_assets_with_title_info,
+)
 
 BASE_PATH = os.environ.get("BASE_PATH", "").strip().rstrip("/")
 

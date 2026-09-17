@@ -4,12 +4,12 @@ import hashlib
 import html as html_lib
 import os
 import re
-import uuid
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse, urljoin, parse_qs
+from urllib.parse import parse_qs, urljoin, urlparse
 
 from .db import Db
 from .security import is_safe_public_url

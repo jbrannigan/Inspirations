@@ -6,7 +6,13 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from .db import Db, asset_search_index_ready, asset_search_match_query, infer_collection_provenance, refresh_asset_search_index
+from .db import (
+    Db,
+    asset_search_index_ready,
+    asset_search_match_query,
+    infer_collection_provenance,
+    refresh_asset_search_index,
+)
 from .feature_vectors import EXPLORER_LEGACY_SPECS, build_legacy_facet_memberships
 from .title_workflow import enrich_assets_with_title_info
 

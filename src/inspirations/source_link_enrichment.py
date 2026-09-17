@@ -12,10 +12,11 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from io import BytesIO
 from datetime import datetime, timezone
-from html import escape as html_escape, unescape
+from html import escape as html_escape
+from html import unescape
 from html.parser import HTMLParser
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urljoin, urlparse
@@ -24,7 +25,6 @@ from .db import Db
 from .security import is_safe_public_url
 from .storage import download_url_to_store
 from .thumbnails import generate_thumbnails
-
 
 DEFAULT_TIMEOUT_S = 8.0
 DEFAULT_MAX_BYTES = 262_144

@@ -1,7 +1,11 @@
 import unittest
 from unittest import mock
 
-from inspirations.storage import _extract_preview_image, _youtube_thumb_url, resolve_image_url
+from inspirations.storage import (
+    _extract_preview_image,
+    _youtube_thumb_url,
+    resolve_image_url,
+)
 
 
 class _FakeResponse:

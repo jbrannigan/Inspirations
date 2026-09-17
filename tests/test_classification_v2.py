@@ -5,7 +5,10 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from inspirations.classification_v2 import run_multi_axis_inference_v2, run_track_gate_v2
+from inspirations.classification_v2 import (
+    run_multi_axis_inference_v2,
+    run_track_gate_v2,
+)
 from inspirations.cli import main
 from inspirations.db import Db, ensure_schema
 from inspirations.store import add_items_to_collection, create_collection

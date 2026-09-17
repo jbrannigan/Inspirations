@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from inspirations.db import Db
-from inspirations.explorer_layout import compute_layout, _cache_key
+from inspirations.explorer_layout import _cache_key, compute_layout
 
 
 def _make_db(tmp_dir: str, asset_count: int = 20, collection_id: str | None = None) -> Path:
