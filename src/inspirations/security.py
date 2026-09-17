@@ -4,7 +4,6 @@ import ipaddress
 import socket
 from urllib.parse import urlparse
 
-
 ALLOWLIST_HOSTS = {
     "i.pinimg.com",
     "s.pinimg.com",

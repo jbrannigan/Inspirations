@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import Counter
 import hashlib
 import math
 import re
@@ -8,12 +7,12 @@ import shutil
 import subprocess
 import tempfile
 import uuid
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from ..db import Db
-
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".heif", ".tif", ".tiff"}

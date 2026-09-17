@@ -13,8 +13,8 @@
     {
       "name": "inspirations-dev",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "inspirations", "serve", "--port", "8001", "--reload"],
-      "port": 8001,
+      "runtimeArgs": ["-m", "inspirations", "serve", "--port", "8010", "--reload"],
+      "port": 8010,
       "env": {
         "PYTHONPATH": "src"
       }

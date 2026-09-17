@@ -602,8 +602,8 @@ def _pca_2d(vectors: list[list[float]]) -> list[tuple[float, float]]:
 
     # Try sklearn first
     try:
-        from sklearn.decomposition import PCA
         import numpy as np
+        from sklearn.decomposition import PCA
         arr = np.array(vectors, dtype=np.float32)
         pca = PCA(n_components=min(2, n, d), random_state=42)
         coords = pca.fit_transform(arr)
@@ -665,8 +665,8 @@ def _pca_3d(vectors: list[list[float]]) -> list[tuple[float, float, float]]:
     d = len(vectors[0])
 
     try:
-        from sklearn.decomposition import PCA
         import numpy as np
+        from sklearn.decomposition import PCA
         arr = np.array(vectors, dtype=np.float32)
         pca = PCA(n_components=min(3, n, d), random_state=42)
         coords = pca.fit_transform(arr)

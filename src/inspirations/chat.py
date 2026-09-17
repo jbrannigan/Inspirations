@@ -14,7 +14,12 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .catalog import load_catalog_files, load_catalog_index, load_manifest, resolve_short_ids
+from .catalog import (
+    load_catalog_files,
+    load_catalog_index,
+    load_manifest,
+    resolve_short_ids,
+)
 from .db import Db
 from .store import bulk_set_triage_status
 

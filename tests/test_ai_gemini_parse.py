@@ -9,8 +9,8 @@ from inspirations.ai import (
     _extract_finish_reasons,
     _extract_json_object,
     _flatten_ai_labels,
-    _no_json_error_message,
     _has_finish_reason,
+    _no_json_error_message,
     _suggest_scan_title,
     run_gemini_image_labeler,
 )

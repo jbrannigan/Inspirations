@@ -19,7 +19,6 @@ from .storage import download_and_attach_originals
 from .thumbnails import generate_thumbnails
 from .title_audit import strip_facebook_engagement_prefix
 
-
 KEYWORDS = [
     "kitchen",
     "cabinet",

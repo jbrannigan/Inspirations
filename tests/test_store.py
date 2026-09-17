@@ -4,16 +4,16 @@ from pathlib import Path
 
 from inspirations.db import Db, ensure_schema, refresh_asset_search_index
 from inspirations.store import (
-    add_to_tray,
     add_items_to_collection,
+    add_to_tray,
     create_annotation,
     create_collection,
     delete_assets,
     list_annotations,
     list_assets,
-    list_facets,
     list_collection_items,
     list_collections,
+    list_facets,
     list_tray,
     remove_from_tray,
     remove_items_from_collection,

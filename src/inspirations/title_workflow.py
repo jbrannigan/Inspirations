@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
-from .db import Db, _looks_like_scan_autogen_title as _db_looks_like_scan_autogen_title
+from .db import Db
+from .db import _looks_like_scan_autogen_title as _db_looks_like_scan_autogen_title
 from .title_audit import (
     _FB_SAVED_LINK_TITLE_RE,
     _JUNK_SHORT_DOMAIN_RE,

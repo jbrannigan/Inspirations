@@ -11,7 +11,6 @@ from typing import Any
 
 from .db import Db
 
-
 TRACK_STYLE = "style_product_decor"
 TRACK_CONSTRUCTION = "construction_concern"
 TRACK_MAINTENANCE = "home_maintenance_diy"
