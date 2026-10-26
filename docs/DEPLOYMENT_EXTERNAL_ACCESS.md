@@ -1,9 +1,24 @@
 # Serve Inspirations to External Collaborators
 
-> Legacy note (2026-05-27): live collaborator sharing is retired from the
-> active product. Keep this runbook only for the infrastructure pattern if the
-> local app is intentionally exposed again. Current designer handoff is
-> standalone collection PDF export.
+> **SUPERSEDED (2026-10-25) by `DEPLOYMENT_PUBLIC_ACCESS.md`. Historical only —
+> do not follow these steps.**
+>
+> Public access now runs as the subdomain `inspirations.8499timberbridgeln.com`
+> gated by Cloudflare Access. Specifically, do not re-apply:
+>
+> - **Step 3's Transform Rule** stripping a `/inspirations` prefix. It conflicts
+>   with the `BASE_PATH` support added later, and with a subdomain it would
+>   mangle every URL.
+> - **Step 5's Redirect Rule** on `/`. The apex now serves the New Home portal
+>   on port 8003; a redirect there would break it.
+> - **Step 9's magic-link collaborator auth.** That mechanism was removed. Worse,
+>   its premise — that an `?actor=` token gates access — is the false belief that
+>   makes the app's current no-auth state dangerous: a request *without* a token
+>   is resolved to `owner`.
+>
+> Asset figures here are stale (it says ~2 GB and 12 GB; `data/` is now ~23 GB).
+> Earlier legacy note (2026-05-27): live collaborator sharing is retired from
+> the active product; designer handoff is standalone collection PDF export.
 
 ## Context
 

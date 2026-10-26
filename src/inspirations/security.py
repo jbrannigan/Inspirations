@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+import threading
+import time
+from collections import deque
 from urllib.parse import urlparse
 
 ALLOWLIST_HOSTS = {
@@ -87,3 +90,55 @@ def is_safe_public_url(url: str, *, allow_http: bool = False) -> bool:
         return False
 
     return all(is_public_ip(ip) for ip in ips)
+
+
+class RateLimiter:
+    """Sliding-window request limiter keyed by caller identity.
+
+    The server is threaded, so every access takes a lock. Windows are pruned
+    lazily, and the key table is capped so a flood of distinct keys cannot grow
+    memory without bound.
+
+    Keying caveat: behind a reverse proxy on the same host every request arrives
+    from 127.0.0.1, so callers should pass the forwarded client address when one
+    is available. Where it is not, the whole proxy shares a single bucket, which
+    still bounds total attempt volume even though it cannot isolate one caller.
+    """
+
+    def __init__(self, *, limit: int, window_seconds: float, max_keys: int = 4096) -> None:
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        if window_seconds <= 0:
+            raise ValueError("window_seconds must be positive")
+        self.limit = limit
+        self.window_seconds = float(window_seconds)
+        self.max_keys = max_keys
+        self._hits: dict[str, deque[float]] = {}
+        self._lock = threading.Lock()
+
+    def check(self, key: str, *, now: float | None = None) -> tuple[bool, float]:
+        """Record an attempt. Returns (allowed, retry_after_seconds)."""
+        stamp = time.monotonic() if now is None else now
+        cutoff = stamp - self.window_seconds
+        with self._lock:
+            window = self._hits.get(key)
+            if window is None:
+                if len(self._hits) >= self.max_keys:
+                    self._evict_locked(cutoff)
+                window = self._hits.setdefault(key, deque())
+            while window and window[0] <= cutoff:
+                window.popleft()
+            if len(window) >= self.limit:
+                retry_after = max(0.0, window[0] + self.window_seconds - stamp)
+                return False, retry_after
+            window.append(stamp)
+            return True, 0.0
+
+    def _evict_locked(self, cutoff: float) -> None:
+        stale = [k for k, w in self._hits.items() if not w or w[-1] <= cutoff]
+        for k in stale:
+            self._hits.pop(k, None)
+        if len(self._hits) >= self.max_keys:
+            # Still full of live windows: drop the oldest to stay bounded.
+            oldest = min(self._hits, key=lambda k: self._hits[k][-1])
+            self._hits.pop(oldest, None)

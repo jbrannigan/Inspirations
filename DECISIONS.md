@@ -470,6 +470,42 @@ delete/cleanup batches, or if text search starts feeling stale.
 
 ---
 
+## D030 — Public access is a gated subdomain, not a portal subpath (2026-10-25)
+
+**Decision:** Expose this app at `inspirations.8499timberbridgeln.com`, its own
+hostname on the machine's shared Cloudflare tunnel, gated by Cloudflare Access
+with an email one-time-PIN allowlist. Not a subpath, and not through the New
+Home portal.
+
+**Why:** D003 already said that if public access were revived it should use
+launchd plus the shared tunnel rather than a developer shell, and this follows
+that. A subdomain needs no `BASE_PATH`, keeps `app/admin.html` working (the
+base-path rewrite covers `index.html` only), and attaches an Access policy to a
+whole hostname cleanly. Routing through the New Home portal was rejected
+separately: that coupling — rewrite, iframe, copied galleries, shared auth
+database — was removed on 2026-08-03 and `New_Home/CLAUDE.md` forbids the
+portal from proxying or depending on this app at runtime. A sibling hostname
+touches no portal code, so the boundary stays intact and needed no amendment.
+
+**Consequence and accepted risk:** this app has no authentication of its own —
+`_resolve_actor` resolves a request without an actor token to `role: owner`, so
+anonymous callers pass every owner check including bulk delete. Cloudflare
+Access is therefore the entire security boundary, which is a stronger
+dependency than the New Home portal places on it (that app enforces roles
+in-app and treats Access as defence in depth). Never add a Bypass policy, never
+path-scope the Access application, and note that deleting the application opens
+the site rather than closing it.
+
+Separately accepted: the service keeps binding `0.0.0.0:8001`, so the app
+remains reachable as owner, unauthenticated, from any device on the home LAN.
+Access does not cover that path. This was chosen deliberately to preserve the
+existing iPad LAN route, which was in active use when the decision was made.
+
+Runbook, inventory, verification and rollback: `docs/DEPLOYMENT_PUBLIC_ACCESS.md`.
+`docs/DEPLOYMENT_EXTERNAL_ACCESS.md` is superseded and must not be followed.
+
+---
+
 ## Archived Decisions (pre-rebuild)
 
 Decisions D010–D013 (cluster explorer, accessibility tier, session-only delete)

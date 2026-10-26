@@ -27,8 +27,12 @@ Subcommands: `init`, `list`, `maintenance optimize-db`, `import pinterest-scrape
 `ai reels`, `ai errors`, `ai embed`, `ai similar`, `export html`, `export portal`
 (legacy), `export collection-pdf`, `serve`.
 
-Serve on the LAN with `--host 0.0.0.0 --port 8001`. Behind the New Home reverse
-proxy, prefix with `BASE_PATH=/inspirations-app`.
+Serve on the LAN with `--host 0.0.0.0 --port 8001`. Public access is a
+subdomain on the shared Cloudflare tunnel
+(`inspirations.8499timberbridgeln.com`), gated by Cloudflare Access, so no
+`BASE_PATH` is involved — see `docs/DEPLOYMENT_PUBLIC_ACCESS.md`. The New Home
+portal does not proxy this app; that integration was removed on 2026-08-03.
+`BASE_PATH` support remains for subpath hosting but is unused and untested.
 
 Deeper notes live where the code does: `src/inspirations/CLAUDE.md` (data model,
 classification, AI pipeline) and `app/CLAUDE.md` (frontend behavior).

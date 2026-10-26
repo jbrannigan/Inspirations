@@ -2,13 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "_comment": "Attach-only. Port 8001 is the always-on launchd service and is now served publicly; starting a second listener on it would take the public site down. Use inspirations-dev on 8010 to run code.",
       "name": "inspirations-review",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "inspirations", "serve", "--host", "127.0.0.1", "--port", "8001"],
       "port": 8001,
-      "env": {
-        "PYTHONPATH": "src"
-      }
+      "url": "http://127.0.0.1:8001"
     },
     {
       "name": "inspirations-dev",
@@ -17,16 +14,6 @@
       "port": 8010,
       "env": {
         "PYTHONPATH": "src"
-      }
-    },
-    {
-      "name": "inspirations-proxy",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "inspirations", "serve", "--host", "127.0.0.1", "--port", "8001"],
-      "port": 8001,
-      "env": {
-        "PYTHONPATH": "src",
-        "BASE_PATH": "/inspirations-app"
       }
     }
   ]

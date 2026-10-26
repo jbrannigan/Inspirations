@@ -20,6 +20,11 @@ class Db:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("pragma busy_timeout=30000;")
         self._conn.execute("pragma foreign_keys=on;")
+        # WAL lets readers run while a writer holds the database. The server is
+        # threaded, so without it concurrent requests serialise on every write
+        # and surface as "database is locked". The pragma persists on the file;
+        # setting it per connection is idempotent and cheap.
+        self._conn.execute("pragma journal_mode=WAL;")
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
