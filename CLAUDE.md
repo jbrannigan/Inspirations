@@ -27,8 +27,12 @@ Subcommands: `init`, `list`, `maintenance optimize-db`, `import pinterest-scrape
 `ai reels`, `ai errors`, `ai embed`, `ai similar`, `export html`, `export portal`
 (legacy), `export collection-pdf`, `serve`.
 
-Serve on the LAN with `--host 0.0.0.0 --port 8001`. Behind the New Home reverse
-proxy, prefix with `BASE_PATH=/inspirations-app`.
+Serve on the LAN with `--host 0.0.0.0 --port 8001`. Public access is a
+subdomain on the shared Cloudflare tunnel
+(`inspirations.8499timberbridgeln.com`), gated by Cloudflare Access, so no
+`BASE_PATH` is involved — see `docs/DEPLOYMENT_PUBLIC_ACCESS.md`. The New Home
+portal does not proxy this app; that integration was removed on 2026-08-03.
+`BASE_PATH` support remains for subpath hosting but is unused and untested.
 
 Deeper notes live where the code does: `src/inspirations/CLAUDE.md` (data model,
 classification, AI pipeline) and `app/CLAUDE.md` (frontend behavior).
@@ -92,8 +96,16 @@ must pass.
 
 ## Service
 
-`./tools/inspirations_service.sh install|status|logs` installs the launchd agent
-`com.jimbrannigan.inspirations` on `0.0.0.0:8001` with logs in `data/logs/`.
+`./tools/inspirations_service.sh install|status|logs|restart|stop|uninstall
+[login|boot]` manages the launchd service `com.jimbrannigan.inspirations` on
+`0.0.0.0:8001`, with logs in `data/logs/`. `login` (default) is a LaunchAgent
+that starts at console login; `boot` is a system LaunchDaemon that starts
+without a login, which is what the public hostname needs.
+
+A daemon cannot read the login keychain, so in `boot` mode the AI keys must be
+in the untracked mode-0600 `.env.production`. `tools/run_review_server.sh`
+prefers that file and falls back to the keychain for user-session runs.
+
 Registered in `../DevLauncher/config/projects.json` — update it if the port or
 command changes.
 

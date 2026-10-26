@@ -1,28 +1,67 @@
 #!/bin/zsh
 set -euo pipefail
 
+ACTION="${1:-}"
+MODE="${2:-login}"
+
+# In zsh $0 inside a function is the function name, so capture the script path
+# here, at top level, for usage text and the sudo re-exec.
+PROG="$0"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 LABEL="com.jimbrannigan.inspirations"
-PLIST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 LOG_DIR="${ROOT_DIR}/data/logs"
 OUT_LOG="${LOG_DIR}/inspirations-8001.out.log"
 ERR_LOG="${LOG_DIR}/inspirations-8001.err.log"
 PORT="${INSPIRATIONS_REVIEW_PORT:-8001}"
 HOST="${INSPIRATIONS_REVIEW_HOST:-0.0.0.0}"
-UID_NUM="$(id -u)"
-DOMAIN="gui/${UID_NUM}"
 
 function usage() {
   cat <<EOF
-Usage: $0 install|status|logs|restart|stop|uninstall
+Usage: ${PROG} install|status|logs|restart|stop|uninstall [login|boot]
 
 Manages the launchd-backed Inspirations service on ${HOST}:${PORT}.
+
+Modes:
+  login  LaunchAgent in ~/Library/LaunchAgents, domain gui/<uid> (default).
+         Starts at console login. Can read the login keychain.
+  boot   LaunchDaemon in /Library/LaunchDaemons, domain system; re-execs via
+         sudo. Starts at boot with no login required, which is what the public
+         hostname needs. Runs as UserName below, but CANNOT read the login
+         keychain — API keys must be in ${ROOT_DIR}/.env.production (mode 0600).
+
 Logs:
   ${OUT_LOG}
   ${ERR_LOG}
 EOF
 }
+
+case "${ACTION}" in
+  install|status|logs|restart|stop|uninstall) ;;
+  *) usage; exit 2 ;;
+esac
+
+if [[ "${MODE}" != "login" && "${MODE}" != "boot" ]]; then
+  usage
+  exit 2
+fi
+
+# Boot mode touches /Library/LaunchDaemons and the system domain.
+if [[ "${MODE}" == "boot" && "${EUID}" -ne 0 ]]; then
+  exec sudo "${PROG}" "${ACTION}" "${MODE}"
+fi
+
+if [[ "${MODE}" == "boot" ]]; then
+  TARGET_USER="${SUDO_USER:-$(logname)}"
+  DOMAIN="system"
+  PLIST_DIR="/Library/LaunchDaemons"
+else
+  TARGET_USER="${USER}"
+  DOMAIN="gui/$(id -u "${TARGET_USER}")"
+  PLIST_DIR="${HOME}/Library/LaunchAgents"
+fi
+PLIST="${PLIST_DIR}/${LABEL}.plist"
 
 function launchctl_print() {
   launchctl print "${DOMAIN}/${LABEL}" 2>&1 || true
@@ -30,6 +69,37 @@ function launchctl_print() {
 
 function listener_pid() {
   lsof -nP -tiTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null | head -n 1 || true
+}
+
+function warn_other_mode_installed() {
+  # Both a LaunchAgent and a LaunchDaemon on the same port would fight over it.
+  local other
+  if [[ "${MODE}" == "boot" ]]; then
+    other="$(eval echo ~"${TARGET_USER}")/Library/LaunchAgents/${LABEL}.plist"
+  else
+    other="/Library/LaunchDaemons/${LABEL}.plist"
+  fi
+  if [[ -f "${other}" ]]; then
+    echo "[service] WARNING: the other mode is still installed at:" >&2
+    echo "  ${other}" >&2
+    echo "[service] both would contend for port ${PORT}; uninstall that mode first." >&2
+  fi
+}
+
+function check_secrets_for_boot() {
+  [[ "${MODE}" == "boot" ]] || return 0
+  local env_file="${ROOT_DIR}/.env.production"
+  if [[ ! -f "${env_file}" ]]; then
+    echo "[service] WARNING: ${env_file} is missing." >&2
+    echo "[service] A daemon cannot read the login keychain, so AI features will" >&2
+    echo "[service] start with no API keys." >&2
+    return 0
+  fi
+  if ! grep -qE '^GEMINI_API_KEY=.+' "${env_file}" || ! grep -qE '^ANTHROPIC_API_KEY=.+' "${env_file}"; then
+    echo "[service] WARNING: ${env_file} has an empty GEMINI_API_KEY or" >&2
+    echo "[service] ANTHROPIC_API_KEY. A daemon cannot fall back to the login" >&2
+    echo "[service] keychain, so AI features will start with no API keys." >&2
+  fi
 }
 
 function stop_existing_project_listener() {
@@ -57,7 +127,18 @@ function stop_existing_project_listener() {
 }
 
 function write_plist() {
-  mkdir -p "${HOME}/Library/LaunchAgents" "${LOG_DIR}"
+  mkdir -p "${PLIST_DIR}" "${LOG_DIR}"
+  if [[ "${MODE}" == "boot" ]]; then
+    chown "${TARGET_USER}" "${LOG_DIR}" 2>/dev/null || true
+  fi
+
+  local user_key=""
+  if [[ "${MODE}" == "boot" ]]; then
+    user_key="  <key>UserName</key>
+  <string>${TARGET_USER}</string>
+"
+  fi
+
   cat > "${PLIST}" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -83,7 +164,7 @@ function write_plist() {
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
-  <key>RunAtLoad</key>
+${user_key}  <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
   <true/>
@@ -98,14 +179,17 @@ function write_plist() {
 </dict>
 </plist>
 EOF
+  plutil -lint "${PLIST}" >/dev/null
 }
 
 function install_service() {
   chmod +x "${ROOT_DIR}/tools/run_review_server.sh"
+  check_secrets_for_boot
+  warn_other_mode_installed
   write_plist
   launchctl bootout "${DOMAIN}/${LABEL}" 2>/dev/null || true
   stop_existing_project_listener
-  echo "[service] installing ${PLIST}"
+  echo "[service] installing ${PLIST} (mode=${MODE})"
   launchctl bootstrap "${DOMAIN}" "${PLIST}"
   launchctl enable "${DOMAIN}/${LABEL}" 2>/dev/null || true
   launchctl kickstart -k "${DOMAIN}/${LABEL}"
@@ -124,7 +208,7 @@ function restart_service() {
 }
 
 function status_service() {
-  echo "== launchd =="
+  echo "== launchd (${DOMAIN}/${LABEL}) =="
   launchctl_print | sed -n '1,90p'
   echo
   echo "== listener :${PORT} =="
@@ -156,12 +240,11 @@ function uninstall_service() {
   echo "[service] removed ${PLIST}"
 }
 
-case "${1:-}" in
+case "${ACTION}" in
   install) install_service ;;
   status) status_service ;;
   logs) logs_service ;;
   restart) restart_service ;;
   stop) stop_service ;;
   uninstall) uninstall_service ;;
-  *) usage; exit 2 ;;
 esac

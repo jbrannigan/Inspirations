@@ -85,10 +85,16 @@ This installs a user LaunchAgent named `com.jimbrannigan.inspirations` with
 `KeepAlive`, still bound to `0.0.0.0:8001`. Logs are written under
 `data/logs/` and are intentionally local-only.
 
-Behind a reverse proxy (e.g., New Home Next.js site at `/inspirations-app`):
+Public access runs as its own subdomain on the shared Cloudflare tunnel,
+gated by Cloudflare Access — see `docs/DEPLOYMENT_PUBLIC_ACCESS.md`. The New
+Home portal no longer proxies this app.
+
+`BASE_PATH` support for subpath hosting still exists but is unused:
 ```sh
-BASE_PATH=/inspirations-app PYTHONPATH=src python3 -m inspirations serve --port 8001
+BASE_PATH=/some-prefix PYTHONPATH=src python3 -m inspirations serve --port 8001
 ```
+Note `app/admin.html` is not base-path rewritten (`server.py` only rewrites
+`index.html`), so the Admin page breaks under a subpath.
 
 ## App Workflows
 

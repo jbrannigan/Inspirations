@@ -9,7 +9,6 @@ import os
 import re
 import secrets
 import signal
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -32,7 +31,13 @@ from .ai import (
 from .catalog import generate_catalog
 from .chat import process_chat_message
 from .classification_v2 import run_multi_axis_inference_v2, run_track_gate_v2
-from .db import Db, ensure_schema, optimize_database, refresh_asset_search_index
+from .db import (
+    Db,
+    backup_database,
+    ensure_schema,
+    optimize_database,
+    refresh_asset_search_index,
+)
 from .explorer_layout import compute_layout
 from .export import (
     PdfRenderError,
@@ -50,6 +55,7 @@ from .importers.scans import (
     import_scans_inbox,
     import_videos_inbox,
 )
+from .security import RateLimiter
 from .source_link_enrichment import (
     capture_source_link_candidate_for_asset,
     default_auth_browser_profile_dir,
@@ -112,6 +118,17 @@ BASE_PATH = os.environ.get("BASE_PATH", "").strip().rstrip("/")
 
 MAX_BODY = 2_000_000
 MAX_UPLOAD_BODY = 350_000_000
+
+# Request limits. The admin password is the only credential this server checks,
+# so it gets a tight window; mutations get a ceiling loose enough that ordinary
+# triage never touches it. Reads are deliberately unlimited: one gallery screen
+# issues dozens of /media requests, so a read limit would throttle normal use.
+ADMIN_LOGIN_RATE_LIMIT = RateLimiter(limit=5, window_seconds=60.0)
+MUTATION_RATE_LIMIT = RateLimiter(limit=240, window_seconds=60.0)
+
+# Chunk size for streamed file responses. Large media is no longer read whole
+# into memory, so a single request costs this much RSS rather than the file size.
+FILE_STREAM_CHUNK = 256 * 1024
 DEFAULT_ASSETS_PAGE_SIZE = 240
 DYNAMIC_GZIP_LEVEL = 1
 MAX_SCAN_DOC_GROUP_PAGES = 6
@@ -346,6 +363,50 @@ def _is_non_home_tree_node(node: dict) -> bool:
 class ApiHandler(BaseHTTPRequestHandler):
     server_version = "Inspirations/0.1"
     protocol_version = "HTTP/1.1"
+
+    # Injected on every response, send_error and static files included, so there
+    # is a single place to audit. Nothing in front of this server adds headers:
+    # the tunnel passes responses through untouched. DENY rather than SAMEORIGIN
+    # because the app frames no content of its own.
+    SECURITY_HEADERS = (
+        ("X-Content-Type-Options", "nosniff"),
+        ("X-Frame-Options", "DENY"),
+        ("Referrer-Policy", "strict-origin-when-cross-origin"),
+    )
+
+    def end_headers(self) -> None:
+        for name, value in self.SECURITY_HEADERS:
+            self.send_header(name, value)
+        super().end_headers()
+
+    def _rate_limit_key(self) -> str:
+        """Identify the caller for rate limiting.
+
+        Behind the tunnel every request arrives from 127.0.0.1, so prefer the
+        address Cloudflare forwards. A LAN client could forge that header, but
+        a LAN client already reaches this server directly, so the header cannot
+        weaken a boundary that does not exist on that path.
+        """
+        forwarded = (self.headers.get("CF-Connecting-IP") or "").strip()
+        if forwarded:
+            return f"fwd:{forwarded}"
+        return f"peer:{self.client_address[0]}"
+
+    def _enforce_rate_limit(self, limiter: RateLimiter) -> bool:
+        """Returns True when the request may proceed; sends 429 when it may not."""
+        allowed, retry_after = limiter.check(self._rate_limit_key())
+        if allowed:
+            return True
+        self.send_response(429)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Retry-After", str(max(1, int(retry_after + 0.999))))
+        body = json.dumps({"error": "rate limited"}).encode("utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+        return False
 
     def _strip_base_path(self) -> None:
         """Strip BASE_PATH prefix from self.path so routing works unchanged."""
@@ -876,6 +937,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         self._strip_base_path()
+        if not self._enforce_rate_limit(MUTATION_RATE_LIMIT):
+            return
         parsed = urlparse(self.path)
         if parsed.path == "/api/import/scans":
             return self._handle_scan_pdf_upload()
@@ -1026,6 +1089,10 @@ class ApiHandler(BaseHTTPRequestHandler):
             return _send(self, 201, {"ok": True, "configured": True})
 
         if parsed.path == "/api/admin/login":
+            # The admin password is the only credential this server verifies, and
+            # it has no lockout, so the window is deliberately tight.
+            if not self._enforce_rate_limit(ADMIN_LOGIN_RATE_LIMIT):
+                return
             expected = self._admin_password()
             if not expected:
                 return _send(
@@ -1618,6 +1685,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self) -> None:
         self._strip_base_path()
+        if not self._enforce_rate_limit(MUTATION_RATE_LIMIT):
+            return
         parsed = urlparse(self.path)
         try:
             body = _json_body(self)
@@ -1807,6 +1876,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         self._strip_base_path()
+        if not self._enforce_rate_limit(MUTATION_RATE_LIMIT):
+            return
         parsed = urlparse(self.path)
         if parsed.path == "/api/assets" or re.match(r"^/api/assets/([^/]+)$", parsed.path):
             return _send(self, 403, {"error": "Use POST /api/admin/assets/delete in admin mode"})
@@ -1877,6 +1948,14 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def _is_localhost_setup_request(self) -> bool:
         if not self._is_loopback_client():
+            return False
+        # A request relayed by the tunnel also arrives from 127.0.0.1, so the
+        # loopback check alone cannot tell local from remote. The Host check
+        # below already rejects relayed requests because they carry the public
+        # hostname; these headers reject anything forwarded even if a Host could
+        # somehow be spoofed, so first-run setup stays genuinely console-only.
+        forwarded_markers = ("CF-Connecting-IP", "CF-Ray", "X-Forwarded-For", "X-Forwarded-Host")
+        if any((self.headers.get(name) or "").strip() for name in forwarded_markers):
             return False
         raw_host = str(self.headers.get("Host") or "").strip()
         try:
@@ -2032,16 +2111,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         backups_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
         backup_path = backups_dir / f"{db_path.stem}-backup-{stamp}.sqlite"
-        src = sqlite3.connect(db_path)
-        try:
-            dst = sqlite3.connect(backup_path)
-            try:
-                src.backup(dst)
-            finally:
-                dst.close()
-        finally:
-            src.close()
-        return str(backup_path)
+        return str(backup_database(db_path, backup_path))
 
     def _delete_media_paths(self, paths: list[str]) -> int:
         base = Path(self.server.store_dir).resolve()
@@ -3052,25 +3122,120 @@ class ApiHandler(BaseHTTPRequestHandler):
             "image/svg+xml",
         }
 
+    def _resolve_range(self, size: int) -> tuple[int, int] | str | None:
+        """Interpret a `Range: bytes=` header.
+
+        Returns (start, end) inclusive for a satisfiable single range, the string
+        "unsatisfiable" when the client asked past the end of the file, or None
+        to serve the whole body (header absent, unknown unit, or multi-range).
+        """
+        header = (self.headers.get("Range") or "").strip()
+        if not header or not header.lower().startswith("bytes="):
+            return None
+        spec = header[len("bytes="):].strip()
+        if "," in spec:
+            return None
+        first, _, last = spec.partition("-")
+        first, last = first.strip(), last.strip()
+        try:
+            if not first:
+                # Suffix form: bytes=-N means the final N bytes.
+                wanted = int(last)
+                if wanted <= 0:
+                    return "unsatisfiable"
+                start, end = max(0, size - wanted), size - 1
+            else:
+                start = int(first)
+                end = int(last) if last else size - 1
+        except ValueError:
+            return None
+        if start < 0 or start >= size or end < start:
+            return "unsatisfiable"
+        return start, min(end, size - 1)
+
+    def _send_file_stream(
+        self,
+        target: Path,
+        mime: str,
+        *,
+        cache_control: str,
+        disposition: str | None = None,
+    ) -> None:
+        """Serve a file in chunks, honouring Range requests.
+
+        Streaming keeps a request's memory cost at one chunk instead of the whole
+        file, which matters for a store measured in gigabytes. Range support is
+        what lets video seek and lets an interrupted download resume.
+        """
+        try:
+            size = target.stat().st_size
+        except OSError:
+            return self.send_error(404)
+
+        resolved = self._resolve_range(size)
+        if resolved == "unsatisfiable":
+            self.send_response(416)
+            self.send_header("Content-Range", f"bytes */{size}")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        if resolved is None:
+            start, end, status = 0, size - 1, 200
+        else:
+            start, end = resolved
+            status = 206
+        length = max(0, end - start + 1)
+
+        self.send_response(status)
+        self.send_header("Content-Type", mime)
+        self.send_header("Cache-Control", cache_control)
+        self.send_header("Accept-Ranges", "bytes")
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        if disposition:
+            self.send_header("Content-Disposition", disposition)
+        self.send_header("Content-Length", str(length))
+        self.end_headers()
+
+        if self.command == "HEAD" or length == 0:
+            return
+        remaining = length
+        try:
+            with target.open("rb") as handle:
+                handle.seek(start)
+                while remaining > 0:
+                    chunk = handle.read(min(FILE_STREAM_CHUNK, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            # Client went away mid-download — normal when seeking video.
+            return
+
     def _serve_path(self, target: Path, mime: str, *, cache_control: str = "no-store") -> None:
         if not target.exists() or not target.is_file():
             return self.send_error(404)
-        raw = target.read_bytes()
-        data = raw
         wants_gzip = "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
-        use_gzip = wants_gzip and len(raw) >= 1024 and self._can_gzip_mime(mime)
-        if use_gzip:
-            data = gzip.compress(raw, compresslevel=DYNAMIC_GZIP_LEVEL)
-        self.send_response(200)
-        self.send_header("Content-Type", mime)
-        self.send_header("Cache-Control", cache_control)
-        if use_gzip:
-            self.send_header("Content-Encoding", "gzip")
-            self.send_header("Vary", "Accept-Encoding")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(data)
+        if wants_gzip and self._can_gzip_mime(mime):
+            raw = target.read_bytes()
+            if len(raw) >= 1024:
+                # Compressed bodies are sent whole: a Range against a gzipped
+                # response would address offsets in the compressed bytes, which
+                # is not what a client asking to seek expects.
+                data = gzip.compress(raw, compresslevel=DYNAMIC_GZIP_LEVEL)
+                self.send_response(200)
+                self.send_header("Content-Type", mime)
+                self.send_header("Cache-Control", cache_control)
+                self.send_header("Content-Encoding", "gzip")
+                self.send_header("Vary", "Accept-Encoding")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                if self.command != "HEAD":
+                    self.wfile.write(data)
+                return
+        return self._send_file_stream(target, mime, cache_control=cache_control)
 
     def _serve_empty_favicon(self) -> None:
         self.send_response(204)
@@ -3201,27 +3366,26 @@ class ApiHandler(BaseHTTPRequestHandler):
                 path = r["stored_video_path"]
             else:
                 path = r["stored_path"]
-            if not path:
-                return self.send_error(404)
-            base = Path(self.server.store_dir).resolve()
-            target = Path(path).resolve()
-            try:
-                target.relative_to(base)
-            except ValueError:
-                return self.send_error(403)
-            if not target.exists() or not target.is_file():
-                return self.send_error(404)
-            data = target.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", _guess_mime(str(target)))
+
+        # Streaming happens outside the Db context: a large video would otherwise
+        # hold a database connection open for the whole transfer.
+        if not path:
+            return self.send_error(404)
+        base = Path(self.server.store_dir).resolve()
+        target = Path(path).resolve()
+        try:
+            target.relative_to(base)
+        except ValueError:
+            return self.send_error(403)
+        if not target.exists() or not target.is_file():
+            return self.send_error(404)
+        return self._send_file_stream(
+            target,
+            _guess_mime(str(target)),
             # Media paths are content-addressed/stable per asset ID + kind.
-            self.send_header("Cache-Control", "public, max-age=604800")
-            self.send_header("Content-Length", str(len(data)))
-            if str(target).lower().endswith(".pdf"):
-                self.send_header("Content-Disposition", "inline")
-            self.end_headers()
-            if self.command != "HEAD":
-                self.wfile.write(data)
+            cache_control="public, max-age=604800",
+            disposition="inline" if str(target).lower().endswith(".pdf") else None,
+        )
 
     def _get_asset_for_modal(self, db: Db, *, asset_id: str, include_hidden: bool = False) -> dict | None:
         rows = db.query(

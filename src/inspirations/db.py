@@ -20,6 +20,11 @@ class Db:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("pragma busy_timeout=30000;")
         self._conn.execute("pragma foreign_keys=on;")
+        # WAL lets readers run while a writer holds the database. The server is
+        # threaded, so without it concurrent requests serialise on every write
+        # and surface as "database is locked". The pragma persists on the file;
+        # setting it per connection is idempotent and cheap.
+        self._conn.execute("pragma journal_mode=WAL;")
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -51,6 +56,37 @@ class Db:
         cur = self.conn.execute(sql, params)
         row = cur.fetchone()
         return row[0] if row else None
+
+
+def backup_database(src_path: Path, dst_path: Path) -> Path:
+    """Copy a database using SQLite's backup API.
+
+    Required rather than a file copy: under WAL journalling, committed
+    transactions can still live in the -wal sidecar, so copying the main file
+    alone can silently produce a backup that is missing recent data. The backup
+    API also takes a consistent snapshot while other connections are writing.
+    """
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    src = sqlite3.connect(src_path)
+    try:
+        dst = sqlite3.connect(dst_path)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+    return dst_path
+
+
+def remove_database_sidecars(db_path: Path) -> None:
+    """Delete the -wal and -shm files beside a database.
+
+    Unlinking only the main file leaves these orphaned, and a stale -wal next to
+    a newly created database of the same name is a recovery hazard.
+    """
+    for suffix in ("-wal", "-shm"):
+        Path(str(db_path) + suffix).unlink(missing_ok=True)
 
 
 def _ensure_columns(db: Db, table: str, columns: dict[str, str]) -> None:
