@@ -54,6 +54,8 @@ Nothing below is reproducible from this repo. Keep it current.
 | cloudflared service | system LaunchDaemon `com.cloudflare.cloudflared` |
 | DNS record | `inspirations` → proxied CNAME to `481dd153-….cfargotunnel.com` |
 | Access team domain | `mcginty-clan.cloudflareaccess.com` (account-wide; the login page carries clan branding) |
+| Access application id | `a5fce9dc-e785-42ba-93dd-1226ecc16064` |
+| Armed | 2026-10-25, verified by negative test before and after the ingress rule |
 
 ### Access application intended state
 
@@ -67,7 +69,7 @@ Nothing below is reproducible from this repo. Keep it current.
 | App Launcher visible | No |
 | Policy name | `Household` |
 | Decision | Allow |
-| Include | Emails: Jim, Leslie |
+| Include | Emails: `jim.brannigan@gmail.com`, `lacb@comcast.net` |
 | Login method | One-time PIN |
 
 Session duration is short on purpose: Access is the only control, so a stolen
