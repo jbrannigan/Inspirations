@@ -96,8 +96,16 @@ must pass.
 
 ## Service
 
-`./tools/inspirations_service.sh install|status|logs` installs the launchd agent
-`com.jimbrannigan.inspirations` on `0.0.0.0:8001` with logs in `data/logs/`.
+`./tools/inspirations_service.sh install|status|logs|restart|stop|uninstall
+[login|boot]` manages the launchd service `com.jimbrannigan.inspirations` on
+`0.0.0.0:8001`, with logs in `data/logs/`. `login` (default) is a LaunchAgent
+that starts at console login; `boot` is a system LaunchDaemon that starts
+without a login, which is what the public hostname needs.
+
+A daemon cannot read the login keychain, so in `boot` mode the AI keys must be
+in the untracked mode-0600 `.env.production`. `tools/run_review_server.sh`
+prefers that file and falls back to the keychain for user-session runs.
+
 Registered in `../DevLauncher/config/projects.json` — update it if the port or
 command changes.
 

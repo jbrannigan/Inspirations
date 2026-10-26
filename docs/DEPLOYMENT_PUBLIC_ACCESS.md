@@ -230,7 +230,16 @@ down — last resort only.
   repeats work that already succeeded.
 - **Security headers** are set by the app itself (`ApiHandler.end_headers`);
   Access injects none. There is no CSP.
-- **Reboot behaviour:** the app is a user LaunchAgent while cloudflared is a
-  system LaunchDaemon. After a reboot with no console login the tunnel comes up
-  and the app does not, so the gated site returns 502. See the open item in
-  `.claude/TODO.md`.
+- **Reboot behaviour.** cloudflared is a system LaunchDaemon, so it comes up at
+  boot. The app must therefore run in `boot` mode too:
+
+  ```sh
+  ./tools/inspirations_service.sh uninstall login
+  ./tools/inspirations_service.sh install boot      # prompts for sudo
+  ```
+
+  Left as a `login` LaunchAgent, a reboot with no console login brings the
+  tunnel up and the app down, and the gated site returns 502. Before switching,
+  put the AI keys in the mode-0600 `.env.production`: a daemon cannot read the
+  login keychain, and the wrapper will otherwise start with no keys and fail AI
+  features silently.

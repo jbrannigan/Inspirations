@@ -27,6 +27,21 @@ if [[ -n "${PYTHONPATH:-}" ]]; then
 else
   export PYTHONPATH="${ROOT_DIR}/src"
 fi
+# Secrets. Prefer the untracked mode-0600 env file: a boot-time LaunchDaemon
+# runs outside the user's security session and cannot read the login keychain,
+# so the keychain is only usable when this starts from a logged-in session.
+# Already-set environment variables win, then the file, then the keychain.
+ENV_FILE="${INSPIRATIONS_ENV_FILE:-${ROOT_DIR}/.env.production}"
+if [[ -f "${ENV_FILE}" ]]; then
+  perms="$(stat -f '%Lp' "${ENV_FILE}" 2>/dev/null || echo '???')"
+  if [[ "${perms}" != "600" ]]; then
+    log_line "WARNING: ${ENV_FILE} is mode ${perms}; expected 600"
+  fi
+  set -a
+  source "${ENV_FILE}"
+  set +a
+fi
+
 export GEMINI_API_KEY="${GEMINI_API_KEY:-$(keychain_read inspirations_gemini_api_key)}"
 export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-$(keychain_read inspirations_anthropic_api_key)}"
 
