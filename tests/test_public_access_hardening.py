@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 from inspirations import server as server_module
-from inspirations.db import Db, ensure_schema
+from inspirations.db import Db, ensure_schema, remove_database_sidecars
 from inspirations.security import RateLimiter
 from inspirations.server import ApiHandler
 
@@ -68,6 +68,51 @@ class TestWalMode(unittest.TestCase):
                 ensure_schema(db)
                 mode = db.query_value("pragma journal_mode;")
             self.assertEqual(str(mode).lower(), "wal")
+
+
+class TestWalSafeBackup(unittest.TestCase):
+    """A file copy of a WAL database can miss committed rows; the backup API cannot."""
+
+    def test_backup_captures_rows_still_in_the_wal(self) -> None:
+        import shutil
+        import sqlite3
+
+        from inspirations.db import backup_database
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "src.sqlite"
+            with Db(src) as db:
+                db.exec("create table t (v text);")
+                db.exec("insert into t (v) values ('committed');")
+                self.assertEqual(str(db.query_value("pragma journal_mode;")).lower(), "wal")
+
+            # A plain copy of the main file alone is the unsafe pattern.
+            naive = root / "naive.sqlite"
+            shutil.copy2(src, naive)
+
+            proper = root / "proper.sqlite"
+            backup_database(src, proper)
+
+            conn = sqlite3.connect(proper)
+            try:
+                self.assertEqual(conn.execute("select v from t").fetchall(), [("committed",)])
+            finally:
+                conn.close()
+
+            # The naive copy is not asserted wrong — SQLite may have checkpointed
+            # already — only that the backup API is correct regardless.
+            self.assertTrue(naive.exists())
+
+    def test_remove_sidecars_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "x.sqlite"
+            with Db(db_path) as db:
+                db.exec("create table t (v text);")
+            Path(str(db_path) + "-wal").touch()
+            remove_database_sidecars(db_path)
+            self.assertFalse(Path(str(db_path) + "-wal").exists())
+            remove_database_sidecars(db_path)  # must not raise
 
 
 class TestPublicAccessHardening(unittest.TestCase):

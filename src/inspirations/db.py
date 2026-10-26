@@ -58,6 +58,37 @@ class Db:
         return row[0] if row else None
 
 
+def backup_database(src_path: Path, dst_path: Path) -> Path:
+    """Copy a database using SQLite's backup API.
+
+    Required rather than a file copy: under WAL journalling, committed
+    transactions can still live in the -wal sidecar, so copying the main file
+    alone can silently produce a backup that is missing recent data. The backup
+    API also takes a consistent snapshot while other connections are writing.
+    """
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    src = sqlite3.connect(src_path)
+    try:
+        dst = sqlite3.connect(dst_path)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+    return dst_path
+
+
+def remove_database_sidecars(db_path: Path) -> None:
+    """Delete the -wal and -shm files beside a database.
+
+    Unlinking only the main file leaves these orphaned, and a stale -wal next to
+    a newly created database of the same name is a recovery hazard.
+    """
+    for suffix in ("-wal", "-shm"):
+        Path(str(db_path) + suffix).unlink(missing_ok=True)
+
+
 def _ensure_columns(db: Db, table: str, columns: dict[str, str]) -> None:
     existing = {r["name"] for r in db.query(f"pragma table_info({table});")}
     for name, decl in columns.items():

@@ -9,7 +9,6 @@ import os
 import re
 import secrets
 import signal
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -32,7 +31,13 @@ from .ai import (
 from .catalog import generate_catalog
 from .chat import process_chat_message
 from .classification_v2 import run_multi_axis_inference_v2, run_track_gate_v2
-from .db import Db, ensure_schema, optimize_database, refresh_asset_search_index
+from .db import (
+    Db,
+    backup_database,
+    ensure_schema,
+    optimize_database,
+    refresh_asset_search_index,
+)
 from .explorer_layout import compute_layout
 from .export import (
     PdfRenderError,
@@ -2106,16 +2111,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         backups_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
         backup_path = backups_dir / f"{db_path.stem}-backup-{stamp}.sqlite"
-        src = sqlite3.connect(db_path)
-        try:
-            dst = sqlite3.connect(backup_path)
-            try:
-                src.backup(dst)
-            finally:
-                dst.close()
-        finally:
-            src.close()
-        return str(backup_path)
+        return str(backup_database(db_path, backup_path))
 
     def _delete_media_paths(self, paths: list[str]) -> int:
         base = Path(self.server.store_dir).resolve()

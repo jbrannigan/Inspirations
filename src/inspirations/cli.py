@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -30,7 +29,14 @@ from .curation import (
     render_curation_html,
     run_curation_pipeline,
 )
-from .db import Db, ensure_schema, optimize_database, rebuild_asset_search_index
+from .db import (
+    Db,
+    backup_database,
+    ensure_schema,
+    optimize_database,
+    rebuild_asset_search_index,
+    remove_database_sidecars,
+)
 from .export import (
     export_collection_pdf,
     export_html_gallery,
@@ -173,9 +179,12 @@ def cmd_rebuild_db(args: argparse.Namespace) -> int:
         backup_dir = db_path.parent / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
         backup_path = backup_dir / f"pre-rebuild-{ts}.sqlite"
-        shutil.copy2(db_path, backup_path)
+        # Backup API, not a file copy: the original is deleted on the next line,
+        # so a WAL-incomplete copy here would lose data irrecoverably.
+        backup_database(db_path, backup_path)
         print(f"[rebuild-db] Backed up DB → {backup_path}", file=sys.stderr)
         db_path.unlink()
+        remove_database_sidecars(db_path)
         print("[rebuild-db] Deleted old DB", file=sys.stderr)
 
     # Step 2: Create fresh schema
