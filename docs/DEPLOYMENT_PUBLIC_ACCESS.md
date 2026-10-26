@@ -56,6 +56,7 @@ Nothing below is reproducible from this repo. Keep it current.
 | Access team domain | `mcginty-clan.cloudflareaccess.com` (account-wide; the login page carries clan branding) |
 | Access application id | `a5fce9dc-e785-42ba-93dd-1226ecc16064` |
 | Armed | 2026-10-25, verified by negative test before and after the ingress rule |
+| End-to-end verified | 2026-10-25: owner sign-in succeeds, media renders, `/app/admin.html` loads (Safari). A non-allowlisted real mailbox received no code. |
 
 ### Access application intended state
 
