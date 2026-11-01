@@ -106,8 +106,10 @@ A daemon cannot read the login keychain, so in `boot` mode the AI keys must be
 in the untracked mode-0600 `.env.production`. `tools/run_review_server.sh`
 prefers that file and falls back to the keychain for user-session runs.
 
-Registered in `../DevLauncher/config/projects.json` — update it if the port or
-command changes.
+The always-on service (`inspirations`) and the dev server (`inspirations-dev`)
+are registered in `../DevLauncher/config/services.json`, each with why it
+exists (readable copy: `~/Projects/SERVICES.md`). If the port or command
+changes, change it there with `switchboard edit` and run `switchboard check`.
 
 CI (GitHub Actions) runs `ruff` plus the unittest suite on Python 3.11/3.12/3.13
 for every push and PR.
